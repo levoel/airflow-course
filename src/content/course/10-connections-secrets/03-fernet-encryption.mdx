@@ -1,0 +1,294 @@
+---
+title: "Fernet encryption deep — AES-128-CBC + HMAC и key rotation"
+description: "Препарирование Fernet token формата, key rotation strategy, airflow rotate-fernet-key, disaster recovery scenarios"
+order: 3
+difficulty: "advanced"
+estimatedTime: 28
+topics: ["Fernet", "AES-128-CBC", "HMAC-SHA256", "Key Rotation", "Cryptography"]
+---
+
+# Fernet encryption — препарирование под капотом
+
+Connection passwords и Variable values в metadata DB шифруются Fernet. Это симметричный encryption из библиотеки `cryptography` от PyCA, использующий AES-128-CBC для конфиденциальности и HMAC-SHA256 для аутентификации. Airflow выбрал Fernet не случайно: он simple, well-vetted, имеет nice property — обнаружить tampering сразу при decryption.
+
+Этот урок — killer-deep разбор Fernet token формата, key rotation механики и того, как восстанавливать систему после потери ключа.
+
+---
+
+## Что такое Fernet (формально)
+
+Fernet — это spec от Heroku ([github.com/fernet/spec](https://github.com/fernet/spec)), реализованный в PyCA `cryptography`. Это не алгоритм, а **scheme**: композиция уже известных примитивов в один envelope формат.
+
+Из спеки:
+
+> *"Fernet guarantees that a message encrypted using it cannot be manipulated or read without the key. Fernet is an implementation of symmetric (also known as 'secret key') authenticated cryptography."*
+
+Ключевые свойства:
+
+- **Симметричный**: один ключ для encrypt и decrypt
+- **Authenticated**: HMAC catches tampering at decrypt time
+- **Versioned**: первый байт token — version (`0x80` = current)
+- **No replay protection**: timestamp есть, но используется advisory (Airflow not enforce)
+
+---
+
+## Структура Fernet token
+
+Token — это `urlsafe_b64encode(...)` от следующего byte string:
+
+```
+| Version | Timestamp | IV       | Ciphertext     | HMAC      |
+| 1 byte  | 8 bytes   | 16 bytes | N*16 bytes     | 32 bytes  |
+```
+
+<DiagramContainer title="Fernet token layout" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Version (1 byte)" tooltip="0x80 для current Fernet version. Если decryption видит другой byte — InvalidToken raises. Это позволит в будущем менять scheme без breaking changes (просто bump version).">0x80</DataBox>
+      <DataBox label="Timestamp (8 bytes)" tooltip="big-endian unsigned int — Unix timestamp when token was generated. Используется для optional TTL check (cryptography.fernet.Fernet.decrypt(token, ttl=N) бросит InvalidToken если token старше N секунд). Airflow ttl НЕ применяет.">unix epoch seconds</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="IV (16 bytes)" tooltip="Initialization Vector для AES-128-CBC. Генерируется os.urandom(16) — cryptographically secure RNG. Каждый encryption — новый IV → один и тот же plaintext даёт разные tokens (semantic security). Это критично для passwords, чтобы атакующий не мог определить equal passwords у разных connections.">random per token</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Ciphertext (N*16 bytes)" tooltip="AES-128-CBC(plaintext_pkcs7_padded, signing_key=key[0:16], iv). CBC mode — каждый block XOR с предыдущим ciphertext block (или IV для первого). PKCS#7 padding до block size (16). Length всегда multiple of 16.">AES-128-CBC encrypted</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="HMAC (32 bytes)" tooltip="HMAC-SHA256(key[16:32], Version || Timestamp || IV || Ciphertext). Вычисляется ПОСЛЕ encryption (Encrypt-then-MAC pattern, считается best practice). При decrypt сначала verify HMAC, потом decrypt. Если HMAC mismatch — InvalidToken.">authentication tag</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Затем всё это base64-урласафно кодируется → строка вида:
+
+```
+gAAAAABnVHj4xMyz8L7QwR3Z2K... (~100+ символов)
+```
+
+Эта строка попадает в колонку `connection.password` или `variable.val`.
+
+---
+
+## Откуда два sub-key
+
+Fernet key — это 32 байта (256 бит) base64-encoded → 44 символа output:
+
+```
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# kZqJ7gN3vP8XmQ5RtY2L9WhCbD4FaUeI6NoPxKsM1Bw=
+```
+
+Эти 32 байта **разделены на два sub-key**:
+
+- `key[0:16]` (16 байт) → **signing key для AES-128**
+- `key[16:32]` (16 байт) → **HMAC key для SHA-256**
+
+Это classic pattern «derive multiple keys из one master key» — но Fernet делает это просто split-ом, не KDF. Безопасно потому, что 256 бит entropy достаточно для двух independent 128-bit keys (security рассматривается в Fernet spec).
+
+---
+
+## Encrypt/Decrypt в Airflow
+
+В коде Airflow это абстрагировано в `airflow.models.crypto`:
+
+```python
+# Псевдокод
+from cryptography.fernet import MultiFernet, Fernet
+
+def get_fernet():
+    fernet_key = conf.get("core", "fernet_key")
+    if "," in fernet_key:
+        # Multiple keys → key rotation mode
+        keys = [Fernet(k.strip().encode()) for k in fernet_key.split(",")]
+        return MultiFernet(keys)
+    else:
+        return Fernet(fernet_key.encode())
+
+
+# При SET-е connection.password
+@property
+def password(self):
+    if self._password and self.is_encrypted:
+        fernet = get_fernet()
+        return fernet.decrypt(self._password.encode()).decode()
+    return self._password
+
+
+@password.setter
+def password(self, value):
+    if value:
+        fernet = get_fernet()
+        self._password = fernet.encrypt(value.encode()).decode()
+        self.is_encrypted = True
+```
+
+Каждое чтение `conn.password` — это **on-the-fly decrypt**. На каждый Hook init минимум один Fernet decrypt. Это cheap (~microseconds), но накапливается на больших DAGs — отсюда `[secrets] use_cache` в новых версиях.
+
+---
+
+## MultiFernet — multi-key support
+
+`MultiFernet` — это wrapper, который принимает список Fernet objects:
+
+```python
+from cryptography.fernet import MultiFernet, Fernet
+
+key_new = Fernet(b"new_key_base64==")
+key_old = Fernet(b"old_key_base64==")
+
+multi = MultiFernet([key_new, key_old])  # new ПЕРВЫЙ!
+
+# Encrypt → использует ПЕРВЫЙ key (new)
+token = multi.encrypt(b"secret")
+
+# Decrypt → пробует каждый key по порядку, пока не получит valid
+plaintext = multi.decrypt(token)  # works для tokens, зашифрованных любым ключом
+```
+
+Это позволяет **rolling key rotation без downtime**: пока `MultiFernet` имеет старый ключ в списке, старые tokens decryptable; новые tokens используют новый ключ. После того как все старые tokens переезжированы, старый ключ можно удалить.
+
+---
+
+## Key rotation strategy
+
+Сценарий: ключ скомпрометирован или вы хотите ротировать ежеквартально.
+
+<DiagramContainer title="Key rotation flow" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Step 1: generate new key" tooltip="python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'. 32 random bytes из os.urandom, base64-encoded. Сохраните в secure vault (1Password, HashiCorp Vault, GCP KMS) — потеря ключа = data loss.">NEW_KEY = Fernet.generate_key()</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Step 2: deploy с MultiFernet" tooltip="Set AIRFLOW__CORE__FERNET_KEY='NEW_KEY,OLD_KEY'. NEW_KEY ПЕРВЫЙ — он будет использован для encryption всех новых tokens. OLD_KEY оставлен для decrypt существующих. Деплоится rolling — каждый pod scheduler/webserver/worker подхватит новый env var при restart.">FERNET_KEY=new,old</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Все pods на multi-key config" />
+    <FlowRow>
+      <DataBox label="Step 3: airflow rotate-fernet-key" tooltip="CLI команда: airflow rotate-fernet-key. Внутри: для каждой record в connection и variable таблицах: decrypt с MultiFernet (tries new, then old) → encrypt с MultiFernet (всегда new) → UPDATE row. После этого ВСЕ tokens зашифрованы новым ключом.">re-encrypt all rows</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Step 4: remove old key" tooltip="Set AIRFLOW__CORE__FERNET_KEY='NEW_KEY' (без старого). Rolling deploy. Старый ключ можно безопасно destroy. Audit log должен быть key was rotated, by whom, when.">FERNET_KEY=new только</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+CLI `airflow rotate-fernet-key`:
+
+```bash
+# 1. Generate new key (например, через ENV из CI/CD)
+NEW_FERNET=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')
+
+# 2. Update env (через secret manager / k8s secret)
+export AIRFLOW__CORE__FERNET_KEY="${NEW_FERNET},${OLD_FERNET}"
+
+# 3. Restart scheduler/webserver/workers (rolling)
+kubectl rollout restart deployment/airflow-scheduler -n airflow
+
+# 4. Запустить rotation
+airflow rotate-fernet-key
+
+# Output:
+# Connection 'pg_prod_warehouse': re-encrypted
+# Connection 'snowflake_prod': re-encrypted
+# Variable 'api_endpoint': re-encrypted
+# ... (всего 47 records re-encrypted)
+
+# 5. Remove old key
+export AIRFLOW__CORE__FERNET_KEY="${NEW_FERNET}"
+kubectl rollout restart deployment/airflow-scheduler -n airflow
+```
+
+<Callout type="warning">
+Между step 2 (multi-key deploy) и step 3 (rotation) **не задерживайтесь надолго**. Если в этом окне старый ключ leaked, любой новый token также может быть decrypted (поскольку MultiFernet тоже знает new key). Production target: вся rotation процедура завершается за минуты, не дни.
+</Callout>
+
+---
+
+## Disaster scenario: lost Fernet key
+
+Самый тяжёлый сценарий — Fernet key потерян, и **в metadata DB остались passwords**, которые никто не может расшифровать.
+
+Что вы увидите при попытке использовать connection:
+
+```
+cryptography.fernet.InvalidToken: Token cannot be decrypted
+```
+
+Это значит — Fernet верифицировал HMAC (или не верифицировал) и не смог достать plaintext. Либо tampered, либо wrong key.
+
+**Recovery options**:
+
+1. **Восстановить ключ из backup** — если ключ хранился в Vault / 1Password / GCP KMS с versioning, можно восстановить предыдущую версию. Это правильный workflow.
+
+2. **Re-create connections руками** — если ключ безвозвратно потерян, **passwords unrecoverable**. Вам придётся:
+   - Сгенерировать новый Fernet key
+   - Очистить `connection.password` и `connection.extra` для всех записей: `UPDATE connection SET password=NULL, extra=NULL`
+   - Через UI или CLI заново добавить connections с правильными credentials (которые у вас есть из другого источника — например, password manager)
+
+3. **Use Secrets Backend retroactively** — если переезд на Vault planned, это возможность сделать его сейчас: connections исчезают из DB, переезжают в Vault, Fernet больше не нужен для них.
+
+<Callout type="warning">
+Fernet key — это критический secret в Airflow. Потеря = потеря всех connections и encrypted variables. Должен быть: (1) сгенерирован cryptographically secure RNG, (2) храниться в external vault (никогда в git, никогда в k8s plain secret без encryption-at-rest), (3) иметь disaster recovery procedure (где он backup-нут, кто имеет access, как restore-ить).
+</Callout>
+
+---
+
+## Что НЕ шифруется
+
+Fernet — это **column-level encryption** для `password` и `extra`. Остальное в DB — plaintext:
+
+- `connection.host`, `connection.login`, `connection.port`, `connection.schema` — plaintext
+- `connection.conn_type`, `connection.description` — plaintext
+- `dag.fileloc`, `task_instance.log`, `xcom.value` — **plaintext** (XCom особенно — храните осторожно)
+- `slot_pool.pool` — plaintext
+
+Это значит — если злоумышленник имеет SQL access (read-only) к metadata DB, он видит **всё, кроме encrypted columns**. Login видно, host видно, можно понять структуру системы. Защита от этого — TLS to DB, network policies, RBAC в Postgres.
+
+XCom values — частая ошибка. Люди кладут туда API responses, которые могут содержать токены. По умолчанию XCom plaintext. С Airflow 2.0+ можно конфигурировать `[core] xcom_backend = my_module.MyXComBackend` и реализовать encryption там — но out-of-box не зашифровано.
+
+---
+
+## Performance impact
+
+Fernet encrypt/decrypt — fast:
+
+- Encrypt 100-byte plaintext: ~5-10 µs
+- Decrypt: ~5-10 µs
+- HMAC verify: ~3 µs
+
+На каждый task instance с Hook → один `BaseHook.get_connection` → один Fernet decrypt. Для DAG с 100 tasks это 100 decrypts ≈ 1 ms total. Negligible.
+
+Но если у вас **top-level Variable.get('x')** в DAG-файле, каждый DAG parse делает Fernet decrypt → 30s interval × N DAGs → может быть noticeable load. Урок 04 разбирает этот pitfall.
+
+---
+
+## Проверка ключа
+
+Быстрая sanity check, что ключ корректный:
+
+```python
+from cryptography.fernet import Fernet
+
+key = "kZqJ7gN3vP8XmQ5RtY2L9WhCbD4FaUeI6NoPxKsM1Bw="
+
+try:
+    f = Fernet(key.encode())
+    token = f.encrypt(b"test")
+    plaintext = f.decrypt(token)
+    print(f"OK: {plaintext.decode()}")
+except Exception as e:
+    print(f"INVALID KEY: {e}")
+```
+
+Если ваш key не 44 символа (32 байта base64) — это битый ключ. Airflow при startup проверит и логирует warning `Could not decode Fernet key` если формат неправильный, при этом encryption ломается и passwords хранятся открытым текстом (`is_encrypted=False`).
+
+---
+
+<KnowledgeCheck
+  question="Production scenario: AWS KMS-managed Fernet key потерян после accidental delete (KMS key deletion с 7-day waiting period не была cancelled). У вас есть 50 connections в metadata DB. Restore из DB backup за 3 дня назад показывает те же encrypted values (но ключ уже был тот же тогда). Какие действия?"
+  answer="Восстановить ключ из DB backup НЕ помогает — ключ хранится в KMS, а KMS key уже destroyed. Encrypted values в DB не decryptable никаким способом, кроме как brute force AES-128 (computationally infeasible). Action plan: (1) Provision NEW Fernet key через KMS (или generated locally + stored в new KMS key). (2) В metadata DB: UPDATE connection SET password=NULL, extra=NULL, is_encrypted=false WHERE 1=1. (3) Re-create все 50 connections — credentials получить из external source: для cloud (AWS/GCP) — IAM service accounts можно перевыпустить; для DB — попросить DBAs создать новые credentials; для third-party APIs — re-issue tokens через provider portal. (4) Update CI/CD pipeline для предотвращения repeat — KMS key должен иметь deletion protection, multi-region replication, scheduled deletion alert. (5) Audit: вероятно, нужно изменить ВСЕ credentials (потому что они leaked from old DB или зашифрованные tokens могли быть exfiltrated). (6) Long-term: migrate на Secrets Backend (Vault / Secrets Manager) — там rotation и DR builtin, и Fernet используется только для transient cases. Лесон: KMS-managed Fernet keys ВСЕГДА должны иметь: deletion protection, multi-region replicas, alerting на scheduled deletion."
+/>

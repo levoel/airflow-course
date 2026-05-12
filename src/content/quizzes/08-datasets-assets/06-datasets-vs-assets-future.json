@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "08-datasets-assets/06-datasets-vs-assets-future",
+  "moduleId": "08-datasets-assets",
+  "_meta": { "idPrefix": "airflow-m08-06" },
+  "questions": [
+    {
+      "id": "airflow-m08-06-q1",
+      "type": "multiple-choice",
+      "question": "Что точно меняется при rename Dataset → Asset в Airflow 3.x?",
+      "options": [
+        { "id": "a", "text": "Семантика полностью переписана, нужен переписать DAG код" },
+        { "id": "b", "text": "Только naming: class Dataset → Asset, DatasetAlias → AssetAlias, table dataset_event → asset_event. Semantic identical. Deprecation shim сохраняет старые impоrts в 3.0-3.1" },
+        { "id": "c", "text": "Datasets deprecated полностью, заменены Materialization" },
+        { "id": "d", "text": "Только performance changes, API не меняется" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-74 (rename) — pure naming change для consistency с industry (Dagster, Prefect используют Asset). Semantic identical: URI-based identity, AND/OR semantics, queue mechanism. Migration: tables auto-rename через airflow db migrate, deprecation views на 6 months. Old imports работают с warnings. Главные новые features (@asset decorator, AssetWatcher, Asset Partitions) — это OTHER AIPs (75, 82), которые приходят сверху rename.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m08-06-q2",
+      "type": "multiple-choice",
+      "question": "@asset decorator в 3.x — что делает под капотом?",
+      "options": [
+        { "id": "a", "text": "Создаёт virtual DAG только в UI, не реальный" },
+        { "id": "b", "text": "Создаёт single-task DAG с одним asset outlet; return value автоматически эмитится как asset event; функция-аргументы получают upstream asset values как XCom injection" },
+        { "id": "c", "text": "Заменяет PythonOperator на async equivalent" },
+        { "id": "d", "text": "Просто синтаксический сахар над @dag" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "@asset (AIP-75) — asset-first DAG model: одна функция = один task = один DAG = один asset. Return value автоматически эмитится как asset event (нет manual outlets/.add()). Зависимые assets получают upstream values через function arguments (auto XCom resolution). Это Dagster-style mental model: 'я строю assets, между которыми lineage', а не 'я строю DAG-и которые делают что-то'. Существующий @dag + @task workflow в 3.x остаётся valid, @asset — alternative для simpler cases.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-06-q3",
+      "type": "multiple-choice",
+      "question": "AIP-82 (Event-driven assets с AssetWatcher) — главная архитектурная зависимость в 3.x?",
+      "options": [
+        { "id": "a", "text": "Отдельный watchdog process" },
+        { "id": "b", "text": "Triggerer (asyncio event loop) — watchers это deferrable triggers, которые крутятся в triggerer process. Если используешь AssetWatcher, triggerer обязателен в deployment" },
+        { "id": "c", "text": "Kafka cluster" },
+        { "id": "d", "text": "Internal cron daemon" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AssetWatcher реализован как deferrable trigger (модуль 09): он крутится в triggerer asyncio loop, слушает external source (S3 EventBridge, SQS, Kafka), при срабатывании эмитит asset event через TriggerEvent. Без deployed triggerer watchers не работают. Это новое требование в 3.x: в 2.x triggerer был оптом, в 3.x с event-driven assets обязателен. Один triggerer process handles тысячи watchers через asyncio (модуль 09).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-06-q4",
+      "type": "true-false",
+      "question": "Команды могут оставаться на 2.10/2.11 LTS до конца 2027 — security patches будут продолжаться, не обязательно мигрировать в 3.x сразу.",
+      "correctAnswer": true,
+      "explanation": "Apache Airflow 2.10 LTS получает security fixes минимум до Q1 2027, 2.11 ещё дольше. Это дает командам 1-2 года для запланированной миграции. Рекомендация: мигрировать в 3.x когда (1) нужны specific 3.x features (Asset Partitions, AssetWatchers, @asset decorator); (2) custom plugins адаптированы; (3) есть staging env для testing. Раньше времени мигрировать не имеет смысла, особенно если основной use case — batch ETL без heavy backfill complexity. Подготовка: compat imports, factory functions для datasets, explicit DatasetAll/Any вместо bare list.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

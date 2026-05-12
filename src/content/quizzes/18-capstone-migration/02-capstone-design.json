@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/02-capstone-design",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-02" },
+  "questions": [
+    {
+      "id": "airflow-m18-02-q1",
+      "type": "multiple-choice",
+      "question": "Capstone использует Datasets для DAG triggering вместо cron. Когда event-driven превосходит cron?",
+      "options": [
+        { "id": "a", "text": "Никогда" },
+        { "id": "b", "text": "(1) Variable upstream frequency (CDC, file uploads) — cron либо wastes runs либо lags; (2) Multi-source dependencies — все 3 Kafka topics обновлены trigger DAG; (3) Loose coupling между producer/consumer DAGs; (4) Audit trail (dataset events captured)" },
+        { "id": "c", "text": "Только для performance" },
+        { "id": "d", "text": "Required by 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Event-driven (Datasets/Assets) — natural fit для CDC sources, multi-source dependencies, loose coupling. Cron lacks: handle variable frequency (wastes empty runs), express multi-dataset triggers. Datasets capture events в DB — audit trail для compliance. Trade-offs: cron имеет predictable timing (good для SLA), simpler debugging. Hybrid pattern: cron-scheduled DAG produces datasets, consumers trigger from datasets — best of both.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-02-q2",
+      "type": "multiple-choice",
+      "question": "Capstone использует Dynamic Task Mapping (consume_kafka.expand(topic=[...])) — что это даёт?",
+      "options": [
+        { "id": "a", "text": "Performance increase" },
+        { "id": "b", "text": "Один task definition mapped across N inputs at runtime. 3 topics → 3 separate TIs автоматически. Если topics grow до 10, mapping scales без code change. Alternative — duplicate code per topic = unmaintainable" },
+        { "id": "c", "text": "Replacement для TaskGroup" },
+        { "id": "d", "text": "Required в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Dynamic Task Mapping (AIP-42, 2.3+) — runtime task multiplication. Один decorator definition, при run-time scheduler creates N TIs (one per mapped value). Scales linearly without code duplication. Capstone usage: 3 Kafka topics today, easy add 10 tomorrow. UI shows mapped tasks как single graph node с count. Different from TaskGroup (UI grouping) — Mapping = dynamic instantiation.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-02-q3",
+      "type": "multiple-choice",
+      "question": "Multiple Executors (AIP-61, 2.10+) — light tasks на Celery, heavy на K8s. Зачем?",
+      "options": [
+        { "id": "a", "text": "Только cost saving" },
+        { "id": "b", "text": "Resource optimization. Light tasks (consume_kafka, notify): Celery — fast scheduling, persistent worker pool. Heavy (spark_transform): K8s — own pod 4 CPU/8 GB, isolated, ephemeral. Without mixed: либо все на Celery (workers OOM от spark) либо все на K8s (10s overhead per consume_kafka — slow). 2026 sweet spot для mixed workloads" },
+        { "id": "c", "text": "Required by Spark" },
+        { "id": "d", "text": "Helm requirement" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-61 enables single Airflow с multiple executors. Capstone use case ideal: light tasks frequent + short → Celery persistent workers, heavy Spark submit → K8s pod isolation + custom resources. Without mixed approach — compromise: Celery only fails on heavy tasks, K8s only слишком expensive overhead для light tasks. Migration к 3.x preserves этот pattern, may add Edge Executor (AIP-69).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-02-q4",
+      "type": "true-false",
+      "question": "Capstone designed для smooth 3.x migration — most changes будут automatic через ruff AIR301/AIR302 fixes.",
+      "correctAnswer": true,
+      "explanation": "Capstone uses modern patterns: TaskFlow @task decorators (auto AIR301 fix imports), Datasets (semantic identical к Assets в 3.x), standalone DAG Processor (3.x mandatory — already enabled), no SubDAGs, no Flask-AppBuilder direct integration, Multiple Executors (preserved в 3.x). Это intentional design — capstone serves как template для production DAGs ready для 3.x migration. Effort estimate: low (1-2 weeks для full migration codebase).",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

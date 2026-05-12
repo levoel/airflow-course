@@ -1,0 +1,60 @@
+{
+  "lessonSlug": "03-operators-sensors/04-sensors-three-modes",
+  "moduleId": "03-operators-sensors",
+  "_meta": { "idPrefix": "airflow-m03-04" },
+  "questions": [
+    {
+      "id": "airflow-m03-04-q1",
+      "type": "multiple-choice",
+      "question": "В prod кластере с parallelism=64 заметили: 50 slots заняты sensors типа S3KeySensor в state running, 20 других tasks висят в queued. Что произошло и как фундаментально починить?",
+      "options": [
+        { "id": "a", "text": "Увеличить parallelism до 128" },
+        { "id": "b", "text": "Sensors в mode='poke' блокируют worker slots (execute = цикл с sleep). 50 sensors заняли 50 из 64 слотов. Фундаментальное решение — deferrable=True: sensor поднимает TaskDeferred, slot освобождается, ожидание в Triggerer (asyncio). Тысячи sensors на одном triggerer без worker slots" },
+        { "id": "c", "text": "Перезапустить scheduler" },
+        { "id": "d", "text": "Увеличить poke_interval" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это slot starvation из-за poke mode. Быстрое решение — переключить на mode='reschedule': sensor вызывает poke() один раз, raises AirflowRescheduleException, slot освобождается, scheduler пробуждает TI через poke_interval. Цена — отдельный TI cycle на каждый poke + записи в task_reschedule table. Фундаментальное — deferrable=True: poke в TaskDeferred, TI state='deferred', slot мгновенно свободен. Triggerer (отдельный процесс, asyncio loop) обслуживает тысячи triggers одной машиной. Можно глобально через AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true (2.7+).",
+      "studyHint": "Повторите урок 04 — раздел 'Mode 3: deferrable — asyncio через Triggerer'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-04-q2",
+      "type": "multiple-choice",
+      "question": "Чем отличается mode='reschedule' от mode='poke' с точки зрения ресурсов?",
+      "options": [
+        { "id": "a", "text": "Reschedule быстрее poke" },
+        { "id": "b", "text": "Reschedule освобождает worker slot между poke (raises AirflowRescheduleException, TI = up_for_reschedule), но добавляет нагрузку: scheduler cycle на каждый retry + запись в task_reschedule table. Latency = poke_interval (минимум 60s рекомендуется)" },
+        { "id": "c", "text": "Никакой разницы" },
+        { "id": "d", "text": "Reschedule использует asyncio" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Reschedule trade-off: освобождает slot (главное преимущество над poke), но даёт нагрузку на scheduler (каждый poke = полный TI cycle: scheduler → queued → worker → poke → reschedule) и растёт task_reschedule table (cleanup retention policy обязателен). poke_interval=10s катастрофичен на reschedule — 6 cycles в минуту на каждый sensor. Минимум 60s, лучше 5-10 минут на long-wait. Не использует asyncio (это deferrable). Для short waits с быстрым ответом poke может быть приемлем (overhead reschedule больше чем экономия slot).",
+      "studyHint": "Повторите урок 04 — раздел 'Mode 2: reschedule — освобождает slot'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-04-q3",
+      "type": "multiple-choice",
+      "question": "Что произойдёт, если в DAG есть deferrable sensor, но процесс triggerer не запущен в кластере?",
+      "options": [
+        { "id": "a", "text": "Airflow fallback на mode='poke' автоматически" },
+        { "id": "b", "text": "TI попадёт в state 'deferred' и будет там висеть бесконечно — Trigger остаётся в trigger table без обработки. Симптом: tasks в deferred вечно. Диагноз: `airflow triggerer list` либо `select count(*) from trigger`. Fix — запустить triggerer service" },
+        { "id": "c", "text": "Airflow выдаст ошибку при parse DAG" },
+        { "id": "d", "text": "TI сразу станет success" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это коварная production проблема. execute() поднимает TaskDeferred → TI переходит в state='deferred' → Trigger сериализуется в trigger table → ждёт чтобы triggerer process подхватил. Если triggerer не запущен, никто не подхватывает. TI висит. UI показывает 'deferred', не failed. Только timeout (default 7 дней для sensors) в итоге его прибьёт. Fix — обязательно запустить `airflow triggerer` (один process для small/medium, 2-3 HA для prod). Также не забыть в docker-compose / k8s deployment. Также важно: provider должен быть установлен в triggerer container.",
+      "studyHint": "Повторите урок 04 — раздел 'Production gotchas'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-04-q4",
+      "type": "true-false",
+      "question": "`soft_fail=True` на sensor превращает timeout в state='skipped' вместо 'failed'. Это безопасный default для production, потому что не ломает DagRun.",
+      "correctAnswer": false,
+      "explanation": "Это **опасный default**. soft_fail=True маскирует реальные проблемы: sensor timeout → state=skipped → downstream skipped (по default trigger_rule=all_success). DAG в UI показывает успешный run (skipped tasks не делают DagRun failed), но данных нет — например, ожидали S3 file, файл не пришёл за 24h, sensor 'softly' прошёл, downstream нагрузка не сработала, никто не заметил. Если sensor критичен для бизнес-логики (есть данные = пайплайн работает, нет данных = должна сработать алёрта) — `soft_fail=False`. Используйте soft_fail только когда: (1) sensor реально опциональный (best-effort feature flag); (2) у вас есть отдельный alerting на skipped критичных tasks; (3) downstream корректно обрабатывает skipped без silent data loss.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

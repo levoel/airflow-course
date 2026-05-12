@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "13-rest-api-cli/04-automation-patterns",
+  "moduleId": "13-rest-api-cli",
+  "_meta": { "idPrefix": "airflow-m13-04" },
+  "questions": [
+    {
+      "id": "airflow-m13-04-q1",
+      "type": "multiple-choice",
+      "question": "GitHub Action триггерит DAG и хочет дождаться завершения. Какая стратегия polling правильная?",
+      "options": [
+        { "id": "a", "text": "Polling каждую секунду — fast response" },
+        { "id": "b", "text": "Exponential backoff: 2s → 5s → 10s → 30s → 60s → 120s. Не убивает webserver, реагирует быстро на короткие DAGs. Timeout 1h" },
+        { "id": "c", "text": "Один GET через 1h" },
+        { "id": "d", "text": "WebSocket connection" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Polling каждую секунду на N параллельных CI builds → N RPS на webserver, конкурирует с UI users. Exponential backoff балансирует responsiveness (короткие DAGs детектируются за 7-10s) и нагрузку (длинные DAGs polled раз в 2 минуты). Webhook через Listener API (модуль 12) — лучшая альтернатива polling, push вместо pull. Real-time updates через OpenTelemetry — для dashboards.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-04-q2",
+      "type": "multiple-choice",
+      "question": "После POST /dagRuns с 201, immediate GET того же run возвращает 404. Что произошло?",
+      "options": [
+        { "id": "a", "text": "Баг в Airflow" },
+        { "id": "b", "text": "Race condition: POST committed, но read попал на replica/cached state. Также возможно scheduler ещё не подобрал run. Fix: retry 404 первые 30 секунд после POST, потом fail. Использовать idempotent `dag_run_id` чтобы повторный POST не создавал дубль" },
+        { "id": "c", "text": "Webserver crashed" },
+        { "id": "d", "text": "Permission denied" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Race condition между write и read: POST commit в primary DB, GET может попасть на read replica (если есть) или хит cached view. Также возможно scheduler ещё не перевёл run из 'queued' в 'running' состояние. **Production pattern:** после POST подождать 5-10 секунд перед first poll, retry 404 ещё 30 секунд. Долгосрочно — PgBouncer в session pooling mode, отказ от read replicas для read-after-write paths.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-04-q3",
+      "type": "multiple-choice",
+      "question": "Pattern: clear failed TI через REST API. Что обязательно сделать перед реальным clear?",
+      "options": [
+        { "id": "a", "text": "Backup DB" },
+        { "id": "b", "text": "Сначала POST с `dry_run: true` — вернёт список TI которые **будут** clear, без изменений. Проверить scope, потом запустить с `dry_run: false`. Также добавить `reset_dag_runs: true` чтобы scheduler пересчитал DagRun" },
+        { "id": "c", "text": "Остановить scheduler" },
+        { "id": "d", "text": "Pause DAG" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`dry_run: true` возвращает affected TI list без апдейтов в DB — critical для production safety. Скрипт сначала dry, печатает list, опционально запрашивает confirm, потом запускает real. `reset_dag_runs: true` (2.6+) сбрасывает DagRun.state → queued — иначе DagRun может остаться в success с failed TI внутри, scheduler не понимает что делать. `include_downstream: true` обычно нужен — downstream TI скорее всего тоже failed/skipped.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-04-q4",
+      "type": "true-false",
+      "question": "Когда CI триггерит DAG, важно передавать context (commit_sha, branch, github_run_url) в `conf` JSON. DAG может использовать это для audit, lineage, и при failure скрипт может построить deep link обратно к CI run.",
+      "correctAnswer": true,
+      "explanation": "Conf — бесплатное место для CI metadata. Best practices: (1) commit_sha — для traceability code↔DagRun; (2) github_run_url — back-link при alerting (Slack: 'Failed DAG triggered by CI ${url}'); (3) triggered_by — service account / user; (4) branch — для multi-env deployments. Внутри DAG: `{{ dag_run.conf['commit_sha'] }}` в templated arguments. Audit query (модуль 13/06): `SELECT conf->>'commit_sha' FROM dag_run WHERE run_type='manual'`.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

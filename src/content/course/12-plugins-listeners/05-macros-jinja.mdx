@@ -1,0 +1,449 @@
+---
+title: "Macros и Jinja — built-ins, user_defined_macros, custom filters, template_searchpath"
+description: "Built-in Jinja macros (ds, ts, ti, params, conn, var), user_defined_macros в DAG, custom filters через user_defined_filters, template_searchpath для external SQL, real-world templates"
+order: 5
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Macros", "Jinja", "Templates", "template_fields", "user_defined_macros"]
+---
+
+# Macros и Jinja — built-ins, user_defined_macros, custom filters
+
+Airflow использует **Jinja2** как template engine для динамической подстановки значений в operator parameters. Это намного больше, чем `{{ ds }}` — это полноценный шаблонизатор с context (`ti`, `params`, `conn`, `var`), custom macros, custom filters, и template_searchpath для external SQL файлов. Этот урок — comprehensive reference: какие переменные доступны, как добавить кастомные macros и filters, и real-world templates для fiscal calendar, date arithmetic, partition paths.
+
+---
+
+## Template rendering pipeline
+
+<DiagramContainer title="Где и когда Jinja render происходит" color="violet">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="DAG parse"
+        tooltip="Scheduler / DAG processor parsing DAG file. Templates как СТРОКИ хранятся в task definition. Render НЕ происходит — это просто статика."
+      >
+        sql='SELECT FROM t WHERE date={{ ds }}'
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="serialize" />
+    <FlowRow>
+      <DataBox
+        label="DAG serialization"
+        tooltip="serialized_dag хранит templated strings as-is. Jinja syntax preserved. UI может показывать unrendered версию в task definition view."
+      >
+        serialized_dag table
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="task execute" />
+    <FlowRow>
+      <DataBox
+        label="Worker: render_template"
+        tooltip="При execute task на worker BaseOperator.render_template вызывается для каждого template_fields. Context: ds, ti, params, var, conn, macros, user_defined_macros — все доступны. Lookup происходит здесь — Connections/Variables hit DB."
+      >
+        Jinja.render(template, context)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="execute" />
+    <FlowRow>
+      <DataBox
+        label="self.sql = 'SELECT FROM t WHERE date=2026-05-12'"
+        tooltip="Rendered string присваивается обратно в self.<field>. Operator.execute() использует rendered value. UI 'Rendered Template' tab показывает результат render."
+      >
+        operator runs with rendered values
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Critical insight: render на **worker**, не на scheduler. Worker имеет access к Variables / Connections — если env vars не совпадают между scheduler и worker, behavior diverges.
+
+---
+
+## Built-in template variables
+
+Airflow в task context инжектит следующие переменные. Используются как `{{ variable_name }}`:
+
+| Variable | Тип | Что внутри |
+|---|---|---|
+| `{{ ds }}` | str | DAG run logical date в формате `YYYY-MM-DD` |
+| `{{ ds_nodash }}` | str | то же, `YYYYMMDD` |
+| `{{ ts }}` | str | timestamp ISO format `YYYY-MM-DDTHH:MM:SS+00:00` |
+| `{{ ts_nodash }}` | str | `YYYYMMDDTHHMMSS` |
+| `{{ ts_nodash_with_tz }}` | str | `YYYYMMDDTHHMMSS+0000` |
+| `{{ logical_date }}` | datetime | объект, более удобный для arithmetic |
+| `{{ data_interval_start }}` | datetime | начало data interval (2.2+) |
+| `{{ data_interval_end }}` | datetime | конец data interval |
+| `{{ prev_data_interval_start_success }}` | datetime/None | start предыдущего успешного run |
+| `{{ next_data_interval_start }}` | datetime | start следующего scheduled run |
+| `{{ dag }}` | DAG | object с метаданными DAG |
+| `{{ task }}` | BaseOperator | object текущей task |
+| `{{ ti }}` | TaskInstance | object current TI |
+| `{{ run_id }}` | str | unique run ID |
+| `{{ try_number }}` | int | current retry attempt |
+| `{{ params }}` | dict | DAG params (default_args.params + DAG-level params) |
+| `{{ conn }}` | Connections | `conn.my_conn.password` accessor |
+| `{{ var }}` | Variables | `var.value.my_var` accessor |
+| `{{ macros }}` | module | macros module (см. ниже) |
+
+Example:
+
+```python
+PostgresOperator(
+    task_id="load",
+    sql="""
+        INSERT INTO orders_partitioned
+        SELECT * FROM staging_orders
+        WHERE date = '{{ ds }}'
+          AND created_at >= '{{ data_interval_start }}'
+          AND created_at <  '{{ data_interval_end }}'
+    """,
+)
+```
+
+При execute Jinja подставляет `{{ ds }}` → `'2026-05-12'`, `{{ data_interval_start }}` → `'2026-05-12T00:00:00+00:00'`.
+
+<Callout type="note">
+`{{ ds }}` это **logical_date / data_interval_start**, не время запуска. Для @daily DAG за 2026-05-12 запуск происходит в 2026-05-13 00:00 UTC (после data interval end). Это idempotency property: каждый run обрабатывает завершённый interval. Counter-intuitive для новых пользователей — UI 'Logical Date' столбец показывает именно ds, не run time. При backfill ds может быть на месяц в прошлом.
+</Callout>
+
+---
+
+## Built-in macros module
+
+`{{ macros }}` — это Python module с utility functions. В template:
+
+```python
+{{ macros.ds_add(ds, 7) }}     # ← '2026-05-19', добавить 7 дней
+{{ macros.ds_format(ds, "%Y-%m-%d", "%Y/%m/%d") }}  # ← '2026/05/12'
+{{ macros.datetime.utcnow() }}  # ← текущий UTC
+{{ macros.timedelta(days=1) }}  # ← timedelta object
+{{ macros.uuid.uuid4() }}      # ← random UUID
+```
+
+Полный list в `airflow/macros/__init__.py`:
+- `ds_add(ds, days)`, `ds_format(ds, input_format, output_format)`
+- `datetime` — module datetime
+- `dateutil` — module dateutil
+- `time` — module time
+- `uuid` — module uuid
+- `random` — module random
+
+---
+
+## `conn.<id>` accessor — credentials в templates
+
+```python
+PostgresOperator(
+    task_id="copy",
+    sql="""
+        COPY orders FROM 's3://bucket/orders.csv'
+        WITH CREDENTIALS 'aws_access_key_id={{ conn.aws_default.login }};aws_secret_access_key={{ conn.aws_default.password }}'
+    """,
+)
+```
+
+`conn.aws_default` — это object, и `.login` / `.password` / `.host` / `.extra_dejson` — атрибуты Connection. Поддерживает все стандартные fields.
+
+Note: lookup происходит при template render — Connection должен существовать. Если нет — `AttributeError`.
+
+---
+
+## `var.value.<name>` и `var.json.<name>`
+
+```python
+BashOperator(
+    task_id="bash",
+    bash_command="echo 'env={{ var.value.environment }}'",
+)
+
+PythonOperator(
+    task_id="py",
+    python_callable=process,
+    op_kwargs={"config": "{{ var.json.app_config }}"},  # JSON parsed
+)
+```
+
+`var.value.<name>` — raw string value Variable. `var.json.<name>` — parsed as JSON.
+
+---
+
+## `params` — DAG-level / task-level parameters
+
+```python
+@dag(
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    params={
+        "environment": "production",
+        "batch_size": 1000,
+    },
+)
+def my_dag():
+    PostgresOperator(
+        task_id="query",
+        sql="SELECT * FROM events WHERE env = '{{ params.environment }}' LIMIT {{ params.batch_size }}",
+    )
+```
+
+При manual trigger в UI можно override params — `{{ params.environment }}` будет use whatever запустил.
+
+---
+
+## `user_defined_macros` — кастомные template helpers
+
+Если built-in macros недостаточно, можно добавить свои на DAG-level:
+
+```python
+def fiscal_year(ds_str: str) -> int:
+    """Fiscal year starts July 1."""
+    from datetime import datetime
+    d = datetime.strptime(ds_str, "%Y-%m-%d")
+    return d.year if d.month >= 7 else d.year - 1
+
+
+def partition_path(ds_str: str, layer: str = "raw") -> str:
+    """S3 partition path."""
+    return f"s3://my-lake/{layer}/year={ds_str[:4]}/month={ds_str[5:7]}/day={ds_str[8:10]}/"
+
+
+@dag(
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    user_defined_macros={
+        "fiscal_year": fiscal_year,
+        "partition_path": partition_path,
+    },
+)
+def my_dag():
+    PostgresOperator(
+        task_id="report",
+        sql="""
+            INSERT INTO fiscal_reports (fy, day, total)
+            SELECT
+                {{ fiscal_year(ds) }} AS fy,
+                '{{ ds }}' AS day,
+                SUM(amount) AS total
+            FROM orders
+            WHERE date = '{{ ds }}'
+        """,
+    )
+
+    BashOperator(
+        task_id="export",
+        bash_command="aws s3 cp output.parquet {{ partition_path(ds, layer='processed') }}",
+    )
+```
+
+`fiscal_year(ds)` — вызов user-defined macro как функция в Jinja template.
+
+---
+
+## `user_defined_filters` — custom Jinja filters
+
+Filters в Jinja — pipe syntax: `{{ value | filter }}`. Стандартные: `{{ "Hello" | upper }}` → `"HELLO"`. Можно добавить свои:
+
+```python
+def hash_to_int(s: str, mod: int = 100) -> int:
+    """Stable hash, useful for partition routing."""
+    import hashlib
+    return int(hashlib.md5(s.encode()).hexdigest(), 16) % mod
+
+
+def quote_sql_list(items: list) -> str:
+    """Convert Python list to SQL IN-list."""
+    return ", ".join(f"'{x}'" for x in items)
+
+
+@dag(
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    user_defined_filters={
+        "hash_int": hash_to_int,
+        "quote_sql": quote_sql_list,
+    },
+)
+def my_dag():
+    PostgresOperator(
+        task_id="route",
+        sql="""
+            -- Hash partition: shard_id = hash(date) % 16
+            INSERT INTO shard_{{ ds | hash_int(16) }}.events
+            SELECT * FROM events WHERE date = '{{ ds }}'
+        """,
+    )
+
+    PostgresOperator(
+        task_id="filter_list",
+        sql="""
+            SELECT * FROM products
+            WHERE category IN ({{ params.categories | quote_sql }})
+        """,
+        params={"categories": ["electronics", "books", "tools"]},
+    )
+```
+
+Filter syntax: `{{ ds | hash_int(16) }}` — то же что `hash_int(ds, 16)`, но pipe style более читаемое.
+
+---
+
+## template_searchpath — external SQL files
+
+Хранить большие SQL queries в `.sql` файлах, а не inline в DAG код:
+
+```
+dags/
+├── my_dag.py
+└── sql/
+    ├── reports/
+    │   ├── daily_orders.sql
+    │   └── monthly_summary.sql
+    └── ddl/
+        └── create_orders.sql
+```
+
+```python
+import os
+from airflow import DAG
+from airflow.providers.postgres.operators.postgres import PostgresOperator
+
+DAG_DIR = os.path.dirname(__file__)
+
+@dag(
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    template_searchpath=[os.path.join(DAG_DIR, "sql")],
+)
+def my_dag():
+    PostgresOperator(
+        task_id="daily_report",
+        sql="reports/daily_orders.sql",  # ← path relative to template_searchpath
+    )
+
+    PostgresOperator(
+        task_id="setup",
+        sql="ddl/create_orders.sql",
+    )
+```
+
+В `sql/reports/daily_orders.sql`:
+
+```sql
+-- Daily orders report для {{ ds }}
+WITH today AS (
+    SELECT * FROM orders WHERE date = '{{ ds }}'
+)
+INSERT INTO reports (date, total_orders, total_amount)
+SELECT
+    '{{ ds }}',
+    COUNT(*),
+    SUM(amount)
+FROM today;
+```
+
+Преимущества:
+- SQL **outside Python** — синтаксис highlighter, DB linter работают
+- Reusable между DAG-ами
+- Version control diffs понятнее
+- Тестируется отдельно
+
+Note: `sql=` параметр Operator-а распознаёт `.sql` extension и автоматически читает file через `template_searchpath`. Если path не оканчивается на `.sql`, treats как inline SQL.
+
+---
+
+## Real-world templates
+
+### 1. Partition path для S3
+
+```python
+{{ macros.ds_format(ds, "%Y-%m-%d", "year=%Y/month=%m/day=%d") }}
+```
+
+→ `year=2026/month=05/day=12`
+
+### 2. Date arithmetic — N days ago / forward
+
+```python
+-- 7 дней назад
+WHERE date >= '{{ macros.ds_add(ds, -7) }}'
+
+-- Window [ds-1, ds]
+WHERE date >= '{{ macros.ds_add(ds, -1) }}'
+  AND date <  '{{ ds }}'
+```
+
+### 3. Fiscal year (custom macro)
+
+```python
+def fiscal_year_quarter(ds_str):
+    from datetime import datetime
+    d = datetime.strptime(ds_str, "%Y-%m-%d")
+    fy = d.year if d.month >= 7 else d.year - 1
+    fy_month = d.month - 6 if d.month >= 7 else d.month + 6
+    quarter = (fy_month - 1) // 3 + 1
+    return (fy, quarter)
+
+@dag(user_defined_macros={"fiscal": fiscal_year_quarter}, ...)
+def my_dag():
+    PostgresOperator(
+        sql="""
+            INSERT INTO fy_reports (fy, q, day, total)
+            SELECT
+                {{ fiscal(ds)[0] }} AS fy,
+                {{ fiscal(ds)[1] }} AS q,
+                ...
+        """,
+    )
+```
+
+### 4. Environment-aware connection
+
+```python
+PostgresOperator(
+    sql="...",
+    postgres_conn_id="postgres_{{ var.value.environment }}",  # ← postgres_prod / postgres_staging
+)
+```
+
+Note: not all operator parameters templated — only those in `template_fields` of operator. Check operator docs.
+
+---
+
+## template_fields и template_ext
+
+Каждый operator имеет `template_fields` (tuple) и `template_ext` (tuple) class attributes:
+
+```python
+class PostgresOperator(BaseOperator):
+    template_fields = ("sql", "parameters")
+    template_ext = (".sql",)
+    template_fields_renderers = {"sql": "sql"}
+```
+
+- **template_fields**: какие kwargs render через Jinja
+- **template_ext**: если value заканчивается на это extension — load from file (через template_searchpath)
+- **template_fields_renderers**: UI renderer для каждого field (`sql`, `json`, `python`, `bash`)
+
+В кастомном operator задайте `template_fields = ("query", "output_path")` для render через Jinja, и `template_ext = (".sql",)` для auto-load from file. Поля будут rendered к моменту `execute()`.
+
+---
+
+## Production gotchas
+
+**1. Template render происходит на worker, не scheduler.** Это значит worker имеет access к Variables / Connections — конфиг проблема если env vars не совпадают.
+
+**2. Не каждое поле operator templated.** Если задача setting `executor_config` динамически — это не template_field в большинстве operators. Проверьте `template_fields` или override его в custom operator.
+
+**3. `{{ ds }}` это logical_date, не execution time.** На @daily DAG run за 2026-05-12 запускается на 2026-05-13 00:00 (после data interval). `ds=2026-05-12` (data interval start), не сегодня. Counter-intuitive.
+
+**4. Variables / Connections lookup при render → DB hit per task.** Если 100 tasks template `{{ var.value.foo }}` — 100 lookup. Включите `[secrets] use_cache=True` (2.7+) или передавайте через op_kwargs once.
+
+**5. `template_searchpath` относительные пути не работают.** Только absolute или относительно текущего DAG file через `os.path.dirname(__file__)`.
+
+**6. Не render через `{{ }}` если не нужно — это overhead.** Inline statics не нужно темплеить. `sql="SELECT 1"` быстрее `sql="SELECT 1 -- {{ '' }}"`.
+
+---
+
+<KnowledgeCheck
+  question="DAG имеет 50 PostgresOperator tasks с большими SQL queries inline. Сейчас сложно тестировать SQL отдельно. Как лучше структурировать?"
+  answer="Использовать template_searchpath + external .sql files. Создать структуру `dags/my_dag.py` + `dags/sql/<category>/<query>.sql`. Установить `template_searchpath=[os.path.join(os.path.dirname(__file__), 'sql')]` в @dag. PostgresOperator(sql='reports/daily.sql') — операторы распознают .sql extension и автоматически read file. Преимущества: (1) SQL outside Python — syntax highlighting в IDE, DB linters (sqlfluff, sql-lint) работают на raw files; (2) Reusable между DAG-ами — один .sql файл может быть в нескольких DAG; (3) Lighter DAG file — DAG parsing быстрее (нет mega-strings); (4) Test SQL отдельно — `psql -f sql/reports/daily.sql -v ds=2026-05-12` (с psql variables как substitute Jinja); (5) Git diffs читаемее — изменение SQL не размывает Python; (6) UI shows rendered SQL через template_fields_renderers={'sql': 'sql'} — code highlight в task instance details. Bonus: добавить sqlfluff в CI для SQL style check, нельзя merge invalid SQL. Migration plan: оставить existing inline SQL как первый шаг (compatibility), новые tasks через .sql files, постепенный refactor old. Production scale (Shopify, Airbnb) — sql files mandatory, inline SQL forbidden code review."
+/>

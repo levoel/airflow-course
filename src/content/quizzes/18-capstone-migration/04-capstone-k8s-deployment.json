@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/04-capstone-k8s-deployment",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-04" },
+  "questions": [
+    {
+      "id": "airflow-m18-04-q1",
+      "type": "multiple-choice",
+      "question": "Capstone Helm values setup — что критично для production?",
+      "options": [
+        { "id": "a", "text": "Только executor settings" },
+        { "id": "b", "text": "executor='CeleryExecutor,KubernetesExecutor' (mixed), 2 schedulers + 2 triggerers + 2 webservers HA, dagProcessor standalone (3.x preview), PgBouncer transaction mode, External Secrets через Vault, anti-affinity для разнести pods, KEDA для worker autoscale, network policies, per-component DB users" },
+        { "id": "c", "text": "1 scheduler достаточно" },
+        { "id": "d", "text": "Built-in Postgres OK" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production-grade Helm values: HA для каждого critical component (2 schedulers/triggerers/webservers), mixed executors, PgBouncer mandatory, External Secrets (Vault), KEDA для cost-effective autoscaling, network policies (security), anti-affinity (spread по nodes — survives node loss), per-component DB users (defense in depth). Built-in Postgres/Redis в Helm — anti-pattern в production (single-node, no backup).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-04-q2",
+      "type": "multiple-choice",
+      "question": "Multiple Executors (CeleryExecutor + KubernetesExecutor) adds operational complexity. Стоит ли it оф?",
+      "options": [
+        { "id": "a", "text": "Никогда" },
+        { "id": "b", "text": "Worthwhile когда clear mix workloads — light tasks + heavy tasks. Capstone case: consume_kafka light/frequent → Celery; spark_transform heavy/rare → K8s. Single executor compromise (Celery only → OOM heavy; K8s only → 10s overhead light). Complexities: dual debug paths, double network policies, monitoring split — manageable trade-off для real benefits" },
+        { "id": "c", "text": "Required в 2.x" },
+        { "id": "d", "text": "Только Celery нужен" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-61 (2.10+) Multiple Executors добавляет complexity: routing decisions, debugging dual paths, monitoring 2 systems, NetworkPolicy для обоих executors. Justified когда: clear light/heavy split (capstone), need custom resources per task (GPUs), gradual migration к K8s. NOT justified: tiny deployments (<50 DAGs), homogeneous workloads. Migration к 3.x: AIP-61 supported + Edge Executor (AIP-69) addition. Capstone setup future-proof.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m18-04-q3",
+      "type": "multiple-choice",
+      "question": "KEDA для Celery workers — что даёт vs static replicas?",
+      "options": [
+        { "id": "a", "text": "Только monitoring" },
+        { "id": "b", "text": "Autoscale based на actual Celery queue length, не CPU. HPA не видит queue. KEDA: idle → 2 workers (min), 100 queued → 10 workers (100/10), 200+ queued → 16 max. Cost saving: pay только за actual workload. Static replicas = либо overprovisioned (idle waste) либо underprovisioned (tasks queued)" },
+        { "id": "c", "text": "Replacement для HPA" },
+        { "id": "d", "text": "Не нужен" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "KEDA superior к HPA для Celery: HPA scales по CPU/memory (workers могут быть idle при queued tasks → HPA не scale up). KEDA через redis-trigger смотрит на actual queue length — direct indicator workload. Production: minReplicaCount=2 (always-on responsiveness), maxReplicaCount=16+ (scale up bursts), listLength=10 tasks per worker. Cost saving substantial — typical 50-70% reduction worker hours vs static.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-04-q4",
+      "type": "true-false",
+      "question": "Anti-affinity для scheduler pods через preferredDuringSchedulingIgnoredDuringExecution — обязательно для HA.",
+      "correctAnswer": true,
+      "explanation": "Без anti-affinity Kubernetes может schedule оба scheduler pods на same node — если node dies, оба scheduler lost, HA не работает. podAntiAffinity с topologyKey=kubernetes.io/hostname spreads pods across nodes. preferredDuringSchedulingIgnoredDuringExecution — soft constraint (best-effort), не block scheduling если impossible. Hard variant — requiredDuringSchedulingIgnoredDuringExecution. Production: preferred обычно sufficient + достаточно nodes. Same applies для triggerer, webserver pods.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "13-rest-api-cli/06-programmatic-access",
+  "moduleId": "13-rest-api-cli",
+  "_meta": { "idPrefix": "airflow-m13-06" },
+  "questions": [
+    {
+      "id": "airflow-m13-06-q1",
+      "type": "multiple-choice",
+      "question": "Pattern для production AirflowClient: HTTP retry policy. Что важно?",
+      "options": [
+        { "id": "a", "text": "Retry всё на 5xx" },
+        { "id": "b", "text": "Retry только idempotent operations (GET, PATCH с idempotent semantics) на 502/503/504 transient errors, backoff exponential, respect Retry-After header. POST retry опасен — если идемпотентность не гарантирована через dag_run_id, создаёт дубли" },
+        { "id": "c", "text": "Retry всё, всегда, infinite" },
+        { "id": "d", "text": "Не нужен retry" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "POST без идемпотентности на retry создаёт дубли. urllib3 Retry по default разрешает retry только методам GET, HEAD, OPTIONS. Для POST явно `allowed_methods=['POST']` опасно — нужно подтвердить идемпотентность (через `dag_run_id`). status_forcelist = [502, 503, 504] — transient (LB rotation, scheduler restart). НЕ retry на 4xx (это client error, retry не поможет). respect_retry_after_header — server может явно указать сколько ждать.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-06-q2",
+      "type": "multiple-choice",
+      "question": "Service account для ops automation. Какой least-privilege scope?",
+      "options": [
+        { "id": "a", "text": "Admin — простой setup" },
+        { "id": "b", "text": "Custom role с минимальными permissions: read DAGs/DagRuns/Task Instances + create DagRuns + edit Task Instances (для clear). НЕТ permissions на Connections/Variables/Pools/Users — sensitive data только через CLI. Password в Vault, rotation 90d" },
+        { "id": "c", "text": "Только Viewer — read only" },
+        { "id": "d", "text": "Anonymous access" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Principle of least privilege: automation должен иметь exactly те permissions, которые ему нужны. Read для monitoring (DagRuns/TI), create DagRun (trigger), edit TI (clear). Не давать write на Connections/Variables — automation может leak credentials в logs/errors. Не давать can_admin — это full control. Connections управлять через CLI в CI (`airflow connections import`) или secrets backend (Vault) — не через REST API.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m13-06-q3",
+      "type": "multiple-choice",
+      "question": "Live dashboard делает каждую секунду GET /taskInstances?state=running&limit=1000. Webserver OOM-ит раз в час. Причины?",
+      "options": [
+        { "id": "a", "text": "Memory leak в Airflow" },
+        { "id": "b", "text": "Heavy SQL (full task_instance + JOIN dag_run) + 10-50MB JSON response + marshmallow parsing в memory + concurrent polls от нескольких пользователей dashboard → накопительный peak memory. Fix: filter по dag_ids/start_date_gte, poll раз в 30s, использовать OTel metrics для real-time dashboard, или Listener API для push" },
+        { "id": "c", "text": "Сеть медленная" },
+        { "id": "d", "text": "Bug в gunicorn" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "REST API не предназначен для polling-based dashboards. Каждый GET — heavy SQL (10-50MB response), парсинг marshmallow в Python objects. Concurrent polls сложатся. Правильный подход: OpenTelemetry metrics (модуль 14) для real-time dashboards (Prometheus + Grafana — дешёвый, push-based). Если REST действительно нужен — backend service делает 1 poll/min, cache в Redis, dashboard читает из Redis. Listener API (модуль 12) — push events по state change.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m13-06-q4",
+      "type": "true-false",
+      "question": "Backup metadata DB должен encrypt все exports — `airflow connections export` и `variables export` расшифровывают значения с Fernet key, и дамп содержит **plaintext** credentials. Хранить нужно через GPG или KMS-encrypted S3.",
+      "correctAnswer": true,
+      "explanation": "Connection.password и variable.val в DB хранятся Fernet-encrypted. CLI export ИХ ДЕШИФРУЕТ для readable JSON output. Это нужно потому что при import (DR scenario) пользователь может иметь другой Fernet key — plaintext универсален. Но dump = plaintext = критичный security risk. **Always:** (1) GPG encrypt перед хранением; (2) S3 server-side encryption с KMS; (3) Никогда не commits в git; (4) Retention policy с автодеструкцией старых dumps. Для compliance — audit who exports когда.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

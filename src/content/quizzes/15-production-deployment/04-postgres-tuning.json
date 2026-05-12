@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/04-postgres-tuning",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-04" },
+  "questions": [
+    {
+      "id": "airflow-m15-04-q1",
+      "type": "multiple-choice",
+      "question": "PgBouncer pool_mode для Airflow — что выбрать?",
+      "options": [
+        { "id": "a", "text": "session — connection держится весь client session" },
+        { "id": "b", "text": "transaction — connection возвращается в pool после COMMIT/ROLLBACK. Production стандарт. Эффективно мультиплексирует короткие транзакции Airflow через малый real pool" },
+        { "id": "c", "text": "statement — после каждого statement" },
+        { "id": "d", "text": "Не важно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Transaction mode — production стандарт для Airflow. Каждый scheduler tick — 5-10 коротких транзакций. Transaction mode позволяет 500 client connections мультиплексировать через 50 real PG connections. Caveats: ломает SET LOCAL, prepared statements (SQLAlchemy в 2.7+ работает корректно), LISTEN/NOTIFY (Airflow не использует). Session mode неэффективен. Statement mode ломает multi-statement транзакции.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-04-q2",
+      "type": "multiple-choice",
+      "question": "Default autovacuum_vacuum_scale_factor = 0.2 (20%). Для task_instance в production Airflow это:",
+      "options": [
+        { "id": "a", "text": "Нормально" },
+        { "id": "b", "text": "Катастрофа — миллионы dead tuples перед vacuum. Queries замедляются. Solution: ALTER TABLE task_instance SET (autovacuum_vacuum_scale_factor = 0.05); — vacuum при 5% dead, не 20%" },
+        { "id": "c", "text": "Зависит от размера" },
+        { "id": "d", "text": "Airflow сам это настраивает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "task_instance — high-churn таблица (INSERT/UPDATE постоянно). При default 20% threshold autovacuum запускается слишком поздно — bloat огромный. Production setup: scale_factor 0.05 для task_instance/log/xcom, plus autovacuum_vacuum_cost_limit = 2000 (агрессивнее), autovacuum_naptime = 20 (чаще проверять). Monitoring: n_dead_tup / n_live_tup ratio — если > 20% постоянно, ещё агрессивнее (0.02-0.03).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-04-q3",
+      "type": "multiple-choice",
+      "question": "Зачем pg_partman для Airflow tables log/xcom/task_instance?",
+      "options": [
+        { "id": "a", "text": "Performance не важна" },
+        { "id": "b", "text": "Партиционирование по дате: (1) cleanup через DROP TABLE моментально, vs DELETE FROM часами; (2) partition pruning для queries; (3) per-partition VACUUM параллельно; (4) per-partition indexes — меньше bloat. Mandatory для tables >50 GB" },
+        { "id": "c", "text": "Required Airflow feature" },
+        { "id": "d", "text": "Замена для autovacuum" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Tables log/xcom/task_instance растут линейно с временем — без partition достигают 50-200 GB за 6-12 месяцев. DELETE FROM медленный (row-by-row, не возвращает space в OS, фрагментирует indexes). pg_partman автоматически создаёт daily/monthly partitions + retention policy. Cleanup = DROP partition (instant). Query с filter по dttm — partition pruning, scan только нужные partitions. VACUUM per-partition параллельно — намного быстрее.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m15-04-q4",
+      "type": "true-false",
+      "question": "На AWS RDS можно менять parameters через ALTER SYSTEM напрямую, как на bare-metal Postgres.",
+      "correctAnswer": false,
+      "explanation": "RDS не позволяет ALTER SYSTEM (superuser permissions у пользователя нет). Параметры меняются через Parameter Group в AWS Console: создать custom parameter group, изменить значения, attach к instance, restart (для параметров с pending-reboot). На self-hosted Postgres ALTER SYSTEM + pg_reload_conf() работает. Это одна из tradeoffs managed services — меньше control, но и меньше операционной работы.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

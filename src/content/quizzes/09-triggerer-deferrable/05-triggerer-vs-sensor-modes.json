@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "09-triggerer-deferrable/05-triggerer-vs-sensor-modes",
+  "moduleId": "09-triggerer-deferrable",
+  "_meta": { "idPrefix": "airflow-m09-05" },
+  "questions": [
+    {
+      "id": "airflow-m09-05-q1",
+      "type": "multiple-choice",
+      "question": "1000 одновременных sensors с timeout=4h, poke_interval=60s. Какие DB ops/час для mode='reschedule'?",
+      "options": [
+        { "id": "a", "text": "~0 — нет DB activity" },
+        { "id": "b", "text": "60,000 inserts/hour в task_reschedule (1000 sensors × 60 poke attempts/hour). DB write IOPS bottleneck, требуется powerful instance (db.r6g.xlarge+). Scheduler tick latency растёт значительно" },
+        { "id": "c", "text": "1 на весь period" },
+        { "id": "d", "text": "Depends on DB" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "reschedule mode: каждый failed poke → AirflowRescheduleException → INSERT INTO task_reschedule. 1000 sensors × (3600/60) = 60k inserts/hour. Plus UPDATE on task_instance state changes. Это серьёзная DB write нагрузка: requires db.r6g.xlarge minimum, hurts scheduler performance (он scans task_reschedule на каждом tick), affects parallel dataset cascade processing. Mitigation: poke_interval >= 5 минут, или migrate to deferrable. Deferrable: 0 ops/hour для same workload — 1000 rows в trigger table once, async polls в triggerer без DB writes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-05-q2",
+      "type": "multiple-choice",
+      "question": "Когда deferrable mandatory в production?",
+      "options": [
+        { "id": "a", "text": "Всегда" },
+        { "id": "b", "text": "Hard rules: timeout > 1 hour, OR > 100 concurrent sensors, OR external API polling под rate limits, OR real-time event waits. Without deferrable — worker pool unmanageable" },
+        { "id": "c", "text": "Только для async-friendly hooks" },
+        { "id": "d", "text": "Никогда — это experimental" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production rules: (1) timeout > 1h — poke блокирует slot часами, reschedule переливает DB; (2) >100 concurrent — worker pool требует 100+ slots только для waits; (3) External APIs — async polling more efficient at scale; (4) Real-time events — async pattern natively fits. Не 'всегда' — для quick (<60s) waits в маленьких DAGs deferrable overhead больше чем benefit. Deferrable не experimental — AIP-40 stable с 2.5, production-ready 2.7+, default option в 2.10+.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m09-05-q3",
+      "type": "multiple-choice",
+      "question": "Latency three modes от event до task ready-to-continue (event happens at T=0):",
+      "options": [
+        { "id": "a", "text": "Все одинаковые" },
+        { "id": "b", "text": "poke ~0.5×poke_interval (next poke catches), reschedule ~poke_interval + 15-30s (scheduler tick + worker startup), deferrable ~5-15s after event (trigger emit + scheduler + worker)" },
+        { "id": "c", "text": "Зависит только от DB" },
+        { "id": "d", "text": "Все sub-second" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Latency profile: (1) poke — tight loop on worker thread; если event at T=30, next poke at T=60, detection T=60. Avg latency = poke_interval/2. (2) reschedule — after rejected poke, TI=up_for_reschedule; scheduler tick (5s) + queueing + worker startup (5-20s K8s) = poke_interval + 15-30s additional. (3) deferrable — async polling at trigger.run() poke interval (could be faster); when condition met, yield event → triggerer emit (1s) → scheduler picks scheduled TI (5s) → worker startup (5-15s). Sweet spot: deferrable отлично работает с reasonable 5-15s latency post-event.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-05-q4",
+      "type": "true-false",
+      "question": "Migration с poke на deferrable обычно сводится к добавлению deferrable=True parameter в существующих sensors + deploy triggerer process. Логика DAG менять не нужно.",
+      "correctAnswer": true,
+      "explanation": "Modern Airflow (2.7+): built-in sensors имеют deferrable=True flag, который переключает execute() implementation на defer/execute_complete pattern. Никаких изменений в DAG body — same operator class, same kwargs (bucket_key, poke_interval, timeout), просто add deferrable=True. Plus deploy triggerer (helm replicas: 2). Custom triggers не нужны для standard cases. Это minimal-effort migration с huge production wins. Caveat: triggerer должен быть deployed ДО включения deferrable=True (иначе зомби tasks в state=deferred). Order matters.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

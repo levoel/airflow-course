@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "07-dynamic-task-mapping/02-expand-basics",
+  "moduleId": "07-dynamic-task-mapping",
+  "_meta": { "idPrefix": "airflow-m07-02" },
+  "questions": [
+    {
+      "id": "airflow-m07-02-q1",
+      "type": "multiple-choice",
+      "question": "Когда определяется количество N для `process.expand(item=get_items())` где get_items returns list?",
+      "options": [
+        { "id": "a", "text": "При DAG parse — Airflow видит .expand() и считает length immediately" },
+        { "id": "b", "text": "На runtime (Phase 2 scheduler loop). При parse создаётся только MappedOperator placeholder. После get_files success, scheduler читает upstream XCom, считает length, и в expand_mapped_task создаёт N task_instance rows с map_index 0..N-1" },
+        { "id": "c", "text": "При DagRun creation" },
+        { "id": "d", "text": "Всегда 1024" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical parse vs runtime distinction. При parse: создаётся MappedOperator placeholder, length unknown (зависит от upstream). serialized_dag хранит structure с expand_input=XComArg reference. При DagRun creation: placeholder TI с map_index=-1. После get_files complete: scheduler в Phase 2 reads upstream XCom, calculates length, вызывает expand_mapped_task → создаёт N TI rows. Если upstream возвращает разный count каждый run — N меняется per run.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-02-q2",
+      "type": "multiple-choice",
+      "question": "DAG: `process.expand(env=['dev','prod'], region=['us','eu','ap'])`. Сколько mapped TI и в каком порядке map_index?",
+      "options": [
+        { "id": "a", "text": "5 mapped TI" },
+        { "id": "b", "text": "6 mapped TI (2 × 3 cartesian product через itertools.product). Order: 0=(dev,us), 1=(dev,eu), 2=(dev,ap), 3=(prod,us), 4=(prod,eu), 5=(prod,ap). Left-most argument меняется slowest" },
+        { "id": "c", "text": "3 mapped TI" },
+        { "id": "d", "text": "AirflowException" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Multiple expand args → cartesian product через Python itertools.product. 2 × 3 = 6 mapped TI. Order: left-most argument changes slowest. map_index 0 = (dev,us), 5 = (prod,ap). Быстро становится huge: 3+ axes по 5 элементов = 125, превышает max_map_length=1024 ещё раньше. Для explicit pairs (12 из 45 cartesian) — лучше .expand_kwargs([{...}, ...]). Для parallel pairs (lockstep) — .zip(a, b).map().",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m07-02-q3",
+      "type": "multiple-choice",
+      "question": "Default `max_map_length = 1024`. Что произойдёт при upstream returning 1500 elements?",
+      "options": [
+        { "id": "a", "text": "Airflow silently truncates до 1024" },
+        { "id": "b", "text": "AirflowException на expand_mapped_task в Phase 2 scheduler loop. Mapped task переходит в failed state. Можно увеличить через `[core] max_map_length=4096` но careful: 4000 mapped TI = scheduler critical section longer, UI медленный, DB rows накапливаются" },
+        { "id": "c", "text": "Mapped TI создаются по batches" },
+        { "id": "d", "text": "Bug Airflow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Hard fail: AirflowException 'Number of mapped tasks exceeds max_map_length'. Task → failed state. Default 1024 — safety brake. Можно поднять, но trade-offs: scheduler tick duration растёт, critical section longer (более TI к enqueue), UI grid view 4000 cells crashes browser, DB rows накапливаются (1024 daily × 365 = 374k rows/year × N DAGs). Better alternative: batch processing — обработать N items внутри одного task, или chunked mapping (groups of 100).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-02-q4",
+      "type": "true-false",
+      "question": "`@task def get_items() -> list: return []` потом `.expand(item=get_items())` — это валидно, mapped task переходит в state=success с 0 sub-instances (downstream tasks выполняются normally), не fail.",
+      "correctAnswer": true,
+      "explanation": "Да, empty upstream — valid case. scheduler calculates length=0, не создаёт мapped TI, mapped task → state=success (с 0 sub-instances). UI показывает '0/0 mapped'. Downstream tasks выполняются normally (с trigger_rule=all_success они получают success от mapped task). Это represents 'nothing to process' — корректный outcome. Если хотите fail на empty: add validation в upstream task — `if not files: raise ValueError('No files')`. Также downstream aggregator получит empty list [] — handle accordingly.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

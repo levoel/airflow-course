@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "04-scheduler-internals/01-main-loop",
+  "moduleId": "04-scheduler-internals",
+  "_meta": { "idPrefix": "airflow-m04-01" },
+  "questions": [
+    {
+      "id": "airflow-m04-01-q1",
+      "type": "multiple-choice",
+      "question": "Какие четыре фазы main loop SchedulerJob в правильном порядке?",
+      "options": [
+        { "id": "a", "text": "Parse DAGs → Run tasks → Cleanup → Sleep" },
+        { "id": "b", "text": "Create DagRuns → Schedule TI → Critical Section enqueue → Housekeeping" },
+        { "id": "c", "text": "Heartbeat → Queue tasks → Wait → Report" },
+        { "id": "d", "text": "Lock → Run → Unlock → Sleep" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Scheduler main loop в 2.x: (1) Create DagRuns — для DAGs с next_dagrun_create_after ≤ now() + asset-triggered runs из dataset_dag_run_queue. (2) Schedule TI — для каждого active DagRun проверяем deps, переводим готовые TI в state=scheduled. (3) Critical Section — берём row lock на slot_pool с NOWAIT, проверяем concurrency/pool limits, переводим scheduled→queued, передаём executor-у. (4) Housekeeping — adopt orphans, check zombies, emit metrics. После — sleep(scheduler_heartbeat_sec=5s) и заново.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m04-01-q2",
+      "type": "multiple-choice",
+      "question": "Что делает scheduler в фазе 2 (Schedule TI)?",
+      "options": [
+        { "id": "a", "text": "Запускает tasks на worker-ах" },
+        { "id": "b", "text": "Для каждого active DagRun: проверяет upstream deps, переводит готовые TI из none/up_for_retry/up_for_reschedule в state=scheduled; обновляет DagRun state queued→running" },
+        { "id": "c", "text": "Парсит DAG-файлы" },
+        { "id": "d", "text": "Удаляет старые DagRuns" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Фаза 2 (schedule_dag_runs) — O(N) по числу tasks в active DagRuns. Для каждого TI scheduler проверяет: deps satisfied (all_upstreams_done или другой trigger_rule)? Если да — state=scheduled. up_for_retry проверяется на elapsed retry_delay. up_for_reschedule — на reschedule_date. Заодно DagRun queued→running переходит, если хотя бы один TI scheduled. Это bottleneck для DAGs с тысячами mapped tasks через expand().",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m04-01-q3",
+      "type": "multiple-choice",
+      "question": "MAX_TIS_PER_QUERY в critical section — какое значение и зачем?",
+      "options": [
+        { "id": "a", "text": "1 — для строгого ordering" },
+        { "id": "b", "text": "16 (default) — batch size, баланс между throughput и временем в critical section. Слишком маленький — много циклов, слишком большой — long lock holding" },
+        { "id": "c", "text": "Unlimited" },
+        { "id": "d", "text": "100000 — для максимального throughput" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "max_tis_per_query default 16 — это batch size для critical section. Scheduler за один вход в critical section enqueue-ит до 16 TIs. Слишком маленький → много iterations critical section, увеличивает row lock contention. Слишком большой → одна iteration держит lock дольше, другие scheduler-ы пропускают tick-и. Tune для больших deployments (Astronomer recommends 32-64 для >5k DAGs), но не больше — критически важно sustain critical section short.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m04-01-q4",
+      "type": "true-false",
+      "question": "Scheduler сам исполняет task code (вызывает task.execute()) во время critical section.",
+      "correctAnswer": false,
+      "explanation": "Нет. Scheduler только переводит TI в state=queued и кладёт command в executor queue (через executor.queue_command). Реальное выполнение task code — это worker (LocalTaskJob), который запускается отдельным процессом: Celery worker, K8s pod, или Local subprocess. Это ключевое разделение Airflow architecture — scheduler делает scheduling decisions, executor управляет infrastructure, worker исполняет user code. Никогда не путайте эти роли в production diagnostics.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "moduleId": "08-datasets-assets",
+  "title": "Module 08 Exam — Datasets",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m08-exam",
+    "description": "6-question integrated exam for Module 08: Datasets (AIP-48), DatasetAlias (2.9+), internals, cascade patterns, future Assets in 3.x"
+  },
+  "questions": [
+    {
+      "id": "airflow-m08-exam-q1",
+      "type": "multiple-choice",
+      "question": "Producer @hourly DAG, consumer schedule=[ds_producer, ds_other]. ds_other обновляется only @daily. Сколько раз consumer запустится в день?",
+      "options": [
+        { "id": "a", "text": "24 — по одному на каждый event ds_producer" },
+        { "id": "b", "text": "1 — AND-условие satisfied только когда оба datasets имеют queue rows; ds_other даёт 1 event/день; queue collapse 24 hourly events в один satisfaction" },
+        { "id": "c", "text": "25 — 24 hourly + 1 daily" },
+        { "id": "d", "text": "0 — конфликт schedules не позволяет run" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Bare list = DatasetAll (AND). Scheduler требует rows в dataset_dag_run_queue для ОБА datasets. ds_producer создаёт row 24 раза за день (но queue idempotent через PK), ds_other — 1 раз. Satisfaction наступает только при daily event. После создания DagRun queue полностью очищается. Накопленные 23 hourly events 'теряются' — не множат runs. Если хотите hourly consumer с дневным ds_other как 'side dependency' — используйте только ds_producer в schedule и читайте ds_other as-of inside task.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-exam-q2",
+      "type": "multiple-choice",
+      "question": "Multi-tenant SaaS: 50 клиентов, каждый записывает данные в свой S3 prefix. Какой подход правильный?",
+      "options": [
+        { "id": "a", "text": "Создать 50 static Dataset объектов, по одному per tenant" },
+        { "id": "b", "text": "DatasetAlias('tenant-data') с runtime emission через context['outlet_events'][alias].add(Dataset(f's3://.../tenant={tid}/')) — один alias, dynamic URIs" },
+        { "id": "c", "text": "Один Dataset для всех tenants с metadata routing" },
+        { "id": "d", "text": "TriggerDagRunOperator для каждого tenant" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DatasetAlias (2.9+) — правильный инструмент для runtime-determined URIs. На parse time alias имеет name, concrete URIs регистрируются в runtime для каждого tenant. Consumer subscribed на alias видит ВСЕ tenant events (OR semantics). Static 50 datasets — anti-pattern (registry bloat, не масштабируется при адду нового клиента — нужен DAG redeploy). Один shared Dataset — теряется per-tenant lineage. TriggerDagRunOperator — tight coupling. В 3.x этот паттерн станет cleaner через Asset Partitions, но в 2.x — DatasetAlias.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m08-exam-q3",
+      "type": "multiple-choice",
+      "question": "Debugging: consumer DAG не запускается, хотя видишь dataset_event rows. Какой SQL поможет диагностировать?",
+      "options": [
+        { "id": "a", "text": "Только SELECT * FROM dag_run — больше ничего не нужно" },
+        { "id": "b", "text": "Систематический check: dataset_event (есть ли event), dag_schedule_dataset_reference (subscription), dataset_dag_run_queue (pending), dag.is_paused, dag_run COUNT для max_active_runs check" },
+        { "id": "c", "text": "Перезагрузить scheduler" },
+        { "id": "d", "text": "Проверить connections table" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production debugging workflow: (1) dataset_event — действительно ли event эмитировался? (2) dag_schedule_dataset_reference — есть ли subscription consumer-а? (3) dataset_dag_run_queue — pending rows для consumer? (4) dag.is_paused — DAG не paused? (5) COUNT(dag_run WHERE state='running') vs max_active_runs_per_dag. (6) job.latest_heartbeat для scheduler health. Это систематический approach — рестарт scheduler 'на удачу' маскирует root cause. Знание схемы — необходимое условие production support.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-exam-q4",
+      "type": "multiple-choice",
+      "question": "Cross-DAG dependency: Datasets vs TriggerDagRunOperator vs ExternalTaskSensor. Главный архитектурный выигрыш Datasets?",
+      "options": [
+        { "id": "a", "text": "Performance — runs быстрее" },
+        { "id": "b", "text": "Decoupling: producer ничего не знает про consumers (publish-subscribe через URI), zero worker overhead (queue в DB), native UI lineage, scaling constant с indexed DB queries" },
+        { "id": "c", "text": "Только синтаксис покороче" },
+        { "id": "d", "text": "Кроссplatform support" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Datasets — strict superset для data-driven cross-DAG. Преимущества: (1) Decoupled — producer не знает consumers (TriggerDagRunOperator anti-pattern: hardcoded имена downstream); (2) Zero worker overhead — queue в DB, не sensor polling; (3) Native lineage UI; (4) Scaling O(1) с indexed JOINs vs O(N*M) sensor polling. Latency 5-15s scheduler tick — медленнее TriggerDagRunOperator (sub-second), но decoupling+observability перевешивают. TriggerDagRunOperator остаётся valid только для manual/programmatic/one-time scenarios.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m08-exam-q5",
+      "type": "multiple-choice",
+      "question": "Production gotcha: producer task с outlets=[ds] завершилась state=skipped из-за branching. Consumer на этом dataset.",
+      "options": [
+        { "id": "a", "text": "Consumer runs as usual" },
+        { "id": "b", "text": "Consumer НЕ runs — emission strictly on state=success. Skipped tasks не эмитят events. Mitigation: trigger_rule='all_done' на emitter task, или branching pattern с explicit emit через alias" },
+        { "id": "c", "text": "Skipped — это синоним success" },
+        { "id": "d", "text": "Зависит от config" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Dataset emission strictly tied to state=success. Skipped, failed, up_for_retry — no event. Branching pattern (BranchPythonOperator) часто приводит к skipped tasks — типичный silent breakage cross-DAG. Защита: (1) trigger_rule='all_done' на task-emitter — она run success после either branch; (2) refactor: emitter после branches, не внутри; (3) DatasetAlias с conditional emission в task body. Это не bug, а design — emission semantics aligned с 'task SUCCESS = data ready'. 3.x semantics та же.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-exam-q6",
+      "type": "true-false",
+      "question": "Чтобы code был maximally compatible с 3.x rename Dataset→Asset, нужно немедленно мигрировать на Airflow 3.0 — нельзя оставаться на 2.x.",
+      "correctAnswer": false,
+      "explanation": "Airflow 2.10/2.11 LTS — стабильный target минимум до конца 2027. Не нужно мигрировать сразу. Smart prep для maximum compat: (1) compat imports — try Asset from airflow.sdk except: from airflow import Dataset as Asset — single file change при migration; (2) explicit DatasetAll/DatasetAny вместо bare list — clear semantics; (3) factory function для Dataset() construction — single point of change; (4) document URI conventions; (5) enable OpenLineage already — на 3.x lineage будет богаче. Эти шаги делают будущую migration delta минимальной. Migrate когда есть business need для 3.x features или EOL approaching, не раньше.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

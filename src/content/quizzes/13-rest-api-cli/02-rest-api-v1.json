@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "13-rest-api-cli/02-rest-api-v1",
+  "moduleId": "13-rest-api-cli",
+  "_meta": { "idPrefix": "airflow-m13-02" },
+  "questions": [
+    {
+      "id": "airflow-m13-02-q1",
+      "type": "multiple-choice",
+      "question": "CI/CD pipeline делает POST /api/v1/dags/etl/dagRuns без `dag_run_id`. Retry CI step происходит дважды. Что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Второй POST вернёт 409 Conflict" },
+        { "id": "b", "text": "Airflow сгенерирует два разных `manual__<timestamp>` ID, создастся два DagRun. Дубль данных, double resource usage" },
+        { "id": "c", "text": "Второй POST просто overwrite первый" },
+        { "id": "d", "text": "API вернёт 400 Bad Request" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Без `dag_run_id` Airflow генерирует уникальный ID на основе timestamp. Каждый POST → новый run. Это критично для CI — retry создаст дубли. **Fix:** всегда детерминированный ID, например `ci__${github.run_id}__${sha}`. При retry повторный POST вернёт 409 (которое CI должен трактовать как success: 'OK, уже триггерили').",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-02-q2",
+      "type": "multiple-choice",
+      "question": "В чём разница между `logical_date` и `data_interval_start/end` в DagRun?",
+      "options": [
+        { "id": "a", "text": "Это одно и то же" },
+        { "id": "b", "text": "`logical_date` — точка во времени, представляющая run (бывший execution_date). `data_interval_*` — реальные временные границы данных. Cron `0 8 * * *` → logical_date=00:00, data_interval=[вчера 00:00, сегодня 00:00] — они НЕ совпадают" },
+        { "id": "c", "text": "logical_date устарел, использовать только data_interval" },
+        { "id": "d", "text": "data_interval только для 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`logical_date` — концептуальная метка времени (бывший `execution_date`). `data_interval_start/end` — реальные временные границы данных, которые этот run обрабатывает. Для cron `@daily` запускающегося в 8:00 — logical_date обычно начало дня, data_interval = [предыдущий день, текущий день]. SQL внутри task должен использовать `{{ data_interval_start }}` и `{{ data_interval_end }}`, не `logical_date`.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m13-02-q3",
+      "type": "multiple-choice",
+      "question": "Production скрипт делает list 50k TaskInstances через `?limit=1000&offset=N`. После offset=20000 запросы тормозят. Что происходит?",
+      "options": [
+        { "id": "a", "text": "Rate limiting на webserver" },
+        { "id": "b", "text": "Deep OFFSET в PostgreSQL — линейный scan: при OFFSET 20000 DB читает 21000 rows чтобы вернуть 1000. Эта проблема растёт с offset. Fix: использовать filtering по `start_date_gte/lte` диапазонам вместо deep offset" },
+        { "id": "c", "text": "API кеширует первые pages" },
+        { "id": "d", "text": "Bug в Airflow 2.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "PostgreSQL OFFSET требует читать и отбрасывать первые N rows, даже если они не возвращаются. На 20k offset это становится заметно, на 100k — секунды. Это общая RDBMS проблема, не специфика Airflow. **Fix:** range queries — `start_date_gte=2026-05-01&start_date_lte=2026-05-02` (по дням), пагинация offset в пределах диапазона. Для очень больших scans — использовать SQL прямо на metadata DB (read-only user), не REST API.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-02-q4",
+      "type": "true-false",
+      "question": "`GET /api/v1/health` возвращает HTTP 200 если webserver жив, даже если scheduler мёртв 5 минут. Поэтому для accurate liveness нужно парсить JSON body и проверять поля `scheduler.status` и `triggerer.status`.",
+      "correctAnswer": true,
+      "explanation": "/health — это shallow health: 'webserver отвечает'. HTTP code всегда 200 если Flask жив. Body содержит JSON: {metadatabase: {status}, scheduler: {status, latest_scheduler_heartbeat}, triggerer: {status}}. Каждый компонент — 'healthy' или 'unhealthy'. Для нормального monitoring используйте OTel/StatsD metrics (модуль 14) — они дают per-component health с историей.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

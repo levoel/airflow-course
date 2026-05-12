@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "12-plugins-listeners/05-macros-jinja",
+  "moduleId": "12-plugins-listeners",
+  "_meta": { "idPrefix": "airflow-m12-05" },
+  "questions": [
+    {
+      "id": "airflow-m12-05-q1",
+      "type": "multiple-choice",
+      "question": "{{ ds }} в template — это какая дата для @daily DAG запущенного в 2026-05-13 00:00 UTC?",
+      "options": [
+        { "id": "a", "text": "2026-05-13 — день запуска" },
+        { "id": "b", "text": "2026-05-12 — logical_date / data_interval_start. @daily DAG за 2026-05-12 запускается в 2026-05-13 00:00 (после data interval end). ds = data interval start, не сегодня. Counter-intuitive для новых пользователей" },
+        { "id": "c", "text": "2026-05-14" },
+        { "id": "d", "text": "Это всегда сегодня" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Airflow concept: DagRun reflects data interval (start..end). @daily для интервала 2026-05-12 запускается на 2026-05-13. ds = data_interval_start (string YYYY-MM-DD). Это нужно для idempotent ETL — каждый run обрабатывает завершённый interval. UI 'Logical Date' столбец показывает именно это. ds может быть в прошлом если backfill.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-05-q2",
+      "type": "multiple-choice",
+      "question": "user_defined_macros в @dag — что это даёт?",
+      "options": [
+        { "id": "a", "text": "Macros в Excel" },
+        { "id": "b", "text": "Custom Python functions, доступные в Jinja templates DAG-а. Например fiscal_year(ds) или partition_path(ds, layer). Решает проблему повторяющегося Python кода в SQL templates. Альтернатива — built-in macros (macros.ds_add, macros.datetime) для general purpose" },
+        { "id": "c", "text": "Sass mixins" },
+        { "id": "d", "text": "Это deprecated" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "user_defined_macros={'fiscal_year': fn} → в template `{{ fiscal_year(ds) }}`. Полезно для DAG-specific business logic: fiscal calendar, partition paths, custom date arithmetic. Alternative: user_defined_filters для pipe syntax `{{ ds | hash_int(16) }}`. Built-in macros (macros.ds_add etc) — general purpose.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-05-q3",
+      "type": "multiple-choice",
+      "question": "template_searchpath — какая основная польза?",
+      "options": [
+        { "id": "a", "text": "Speed up rendering" },
+        { "id": "b", "text": "Хранить большие SQL queries в .sql files отдельно от Python. Operator с sql='reports/daily.sql' автоматически читает file через template_searchpath. Преимущества: syntax highlighting в IDE, SQL linters работают, reusable между DAG, версии git diff читаемее, можно тестировать SQL отдельно. Production scale (Shopify, Airbnb) — mandatory" },
+        { "id": "c", "text": "Static files для web UI" },
+        { "id": "d", "text": "Cache templates" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "template_searchpath=[absolute_path] — Airflow при render sql='file.sql' (ending в .sql или другом template_ext) ищет file. Production: SQL вне Python = syntax tools работают, code review лучше, reuse, testability. CI с sqlfluff lint на raw .sql files. Inline SQL OK для коротких queries, .sql files — для всё что >10 lines.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m12-05-q4",
+      "type": "true-false",
+      "question": "Custom Jinja filter user_defined_filters позволяет писать pipe syntax `{{ ds | hash_int(16) }}` — это эквивалентно `hash_int(ds, 16)` но более читаемо для inline transformations.",
+      "correctAnswer": true,
+      "explanation": "Jinja filters — pipe syntax. user_defined_filters={'hash_int': hash_to_int} → в template `{{ ds | hash_int(16) }}` = call hash_to_int(ds, 16). Полезно для chain (`{{ ds | hash_int(16) | format_shard }}`) и inline conversion. Macros — для function-style calls в more complex expressions. Оба механизма OK, выбор стилистический.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

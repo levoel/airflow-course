@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/07-cicd-integration",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-07" },
+  "questions": [
+    {
+      "id": "airflow-m16-07-q1",
+      "type": "multiple-choice",
+      "question": "В CI install Airflow без --constraint флага — что не так?",
+      "options": [
+        { "id": "a", "text": "Ничего" },
+        { "id": "b", "text": "Без constraints файла pip может pick incompatible package versions (например SQLAlchemy 2.x когда Airflow требует 1.4.x). Tests pass локально, fail в CI или production. ALWAYS использовать official constraints URL" },
+        { "id": "c", "text": "Slower install" },
+        { "id": "d", "text": "Несовместимо с Python 3.12" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Apache Airflow publishes constraints files для каждой version: constraints-<airflow_version>/constraints-<python_version>.txt. Они pin all transitive dependencies на known-working versions. Без них pip resolver может pick latest version of, e.g., flask или pydantic incompatible с Airflow. Mandatory: `pip install apache-airflow==2.10.5 --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt`.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-07-q2",
+      "type": "multiple-choice",
+      "question": "Ruff AIR301 и AIR302 — что это?",
+      "options": [
+        { "id": "a", "text": "Random rule codes" },
+        { "id": "b", "text": "Airflow-specific lint rules: AIR301 — deprecated imports (from airflow.decorators → from airflow.sdk в 3.x), AIR302 — deprecated APIs (execution_date → logical_date). Critical для preparation к 3.x migration" },
+        { "id": "c", "text": "Тоже что black" },
+        { "id": "d", "text": "Производительность checks" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Ruff (Rust-implemented linter) added AIR rules для Airflow-specific deprecations. AIR301 — import path changes (decorators → sdk). AIR302 — API deprecations (execution_date, SubDagOperator, etc). Auto-fix через `ruff check --fix --select AIR301`. В CI: `ruff check --select AIR301,AIR302 dags/` — initially warning, потом strict mode перед 3.x migration. Save weeks дебага after upgrade. Module 18.06 — full migration tools tour.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-07-q3",
+      "type": "multiple-choice",
+      "question": "Pre-commit hooks дают преимущество над только-CI checks. Какое?",
+      "options": [
+        { "id": "a", "text": "Замена для CI" },
+        { "id": "b", "text": "Локальный feedback за секунды до commit — catch errors раньше чем CI (5min). Same hooks в pre-commit и в CI через pre-commit/action — гарантирует consistency. Local dev experience лучше, CI minutes save" },
+        { "id": "c", "text": "Только cosmetics" },
+        { "id": "d", "text": "Только для public repos" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Pre-commit hooks (.pre-commit-config.yaml + pre-commit install) запускаются при `git commit` локально. Catch issues за seconds — ruff, yaml lint, trailing whitespace, large files, private keys. Same yaml config используется в CI через pre-commit/action@v3.0.1 — local и CI consistent. ROI: разработчики save минуты waiting на CI feedback, CI runs save bandwidth (меньше failed builds). Mandatory для professional projects.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-07-q4",
+      "type": "true-false",
+      "question": "Integration tests должны запускаться на каждый PR commit для maximum coverage.",
+      "correctAnswer": false,
+      "explanation": "Integration tests SLOW (10-30 минут) — не нужны на каждый commit. Best practice: blocking tests на каждый PR — unit tests + DAG validity (<5 min). Integration tests — на push в main или nightly. GitHub Actions: `if: github.event_name == 'push'`. GitLab CI: `only: [main]`. Это даёт fast feedback на PR + comprehensive coverage на main. Stage gate: unit tests pass → merge → integration tests post-merge → если fail, revert или hotfix. Alternative: integration tests на PR с tags 'critical-path'.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

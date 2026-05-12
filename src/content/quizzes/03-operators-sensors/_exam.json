@@ -1,0 +1,89 @@
+{
+  "moduleId": "03-operators-sensors",
+  "title": "Module 03 Exam — Operators и Sensors",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m03-exam",
+    "description": "6-question integrated exam for Module 03"
+  },
+  "questions": [
+    {
+      "id": "airflow-m03-exam-q1",
+      "type": "multiple-choice",
+      "question": "Custom operator запускает Spark job на EMR. Без какого метода operator не production-ready?",
+      "options": [
+        { "id": "a", "text": "pre_execute()" },
+        { "id": "b", "text": "on_kill() — должен отправить cancel в Spark master по application_id. Без него при execution_timeout, clear через UI или evict pod — Airflow считает task failed, Spark application продолжает работать как orphan, занимая cluster resources" },
+        { "id": "c", "text": "__init__()" },
+        { "id": "d", "text": "post_execute()" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "on_kill() — обязательный для любого operator, управляющего внешним ресурсом. Срабатывает при: execution_timeout, manual clear, K8s pod evict, scheduler видит orphan TI. Default — pass, что приводит к resource leak. Контракт: idempotent, fast (60s до SIGKILL), no blocking I/O без timeout. Хранить application_id на self в execute(), использовать в on_kill().",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-exam-q2",
+      "type": "multiple-choice",
+      "question": "ML task с deps pandas==1.5.3, конфликтующими с worker image. Запуск каждый час, требование < 2s overhead. Какой operator?",
+      "options": [
+        { "id": "a", "text": "PythonOperator" },
+        { "id": "b", "text": "ExternalPythonOperator с pre-built venv в Docker image — overhead subprocess.Popen ~100-500ms. PythonVirtualenvOperator делает pip install каждый раз 30-60s, KubernetesPodOperator overkill (10-30s startup)" },
+        { "id": "c", "text": "DockerOperator" },
+        { "id": "d", "text": "BashOperator с pip install в команде" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "ExternalPythonOperator — оптимальный balance изоляция + скорость. Pre-built venv в Docker (`RUN python3.10 -m venv /opt/airflow/venvs/ml && ... pip install`). @task.external_python(python='/opt/airflow/venvs/ml/bin/python', expect_airflow=False). Venv нужно обновлять при upgrade Airflow или pinned deps.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-exam-q3",
+      "type": "multiple-choice",
+      "question": "Sensor mode для S3KeySensor, ожидающего файл 6 часов (есть async support):",
+      "options": [
+        { "id": "a", "text": "poke (default)" },
+        { "id": "b", "text": "deferrable=True — поднимает TaskDeferred, slot мгновенно свободен, Trigger выполняется в Triggerer (asyncio). Тысячи triggers на одном процессе без worker slots. Должен быть запущен `airflow triggerer`" },
+        { "id": "c", "text": "reschedule" },
+        { "id": "d", "text": "Любой mode подходит" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "6-часовое ожидание в poke = 6 часов worker slot занят. В reschedule = 360 task_reschedule cycles. В deferrable = TaskDeferred, slot свободен, async ожидание в Triggerer. Для long-wait sensors с поддержкой async — deferrable обязателен. Можно глобально включить AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true (2.7+). Без запущенного Triggerer — task висит в state='deferred' вечно.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-exam-q4",
+      "type": "multiple-choice",
+      "question": "DAG: branch >> [a, b] >> merge. Merge всегда skipped, хотя одна ветка success. Что починить?",
+      "options": [
+        { "id": "a", "text": "Перезапустить scheduler" },
+        { "id": "b", "text": "Поставить trigger_rule='none_failed_min_one_success' на merge. Default all_success требует ВСЕ upstream = success; после branch один upstream всегда skipped → merge тоже skipped. Это типичный pitfall, DAG silently passes без выполнения merge" },
+        { "id": "c", "text": "Заменить branch на ShortCircuit" },
+        { "id": "d", "text": "Использовать SubDAG" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default trigger_rule после branching не работает. После @task.branch один из upstream всегда skipped (branch скипает не-выбранные ветки). all_success требует все success, skipped не success → merge skipped. UI показывает успешный DagRun (skipped не failed), но merge не выполнился. Fix: trigger_rule='none_failed_min_one_success' — ни один upstream не failed + хотя бы один success.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-exam-q5",
+      "type": "multiple-choice",
+      "question": "Установили apache-airflow-providers-snowflake. DAG падает с ModuleNotFoundError в triggerer, но работает в scheduler и worker. Где проблема?",
+      "options": [
+        { "id": "a", "text": "Pip cache не очищен" },
+        { "id": "b", "text": "Provider package установлен в scheduler и worker контейнерах, но не в triggerer. Provider должен быть установлен ВО ВСЕ компоненты Airflow (scheduler, worker, webserver, triggerer) — каждый импортирует Python модули независимо, serialized DAG не содержит код" },
+        { "id": "c", "text": "Triggerer не поддерживает Snowflake" },
+        { "id": "d", "text": "Нужно перезагрузить metadata DB" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Самый частый bug при работе с providers + deferrable. Provider устанавливается в worker (для execute) и scheduler (для DAG parsing), но забывают про triggerer. Deferrable operators имеют Trigger класс с async run() — выполняется в triggerer process. Без provider в triggerer — ImportError при попытке десериализовать Trigger из trigger table. Fix: обновить Dockerfile/requirements так чтобы install шёл во все компоненты. В Helm charts — `airflow.extraPipPackages` применяется ко всем deployments по default.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-exam-q6",
+      "type": "true-false",
+      "question": "Custom operator с template_fields=('s3_key',) и инстансом класса-наследника, который добавил новый атрибут `region` в __init__, автоматически унаследует template_fields и Jinja-рендеринг будет работать для `region` без явного объявления.",
+      "correctAnswer": false,
+      "explanation": "template_fields — tuple на уровне **класса**, не на инстансе. Subclass должен явно объявить полный набор: `template_fields = (*Parent.template_fields, 'region')`. Если этого не сделать, добавленный в __init__ атрибут region НЕ пройдёт Jinja — в нём останется raw '{{ ds }}' строкой. В UI Rendered Templates tab атрибут не появится. Симптом — operator parses, но шаблонные выражения не работают в новых полях subclass. Этот pitfall часто встречается при наследовании от provider operators.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

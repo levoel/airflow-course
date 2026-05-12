@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "04-scheduler-internals/03-dagrun-lifecycle",
+  "moduleId": "04-scheduler-internals",
+  "_meta": { "idPrefix": "airflow-m04-03" },
+  "questions": [
+    {
+      "id": "airflow-m04-03-q1",
+      "type": "multiple-choice",
+      "question": "В каком состоянии создаётся DagRun сразу после scheduler фазы 1?",
+      "options": [
+        { "id": "a", "text": "running" },
+        { "id": "b", "text": "queued — scheduler знает что нужно запускать, но scheduling tasks ещё не начался. Переход в running произойдёт в фазе 2, когда хотя бы один TI получит state=scheduled" },
+        { "id": "c", "text": "scheduled" },
+        { "id": "d", "text": "active" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagRun имеет 4 state: queued, running, success, failed. При создании в фазе 1 (_create_dagruns_for_dags) — state=queued. Переход queued→running делается в DagRun.update_state() в фазе 2, когда хотя бы один TI стал scheduled. start_date устанавливается в этот момент. Между queued и running scheduler может пропустить несколько tick-ов, если все TI заблокированы deps / depends_on_past / sensor wait.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m04-03-q2",
+      "type": "multiple-choice",
+      "question": "Как scheduler определяет final verdict DagRun (success или failed)?",
+      "options": [
+        { "id": "a", "text": "По любому failed TI в DAG" },
+        { "id": "b", "text": "По leaf tasks (узлам без downstream). Если все leaves в success/skipped — DagRun=success. Если хотя бы один leaf failed/upstream_failed — DagRun=failed. Middle failures не делают DagRun failed автоматически" },
+        { "id": "c", "text": "По первому task в DAG" },
+        { "id": "d", "text": "По total count failed vs success" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagRun.update_state() финализирует только когда все TI в terminal state. Verdict определяется по leaf tasks (is_leaf). Это позволяет middle failures с trigger_rule='all_done' на leaves не делать DagRun failed. Часто confuses пользователей: 'middle failure не failed DagRun'. Поэтому Setup/Teardown с on_failure_fail_dagrun=True важен для cost-control — гарантирует failed verdict даже если leaves succeed.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m04-03-q3",
+      "type": "multiple-choice",
+      "question": "Для @daily DAG с start_date=2026-01-01, какие execution_date и run_after для первого run?",
+      "options": [
+        { "id": "a", "text": "execution_date=2026-01-01, run_after=2026-01-01" },
+        { "id": "b", "text": "execution_date=2026-01-01 (начало data interval), run_after=2026-01-02 (после закрытия интервала). Run обрабатывает данные интервала [01-01, 01-02)" },
+        { "id": "c", "text": "Оба=2026-01-02" },
+        { "id": "d", "text": "execution_date=2026-01-02, run_after=2026-01-01" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Классическая путаница Airflow. logical_date / execution_date = data_interval_start = 2026-01-01 (начало интервала). run_after = data_interval_end = 2026-01-02 (когда run физически запускается, после закрытия интервала). Mnemonics: для daily DAG за 1 января run происходит 2 января, обрабатывая данные интервала [1, 2). Это семантика 'tomorrow morning we process yesterday's data'. В 3.x execution_date deprecated, везде logical_date.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m04-03-q4",
+      "type": "true-false",
+      "question": "Таблица dataset_dag_run_queue должна автоматически очищаться от старых entries — если она разрослась до 100GB, это нормальное поведение.",
+      "correctAnswer": false,
+      "explanation": "Нет, это проблема. dataset_dag_run_queue должна обрабатываться scheduler-ом фазы 1: когда DAG с dataset_triggers готов запуститься, scheduler create dagrun и DELETE entries. Если consumer DAG paused или у него нет dataset_triggers (несоответствие conditions), queue накапливается. Это типичная причина инцидентов 'DB разрослась на 100GB из ниоткуда'. Diagnose: SELECT count(*) FROM dataset_dag_run_queue GROUP BY target_dag_id. Fix: unpause/fix consumer DAG, или manual cleanup orphaned entries. Production: monitoring на размер этой таблицы — алерт если >1M rows.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

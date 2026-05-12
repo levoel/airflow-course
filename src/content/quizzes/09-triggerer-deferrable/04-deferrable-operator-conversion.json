@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "09-triggerer-deferrable/04-deferrable-operator-conversion",
+  "moduleId": "09-triggerer-deferrable",
+  "_meta": { "idPrefix": "airflow-m09-04" },
+  "questions": [
+    {
+      "id": "airflow-m09-04-q1",
+      "type": "multiple-choice",
+      "question": "self.defer(trigger=..., method_name=...) — что точно происходит?",
+      "options": [
+        { "id": "a", "text": "Просто записывает state в memory" },
+        { "id": "b", "text": "Raises TaskDeferred exception (flow control): worker ловит, делает trigger.serialize() → INSERT trigger row, UPDATE TI state=deferred, next_method=method_name, освобождает worker slot. NE error" },
+        { "id": "c", "text": "Запускает background thread" },
+        { "id": "d", "text": "Делает HTTP call к triggerer" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "self.defer() raises TaskDeferred — special exception для flow control. Worker task runner ловит специально: (1) trigger.serialize() → (classpath, kwargs); (2) INSERT INTO trigger; (3) UPDATE task_instance SET state='deferred', trigger_id=?, next_method=method_name; (4) Транзакция commit; (5) Worker process exits / slot released. На triggerer-е через SKIP LOCKED — adoption. Method_name говорит worker-у: какой метод operator-а call после event resume. Это elegant control flow, не error handling. try/except Exception маскирует TaskDeferred — лови специфические exception types.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-04-q2",
+      "type": "multiple-choice",
+      "question": "Зачем initial sync check в execute() перед defer?",
+      "options": [
+        { "id": "a", "text": "Обязательная часть API" },
+        { "id": "b", "text": "Optimization для hot path: если condition уже satisfied (S3 key exists) — return immediately, без overhead defer/triggerer adoption/scheduler wakeup. Common case faster" },
+        { "id": "c", "text": "Безопасность" },
+        { "id": "d", "text": "Не нужен — defer всё делает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Initial check — performance optimization. Overhead defer flow: serialize trigger (~10ms), INSERT trigger row, triggerer adopt (~1s), schedule (~5s), worker resume execute_complete (~5-15s) = total 20-30s. Если key уже exists (common case для production где data успело прийти), sync check 100ms + return эффективнее. Не обязательная часть API, но best practice. Также — для better UX: task завершается быстро при ready condition, не висит в state=deferred 30s 'для красоты'.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m09-04-q3",
+      "type": "multiple-choice",
+      "question": "Custom sensor конвертируется в deferrable. Текущий sync hook использует psycopg2. Что нужно изменить?",
+      "options": [
+        { "id": "a", "text": "Ничего — psycopg2 работает в asyncio" },
+        { "id": "b", "text": "Replace psycopg2 с asyncpg (или aiopg) в trigger.run(). psycopg2 — sync blocking, заблокирует event loop. Asyncpg делает same SQL operations через async/await pattern, integrated с asyncio loop" },
+        { "id": "c", "text": "Использовать pickle вместо JSON" },
+        { "id": "d", "text": "Запустить psycopg2 в отдельном thread" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "psycopg2 — sync блокирующая library. cursor.execute, conn.fetchall — blocking I/O, блокируют asyncio event loop. asyncpg — native async PostgreSQL driver: async with asyncpg.connect(...) as conn: rows = await conn.fetch(query). Все methods awaitable, не блокируют loop. Аналогично: requests → aiohttp; boto3 → aiobotocore; redis → aredis. Run-in-executor (thread pool) wraps sync calls, но это блокирует thread pool, не scales — не fix для scale 5000+ triggers. Use native async libraries.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-04-q4",
+      "type": "true-false",
+      "question": "В 2.10+ большинство popular sensors (S3KeySensor, ExternalTaskSensor, HttpSensor) имеют параметр deferrable=True — не нужно писать custom triggers для standard cases.",
+      "correctAnswer": true,
+      "explanation": "В 2.7+ Airflow добавил deferrable=True parameter pattern для built-in operators. К 2.10 покрытие практически полное: standard provider (DateTimeSensor, TimeDeltaSensor, ExternalTaskSensor, BashOperator), AWS (S3KeySensor, EmrServerlessStartJobOperator, AthenaOperator), Google (BigQueryInsertJobOperator, GCSObjectExistenceSensor), HTTP (HttpSensor), Postgres (PostgresOperator long queries), K8s (KubernetesPodOperator). Custom triggers writes только для in-house APIs / unusual cases. Production migration часто = добавить deferrable=True per operator + deploy triggerer. AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true глобально включает все — но careful про deploy order (triggerer первым).",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

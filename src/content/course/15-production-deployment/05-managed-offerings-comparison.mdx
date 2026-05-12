@@ -1,0 +1,240 @@
+---
+title: "Managed offerings — MWAA vs Composer vs Astronomer vs Azure"
+description: "Сравнение managed Airflow: AWS MWAA, GCP Cloud Composer 2/3, Azure Managed Airflow, Astronomer Astro — pricing, lock-in, executor support, когда использовать"
+order: 5
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["MWAA", "Cloud Composer", "Astronomer", "Azure Managed Airflow", "Managed Services"]
+---
+
+# Managed offerings — MWAA vs Composer vs Astronomer vs Azure
+
+Вопрос «self-hosted или managed?» — один из главных архитектурных решений при внедрении Airflow. Self-hosted даёт полный контроль, но требует команду из 1-3 SRE, поддерживающих PostgreSQL, Helm chart, мониторинг. Managed offerings берут это на себя — за деньги и ценой свободы.
+
+В 2026 году четыре основных managed Airflow на рынке: **AWS MWAA**, **GCP Cloud Composer 2/3**, **Azure Managed Airflow**, **Astronomer Astro**. Каждое подходит под свой сценарий. Этот урок — детальное сравнение с фокусом на 2.10/2.11 LTS.
+
+---
+
+## AWS MWAA — Managed Workflows for Apache Airflow
+
+**MWAA** — самый «AWS-way» managed Airflow. Запускается в вашем VPC, использует S3 для DAGs, S3 для logs, RDS Postgres под капотом (managed by AWS).
+
+| Свойство | Значение |
+|---|---|
+| Airflow версии (2026) | 2.10.x (3.x на roadmap, ETA H2 2026 неопределён) |
+| Executor | **Только CeleryExecutor** — KubernetesExecutor НЕ поддерживается |
+| Pricing | Environment class: mw1.small ($0.49/h) до mw1.2xlarge ($3.92/h). Plus storage, network. **Real-world: ~$300-700/mo** для small-medium |
+| Worker autoscaling | Да, до MaxWorkers (configurable) |
+| DAG delivery | **Только S3 bucket** (sync через MWAA agent) |
+| Plugins | Через `plugins.zip` в S3 |
+| Custom providers | Через `requirements.txt` (ограничения на size, network) |
+| Networking | Запускается в вашем VPC, доступ к private resources |
+| Auth | AWS IAM (через MWAA local user managed) |
+| Logs | CloudWatch Logs |
+| Lock-in | High — S3, IAM, CloudWatch, VPC integration |
+
+**Когда брать MWAA:**
+- Workload на AWS, нет команды для self-host
+- Не нужен KubernetesExecutor (только Celery)
+- Compliance требует AWS-native managed service
+- Готовы платить за operational simplicity
+
+**Когда НЕ брать MWAA:**
+- Нужен KubernetesExecutor для heavy tasks
+- Latency между DAG push и видимостью в scheduler критична (MWAA syncs S3 → caches ~30-60s)
+- Нужны custom system packages (только pip packages через requirements.txt)
+- Multi-cloud стратегия
+
+<Callout type="warning">
+MWAA в 2026 всё ещё на 2.10.x. AWS известна медленным rollout новых versions — 3.x через MWAA ожидается не раньше 2027. Если ваша стратегия — быть на latest Airflow, MWAA не подходит.
+</Callout>
+
+---
+
+## GCP Cloud Composer 2 / 3
+
+**Cloud Composer** — Google's managed Airflow, запускается на GKE Autopilot. Composer 2 — стабильный, на 2.x. Composer 3 — новое поколение с улучшенным сетевым стеком и shorter cold start.
+
+| Свойство | Composer 2 | Composer 3 |
+|---|---|---|
+| Airflow версии | 2.10.x | 2.x и 3.x (beta) |
+| Executor | Celery + Kubernetes (mixed!) | Celery + Kubernetes |
+| Underlying | GKE Autopilot + CloudSQL Postgres | GKE Autopilot + CloudSQL |
+| Pricing | ~$300-500/mo small, до $5000+/mo large | similar |
+| Worker autoscaling | Да, до WorkerMaxCount | Да |
+| DAG delivery | GCS bucket (auto-sync) | GCS bucket |
+| Plugins | GCS bucket (auto-sync) | GCS bucket |
+| Network | VPC-native, private IP supported | VPC-native, faster |
+| Auth | Google IAM | Google IAM |
+| Logs | Cloud Logging | Cloud Logging |
+| Lineage | OpenLineage built-in (Dataplex) | OpenLineage built-in |
+
+**Уникальное у Composer**: поддержка **KubernetesPodOperator** работает из коробки в основной GKE cluster — heavy workloads можно запускать в том же K8s, что и Airflow. Это редко в managed offerings.
+
+**Когда брать Composer:**
+- Workload на GCP
+- Нужен KubernetesPodOperator (heavy data processing)
+- Dataplex/BigQuery integration (auto-lineage)
+- Нужен mix Celery + K8s executors
+
+**Когда НЕ брать Composer:**
+- Multi-cloud
+- Бюджет — Composer дороже MWAA в среднем
+- Нужны очень custom system images
+
+---
+
+## Azure Managed Airflow (в составе Data Factory)
+
+**Azure Managed Airflow** — часть Azure Data Factory, относительно молодой service.
+
+| Свойство | Значение |
+|---|---|
+| Airflow версии | 2.x (2.10 на 2026) |
+| Executor | CeleryExecutor |
+| Pricing | ~$300+/mo (зависит от node size) |
+| Underlying | Azure-managed K8s |
+| DAG delivery | Git integration или manual upload |
+| Plugins | Через init container (custom image) |
+| Lock-in | High — Azure storage, ADF integration |
+
+**Когда брать**: workload на Azure + Data Factory, нужен Airflow для оркестрации ADF pipelines. Не выбирайте если уже не на Azure.
+
+---
+
+## Astronomer Astro — multi-cloud managed
+
+**Astronomer** — independent vendor, top open-source contributor (большая часть Airflow community work made by Astronomer). Astro — их managed product, работает как **hosted** (на AWS/GCP/Azure regions), **hybrid** (control plane в Astronomer, data plane у вас), и **self-managed** (Astro Runtime image для on-prem).
+
+| Свойство | Значение |
+|---|---|
+| Airflow версии | 2.x и 3.x (early access сразу после release) |
+| Executor | CeleryExecutor, KubernetesExecutor, **CeleryKubernetesExecutor** (mixed) |
+| Pricing | Free tier (1 DAG, dev), Standard $0-5000+/mo, Enterprise |
+| Astro Runtime | Pre-built image с verified providers + Astro features |
+| Cloud support | AWS, GCP, Azure — **multi-cloud** |
+| DAG delivery | Astro Deploy CLI (`astro deploy`) — builds Docker image, deploys atomic |
+| Plugins | Через Dockerfile (full control) |
+| Auth | OIDC (Okta, Auth0, etc), SSO, RBAC |
+| Logs | Astro UI + can export to S3/CloudWatch |
+| Lineage | OpenLineage + Astro Observe (paid add-on) |
+| Lock-in | Low — Astro Runtime = vanilla Airflow + патчи |
+
+**Уникальное у Astronomer:**
+- Самый быстрый rollout новых Airflow versions (часто within 1 неделю после release)
+- Multi-cloud — единственный, кто umbrella для AWS+GCP+Azure
+- **Astro IDE** — встроенный browser-based dev environment с AI completion
+- Best support — engineers Astronomer contribute в Airflow upstream
+
+**Когда брать Astronomer:**
+- Multi-cloud стратегия
+- Хотите быть на latest Airflow versions
+- Команда мала, но нужен enterprise support
+- Готовы платить за best-in-class tooling
+
+**Когда НЕ брать:**
+- Только single cloud + бюджетные ограничения (cheaper native managed)
+- Compliance требует ONLY AWS-native services
+
+---
+
+## Сравнительная таблица
+
+| Свойство | MWAA | Composer 2/3 | Azure MA | Astro |
+|---|---|---|---|---|
+| Airflow версия (2026) | 2.10 | 2.x и 3.x beta | 2.x | 2.x и 3.x |
+| Celery executor | Да | Да | Да | Да |
+| Kubernetes executor | **Нет** | Да | Нет | Да |
+| Mixed Celery+K8s | Нет | Да | Нет | **Да (CeleryKubernetesExecutor)** |
+| Multi-cloud | Нет | Нет | Нет | **Да** |
+| Pricing entry | ~$300/mo | ~$300/mo | ~$300/mo | $0 free tier |
+| Pricing scale | $700/mo medium | $1500/mo medium | $500/mo medium | $1000-5000 medium |
+| Lock-in | High (AWS) | High (GCP) | High (Azure) | Low |
+| New version speed | Slow (12+ months) | Medium (3-6 months) | Slow | **Fast (<1 month)** |
+| KubernetesPodOperator | Limited | Native | Limited | Native |
+| Free tier | Нет | Нет | Нет | Да (dev) |
+| OpenLineage built-in | Manual provider install | **Built-in (Dataplex)** | Manual | **Built-in (Astro Observe)** |
+
+---
+
+## Когда self-hosted vs managed
+
+**Self-hosted имеет смысл когда:**
+- Команда из 2+ SRE, готовых поддерживать PostgreSQL, Helm chart, мониторинг
+- Compliance/security требует full control (regulated industries)
+- Scale настолько большой, что managed pricing × 10× больше self-host (>5000 DAGs, >500k TI/day)
+- Уже есть expertise в Kubernetes, GitOps, PostgreSQL DBA
+- Multi-region deployment с custom topology
+
+**Managed имеет смысл когда:**
+- Стартап без dedicated SRE
+- Mid-size company где Airflow — supporting tool, не core
+- Cloud-native стратегия (AWS-only / GCP-only)
+- Бюджет на operational savings > pricing premium
+- Нужна compliance certification (SOC2, HIPAA) — vendor берёт на себя
+
+---
+
+## TCO calculation example
+
+Допустим, medium deployment: 200 DAGs, 30k TI/day, 5 разработчиков.
+
+**Self-hosted на AWS:**
+- RDS db.r6i.xlarge Multi-AZ: ~$400/mo
+- EKS cluster: ~$73/mo + nodes ~$300/mo
+- ElastiCache Redis: ~$100/mo
+- S3 logs + traffic: ~$50/mo
+- SRE engineer time (0.3 FTE × $15k/mo): ~$4500/mo
+- **Total: ~$5400/mo**
+
+**MWAA medium (mw1.medium 2x):**
+- MWAA environment: ~$400/mo
+- S3 logs/DAGs: ~$30/mo
+- VPC peering: ~$20/mo
+- DevOps support (0.05 FTE × $15k): ~$750/mo
+- **Total: ~$1200/mo**
+
+**Astro Standard:**
+- Astro Standard plan: ~$1500/mo for medium
+- Underlying cloud: ~$200/mo
+- DevOps support (0.05 FTE): ~$750/mo
+- **Total: ~$2450/mo**
+
+Self-host оказывается дороже для medium deployment из-за человеко-часов. Self-host выгодно начиная с large scale, где amortization работает на вас.
+
+---
+
+## Production gotchas managed services
+
+**MWAA cold start.** При первом deploy environment занимает **20-30 минут**. Если разрабатываете dev-prod через MWAA — итерация медленная. Используйте local Airflow для dev, MWAA только для staging/prod.
+
+**Composer worker eviction.** На GKE Autopilot Kubernetes может выселить worker pod при scale-down. Tasks в этот момент failед. Mitigate: `terminationGracePeriodSeconds: 300` в worker config, retries в DAG default_args.
+
+**Azure ADF Airflow vs native ADF.** Часто команды берут Azure Managed Airflow и потом понимают, что ADF native pipelines дешевле и проще. Airflow для Azure — only когда есть expertise в Airflow или multi-cloud planning.
+
+**Astro Deploy = full image rebuild.** Каждый `astro deploy` — это `docker build` + push + Helm upgrade. Занимает 3-5 минут. Если итерируете DAGs часто, в dev используйте gitSync через `astro dev start` локально.
+
+**Network egress costs.** Managed Airflow сам по себе stateless, но запускает tasks которые качают данные. На AWS egress traffic из VPC к S3 в другом регионе — $0.02/GB. На большом scale (TB-level) это $$$. Используйте VPC Endpoints / Private Service Connect.
+
+---
+
+## Какое решение для каких ситуаций
+
+| Сценарий | Рекомендация |
+|---|---|
+| Стартап на AWS, 1 SRE, 50 DAGs | **MWAA** или Astro free tier |
+| Mid-size, AWS, 500 DAGs, нужен K8s | **Astro on AWS** (нет K8s в MWAA) |
+| Mid-size, GCP, 500 DAGs | **Cloud Composer 2** |
+| Multi-cloud enterprise | **Astro** (only multi-cloud option) |
+| Large scale (5000+ DAGs), готовы инвестировать SRE | **Self-hosted on K8s** |
+| Regulated industry (banking, healthcare) | Self-host или Astro Hybrid |
+| Need latest Airflow versions ASAP | **Astro** (fastest rollout) |
+| Data Factory оркестрация в Azure | Azure ADF Airflow |
+| Just exploring Airflow, dev | Astro free tier или local Docker |
+
+---
+
+<KnowledgeCheck
+  question="Команда выбирает между MWAA и Astronomer Astro для production. Использование: 300 DAGs, 50k TI/day, нужен KubernetesPodOperator для запуска Spark jobs, multi-region (us-east + eu-west), требование быть на latest Airflow (2.11 → 3.x в течение года). Что выбрать и почему?"
+  answer="Только **Astronomer Astro** подходит по всем критериям. MWAA исключается по двум причинам: (1) НЕ поддерживает KubernetesExecutor (только Celery) — нельзя запускать KubernetesPodOperator natively, нужны workarounds через EKS на стороне; (2) MWAA в 2026 на 2.10, миграция на 3.x ожидается не раньше 2027. Multi-region на MWAA — это два отдельных environments с собственным S3 (плохая консистентность) и удвоенная цена. Astro покрывает все требования: (1) KubernetesExecutor и CeleryKubernetesExecutor (mixed) — light tasks на Celery, Spark submits на K8s в том же deployment; (2) Astro обычно роллит новую Airflow версию в течение недели после release — миграция 2.11→3.x будет supported почти сразу; (3) Multi-cloud / multi-region — Astro может deployed в us-east и eu-west regions с unified control plane и shared RBAC. Ценовая разница: Astro дороже MWAA (~$2000-3000/mo vs ~$600/mo), но это компенсируется отсутствием workarounds для KubernetesPodOperator и быстрой миграцией на 3.x (на MWAA пришлось бы ждать год + migrate потом отдельно). Бонус: Astro Observe даёт built-in OpenLineage + Marquez-like UI, что для 300 DAGs значимый value. Альтернатива — self-host на EKS, но при 300 DAGs требует 0.3-0.5 FTE SRE, что дороже Astro premium."
+/>

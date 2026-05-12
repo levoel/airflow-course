@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "12-plugins-listeners/02-plugin-manager",
+  "moduleId": "12-plugins-listeners",
+  "_meta": { "idPrefix": "airflow-m12-02" },
+  "questions": [
+    {
+      "id": "airflow-m12-02-q1",
+      "type": "multiple-choice",
+      "question": "Два способа регистрации plugins в Airflow 2.10/2.11 — какой рекомендуется для production?",
+      "options": [
+        { "id": "a", "text": "File-based — $AIRFLOW_HOME/plugins/ — это modern way" },
+        { "id": "b", "text": "Entry_points в setup.py provider package — pip installable, versioned, distributable. File-based — для dev / quick fixes; нет versioning, plain folder copy. Production best practice: provider package с pip install в Airflow image" },
+        { "id": "c", "text": "Через UI" },
+        { "id": "d", "text": "Через airflow plugin install CLI" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Provider package — versioned (pip pin), distributable (через artifact registry), full Airflow 3.x compatibility. File-based — Quick dev / on-premise hacks. UI Connection types регистрация только через provider. Production team: package + pip install в Dockerfile.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m12-02-q2",
+      "type": "multiple-choice",
+      "question": "Изменили код в $AIRFLOW_HOME/plugins/my_plugin.py — что нужно сделать чтобы Airflow подхватил?",
+      "options": [
+        { "id": "a", "text": "Ничего — DAG re-parse подхватит" },
+        { "id": "b", "text": "Restart ВСЕХ процессов: scheduler, webserver, workers (Celery), triggerer, dag-processor. Plugins loaded lazily на boot, cached в process memory. Hot reload plugins в 2.x НЕТ — только в 3.1+. Половина restarted → inconsistent behavior" },
+        { "id": "c", "text": "Только webserver restart" },
+        { "id": "d", "text": "Только scheduler restart" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Plugins cached в process memory module-level. Каждый Airflow process (scheduler, webserver, worker, triggerer, dag-processor) загружает их при startup. Изменение требует restart всех — иначе одни используют новую версию plugin, другие старую, inconsistent. Production dev cycle longer. Migration в 3.1+ planned hot reload.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-02-q3",
+      "type": "multiple-choice",
+      "question": "AirflowPlugin class — атрибут `listeners` содержит:",
+      "options": [
+        { "id": "a", "text": "List of listener class references — listeners=[MyListener]" },
+        { "id": "b", "text": "List of MODULE PATH strings — listeners=['my_module.listeners.events']. Это потому что pluggy hook discovery работает через module reflection (ищет @hookimpl декорированные функции в module). Не class refs!" },
+        { "id": "c", "text": "List of dict configs" },
+        { "id": "d", "text": "Pluggy auto-discovers" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Listeners — это исключение от других категорий (hooks, operators — class refs). Listeners=['<module.path>'] потому что pluggy reflection looks for @hookimpl декорированные методы/функции в module. Module level instance с @hookimpl методами или module-level functions — оба работают.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-02-q4",
+      "type": "true-false",
+      "question": "Через plugin manager в 2.x можно зарегистрировать DAGs, Connections, Variables, изменения в airflow.cfg.",
+      "correctAnswer": false,
+      "explanation": "Нет — это все антипаттерны. DAGs живут в dags_folder. Connections — UI/CLI/env vars/secrets backend. Variables — то же место. Config — env vars / airflow.cfg. Plugin может зарегистрировать connection TYPE (UI dropdown), но не connection instance. Plugin может добавить custom timetables, hooks, operators, sensors, macros, executors, listeners, Flask blueprints, FAB views — но не DB content / config files.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

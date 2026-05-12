@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "06-xcom-data-passing/03-xcom-pull-deep",
+  "moduleId": "06-xcom-data-passing",
+  "_meta": { "idPrefix": "airflow-m06-03" },
+  "questions": [
+    {
+      "id": "airflow-m06-03-q1",
+      "type": "multiple-choice",
+      "question": "В TaskFlow `consumer(a(), b(), c())` сколько xcom_pull SQL запросов выполнится на runtime?",
+      "options": [
+        { "id": "a", "text": "Один — все XCom batched" },
+        { "id": "b", "text": "Три — по одному xcom_pull на каждый XComArg argument (по SELECT FROM xcom для каждого task_id отдельно). Это N round-trips к DB при N upstream" },
+        { "id": "c", "text": "Ноль — XCom не используется в TaskFlow" },
+        { "id": "d", "text": "Зависит от схемы" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Каждый XComArg.resolve() в execute() делает отдельный SELECT FROM xcom — три round-trip к DB. Это становится bottleneck при 5+ upstream. Оптимизации: (1) aggregate в один upstream task с multiple_outputs (один pull, multiple keys); (2) pass single session через create_session() для batching connections; (3) уменьшать broad pulls. Главный pattern: fewer producer tasks, fatter XCom (в pre-48KB range).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-03-q2",
+      "type": "multiple-choice",
+      "question": "Что делает `ti.xcom_pull()` без task_ids? Почему это anti-pattern?",
+      "options": [
+        { "id": "a", "text": "Возвращает None всегда" },
+        { "id": "b", "text": "Pull XCom от всех upstream tasks с key='return_value'. SELECT FROM xcom WHERE task_id IN (<все upstream>). Anti-pattern: грузит DB, hydrates все blobs в memory, поведение зависит от структуры DAG (добавление upstream task ломает downstream)" },
+        { "id": "c", "text": "Возвращает все XCom во всей DB" },
+        { "id": "d", "text": "Syntax error" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Без task_ids — SELECT по всем upstream tasks. Expensive: DB load, memory hydration. Hidden coupling: добавление новой upstream task меняет result downstream. Также order сортировки task_id зависит от версии Airflow. Всегда явно указывайте `task_ids=...` чтобы избежать silent bugs и performance hits.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-03-q3",
+      "type": "multiple-choice",
+      "question": "`include_prior_dates=True` в xcom_pull — что делает и когда anti-pattern?",
+      "options": [
+        { "id": "a", "text": "Pull из будущих DagRun-ов" },
+        { "id": "b", "text": "Pull из самого свежего DagRun, где XCom existed (не только из текущего). Use case: idempotent backfill. Anti-pattern когда используется как cache — нарушает Airflow idempotency model (DagRun не должны зависеть друг от друга кроме Dataset/Trigger deps)" },
+        { "id": "c", "text": "Включает priority дат" },
+        { "id": "d", "text": "Pull XCom из других DAG-ов" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "include_prior_dates=True — SELECT с ORDER BY timestamp DESC LIMIT 1, ищет most recent XCom без ограничения текущим run_id. Полезно для idempotent backfill с stable lookup values. Anti-pattern: использование как кэш — это violation Airflow idempotency, при backfill ваше 'current' использует stale data (вчера/неделю назад), surprises debugging. Для cross-DagRun data — используйте Datasets (Module 08) или external state store.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m06-03-q4",
+      "type": "true-false",
+      "question": "`@task(multiple_outputs=True)` или return type hint TypedDict превращает каждый ключ возвращаемого dict в отдельный XCom row с этим ключом — это позволяет downstream task subscript `parts['users']` который под капотом делает xcom_pull(key='users'), а не xcom_pull(key='return_value') + Python __getitem__.",
+      "correctAnswer": true,
+      "explanation": "Да. С `multiple_outputs=True` (или auto-detected через TypedDict return annotation), каждый key dict становится отдельным XCom row в xcom table. Downstream `parts['users']` возвращает PlainXComArg(operator=split, key='users'), который на runtime делает xcom_pull(task_ids='split', key='users') — pull только нужную часть, не весь dict. Это эффективнее чем pull целиком + Python subscript, особенно когда части большие или используются разными downstream tasks.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

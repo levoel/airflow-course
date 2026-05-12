@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "07-dynamic-task-mapping/03-expand-kwargs-zip-partial",
+  "moduleId": "07-dynamic-task-mapping",
+  "_meta": { "idPrefix": "airflow-m07-03" },
+  "questions": [
+    {
+      "id": "airflow-m07-03-q1",
+      "type": "multiple-choice",
+      "question": "DAG нужно deploy 12 specific service+region+env комбинаций из 45 cartesian. Какой подход правильный?",
+      "options": [
+        { "id": "a", "text": "expand(env=..., region=..., service=...) — все 45" },
+        { "id": "b", "text": "@task возвращает list[dict] с конкретными 12 комбинациями, затем .expand_kwargs(list). Создаст ровно 12 mapped TI, не 45. Экономит scheduler resources, DB rows, downstream aggregation. Можно validate валидные комбинации в этом task (fail fast)" },
+        { "id": "c", "text": "Запустить DAG 12 раз" },
+        { "id": "d", "text": "Сделать 12 separate task" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cartesian создал бы 45 TI из которых 33 wasted (если хотите 12). Это (1) расход scheduler resources, (2) 33 ненужных task_instance+xcom row, (3) downstream pulls 45 values, (4) approaching max_map_length. Pattern: `@task def get_targets() -> list[dict]: return [{...}, {...}]` со 12 dicts. `process.expand_kwargs(get_targets())` — 12 mapped TI. Bonus: validation в get_targets task — assert валидные комбинации, fail fast.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-03-q2",
+      "type": "multiple-choice",
+      "question": "Что делает `.partial(const=val).expand(dynamic=list)` и как это эффективнее cartesian с 1-element list?",
+      "options": [
+        { "id": "a", "text": "Это deprecated syntax" },
+        { "id": "b", "text": "partial хранит constants ОДИН раз в MappedOperator metadata (serialized_dag). expand создаёт N mapped TI с varying dynamic args, constants applied на каждом. Эффективнее cartesian c [val] потому что constants не дублируются N раз в XCom/serialized state, не создаются ненужные expand axes" },
+        { "id": "c", "text": "Идентично" },
+        { "id": "d", "text": "Только в 2.10+" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "partial(c=val) — constants хранятся one time в MappedOperator metadata (как часть serialized_dag). На каждом execute resolved_kwargs.update(partial_kwargs) — adds constants без extra DB hit. Vs cartesian expand(c=[val], dynamic=list): создаёт cartesian product с trivial axis длины 1, добавляет complexity без benefit. Также можно combine: .partial(c=val).expand_kwargs([{dynamic: ...}, ...]).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-03-q3",
+      "type": "multiple-choice",
+      "question": "`users.zip(emails).map(lambda pair: {...})` — что происходит при разной length lists?",
+      "options": [
+        { "id": "a", "text": "AirflowException" },
+        { "id": "b", "text": "Silent truncation до min(len(users), len(emails)) как Python builtin zip(). Если 3 users + 2 emails → 2 pairs, carol silently dropped. Можно использовать fillvalue для pad shortest (как itertools.zip_longest). Для fail-loud — assert len(users) == len(emails) в upstream task" },
+        { "id": "c", "text": "Pads с None" },
+        { "id": "d", "text": "Raises ZipMismatchError" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "XComArg.zip() ведёт себя как Python zip — silent truncation. Это subtle bug: если upstream lists подразумеваются same length но drift apart, элементы dropped без warning. Mitigation: (1) assert в upstream task `assert len(a) == len(b)` чтобы fail loud; (2) .zip(b, fillvalue=None) для pad как zip_longest; (3) better — produce pre-zipped tuples в upstream task через explicit zip + return list(zip(a,b)).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-03-q4",
+      "type": "true-false",
+      "question": "`.map(fn)` на XComArg — это lazy lambda transformation на element level, выполняется при resolve worker-а; не создаёт extra task. Сложные transformations лучше делать через явный @task (retryable, logged, debuggable).",
+      "correctAnswer": true,
+      "explanation": "Да. XComArg.map(fn) — lazy MapXComArgWithMap. Не создаёт TI, не пишет XCom. Применяется на runtime worker-а когда resolved. Преимущества: zero Airflow overhead, no extra TI scheduling. Caveats: lambda должна быть picklable (closures fragile), нет retries (failure transformation = TI failure), нет separate log, debugging harder. Лучше использовать .map для простых ops (subscript, arithmetic, lambda pair: {...}). Для complex logic — явный @task: получаете retries, logs, debuggability, type safety.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

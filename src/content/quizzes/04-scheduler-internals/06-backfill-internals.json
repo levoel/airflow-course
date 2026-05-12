@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "04-scheduler-internals/06-backfill-internals",
+  "moduleId": "04-scheduler-internals",
+  "_meta": { "idPrefix": "airflow-m04-06" },
+  "questions": [
+    {
+      "id": "airflow-m04-06-q1",
+      "type": "multiple-choice",
+      "question": "Backfill в Airflow 2.x — как реализован?",
+      "options": [
+        { "id": "a", "text": "Это часть scheduler-а, как scheduled runs" },
+        { "id": "b", "text": "Отдельный класс BackfillJob (НЕ SchedulerJob). Запускается через `airflow dags backfill` CLI как отдельный процесс. Имеет собственный main loop, создаёт DagRuns upfront, синхронно ждёт completion batches. Конкурирует со scheduler за DB locks, pool slots" },
+        { "id": "c", "text": "Просто manually triggered scheduled runs" },
+        { "id": "d", "text": "REST API endpoint в webserver" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В 2.x BackfillJob — отдельный legacy path. Запускается через airflow dags backfill CLI как process. Создаёт DagRuns с run_type=backfill, обрабатывает synchronous: батч за батчем, ждёт completion. Конкурирует со scheduler — те же DB, executor, pool. В 3.x AIP-78 Scheduler-Managed Backfill переносит это в scheduler — first-class citizen. В 2.x — отдельная архитектура с собственными гонками.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m04-06-q2",
+      "type": "multiple-choice",
+      "question": "Что делает --reset-dagruns flag, и в чём опасность?",
+      "options": [
+        { "id": "a", "text": "Просто перезапускает failed tasks" },
+        { "id": "b", "text": "DESTRUCTIVELY удаляет DagRun и TI rows в указанном диапазоне через DELETE FROM dag_run/task_instance. XCom тоже удаляется. Audit trail теряется. Используется когда нужно полностью пересоздать DagRuns (например после schema change)" },
+        { "id": "c", "text": "Только marks failed → success" },
+        { "id": "d", "text": "Pauses DAG temporary" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "--reset-dagruns: BEGIN; DELETE FROM task_instance WHERE run_id IN (...); DELETE FROM dag_run WHERE data_interval_start BETWEEN ...; COMMIT. Деструктивная операция — historical TI data, XCom values, logs reference потеряны. 95% случаев лучше использовать --rerun-failed-tasks: оставляет existing DagRuns, clear только failed TIs. --reset-dagruns только когда DAG structure изменилась (added/removed tasks) и existing TIs incoherent с new structure. Even then — backup metadata DB первым.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-06-q3",
+      "type": "multiple-choice",
+      "question": "Backfill за 6 месяцев daily DAG с depends_on_past=True — почему он не использует max_active_runs параллелизм?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow" },
+        { "id": "b", "text": "depends_on_past=True заставляет sequential execution — каждый day ждёт success previous day's same task. Даже max_active_runs=3 не даёт parallel — chain by design sequential. Total time = sum(per_day_duration)" },
+        { "id": "c", "text": "max_active_runs не работает в backfill" },
+        { "id": "d", "text": "DB lock contention" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "depends_on_past=True семантически: 'current TI ждёт success того же task в previous run'. При backfill 6 months daily — Day 2 ждёт Day 1, Day 3 ждёт Day 2, и т.д. Это sequential chain by design. max_active_runs не помогает — нечего параллелить, цепочка ждёт сама себя. Workaround: (1) --ignore-first-depends-on-past для bypass только первого run. (2) Если data correctness не требует ordering — temporarily disable depends_on_past в DAG, делай parallel backfill, восстанавливай. (3) Run smaller batches (1 month за раз) ночью. (4) Accept long duration и run на dedicated worker.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m04-06-q4",
+      "type": "true-false",
+      "question": "В Airflow 2.x backfill за исторический период использует исходную версию DAG-кода того периода (например, версию 2025 года для backfill 2025 данных).",
+      "correctAnswer": false,
+      "explanation": "Нет, в 2.x НЕТ DAG versioning. Backfill всегда использует ТЕКУЩУЮ версию DAG-кода. Если в 2026 году добавили/удалили tasks, backfill за 2025 данные будет использовать 2026 structure — историческая правильность нарушена. Это часто причина 'данные 2025 года выглядят как структуру 2026 года'. Mitigation в 2.x: (1) git tag versions, checkout к нужной перед backfill, restart DAG processor. (2) Отдельный staging env с правильной версией. (3) Принять что backfill = 'rerun с текущим кодом'. В 3.x AIP-63 DAG Versioning исправляет: dag_version_id привязывает DagRun к конкретной версии, backfill respects pinned version. Это одна из главных причин upgrade к 3.x.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

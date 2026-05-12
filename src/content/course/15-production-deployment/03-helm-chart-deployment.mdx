@@ -1,0 +1,373 @@
+---
+title: "Helm chart deployment — official vs Astronomer chart"
+description: "Apache Airflow official Helm chart, gitSync sidecar для DAGs, values.yaml walkthrough, secrets management через Kubernetes Secrets и External Secrets Operator"
+order: 3
+difficulty: "advanced"
+estimatedTime: 28
+topics: ["Helm", "Kubernetes", "gitSync", "Astronomer", "Secrets"]
+---
+
+# Helm chart deployment — official vs Astronomer chart
+
+Airflow на Kubernetes — production-стандарт 2026 года. Развёртывание идёт через **Helm chart**, и в экосистеме их два основных: **official Apache Airflow chart** (apache-airflow/airflow) и **Astronomer chart** (astronomer/airflow). Оба покрывают одну и ту же reference-архитектуру из предыдущего урока, но различаются в дефолтах, гибкости и подходе к DAG distribution.
+
+Этот урок — практическое руководство по values.yaml на 2.10/2.11 LTS: что включать, что выключать, как доставлять DAGs (gitSync sidecar vs PVC vs baked-image), как управлять секретами через External Secrets Operator и Kubernetes Secrets.
+
+---
+
+## Official vs Astronomer chart — сравнение
+
+| Свойство | Apache official | Astronomer chart |
+|---|---|---|
+| Maintainer | Apache Airflow community | Astronomer Inc. |
+| Airflow версии | 2.x и 3.x | 2.x и 3.x + Astro Runtime |
+| Default executor | CeleryExecutor | CeleryExecutor |
+| DAG delivery | gitSync, PVC, baked image | gitSync, PVC, baked image, Astro Deploy CLI |
+| StatsD/OTel sidecar | Optional | Pre-configured for Astro |
+| Networking | Bare values | Pre-configured с network policies |
+| RBAC | Standard SA | Pre-configured roles |
+| Когда брать | Self-hosted, full control | Astronomer Cloud / on-prem Astro |
+
+Большинство on-prem production deployments берут **official chart** — он версионируется одновременно с Airflow, имеет comprehensive values.yaml (>2000 строк), активную community. Astronomer chart — выбор когда вы платите Astronomer за support или хотите Astro Runtime image с pre-installed providers.
+
+---
+
+## Архитектура Helm deployment
+
+<DiagramContainer title="Apache Airflow Helm chart — компоненты в K8s" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Namespace airflow"
+        tooltip="Изолированный namespace. Все компоненты Airflow сюда. Workers могут быть в отдельном namespace через airflow.workers.namespace если нужна resource isolation."
+      >
+        airflow ns + RBAC + NetworkPolicy
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Deployments (stateless)"
+        tooltip="webserver-deployment (2-3 replicas), scheduler-deployment (2-3 replicas), triggerer-deployment (2 replicas), dag-processor-deployment (1-2 replicas, optional). Каждый rollout-able без downtime."
+      >
+        webserver / scheduler / triggerer / dag-processor
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="StatefulSets / DaemonSets"
+        tooltip="worker-statefulset для CeleryExecutor (если static workers). Альтернатива — KEDA + Deployment + ScaledObject для autoscaling от Celery queue length."
+      >
+        worker-sts (Celery) / KEDA ScaledObject
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Services + Ingress"
+        tooltip="webserver-svc (ClusterIP), ingress (nginx или Gateway API) с TLS через cert-manager. flower-svc если включён monitoring CeleryExecutor."
+      >
+        Services + Ingress (TLS via cert-manager)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Sidecars / Init containers"
+        tooltip="gitSync sidecar в scheduler/webserver/dag-processor — синхронизирует DAGs из Git каждые N seconds. wait-for-migrations init — ждёт пока airflow db migrate завершит."
+      >
+        gitSync sidecar / init wait-for-migrations
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="External dependencies"
+        tooltip="PostgreSQL (managed RDS), Redis (managed ElastiCache), Secrets Backend (Vault/AWS Secrets Manager). НЕ запускайте PostgreSQL/Redis внутри K8s в production — managed services намного надёжнее."
+      >
+        Managed RDS / Redis / Secrets backend
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## values.yaml — production walkthrough
+
+Минимальный production values.yaml для официального chart:
+
+```yaml
+# values.yaml — Airflow 2.10.5 production
+airflowVersion: "2.10.5"
+
+# Executor configuration
+executor: "CeleryExecutor"
+# Альтернативно: "KubernetesExecutor", "CeleryKubernetesExecutor" (mixed)
+
+# Image
+defaultAirflowRepository: registry.example.com/airflow
+defaultAirflowTag: "2.10.5-custom"
+# Custom image с pre-installed providers — Dockerfile FROM apache/airflow:2.10.5
+
+# Fernet key — для encryption connections/variables
+fernetKey: ""  # Берётся из airflow-fernet-key secret (см. ниже)
+
+# Postgres connection
+data:
+  metadataConnection:
+    user: airflow
+    pass: ""  # из external secret
+    protocol: postgresql
+    host: pgbouncer.airflow.svc.cluster.local  # PgBouncer перед RDS!
+    port: 6432
+    db: airflow
+    sslmode: require
+
+# Redis — broker для Celery
+redis:
+  enabled: false  # используем external ElastiCache
+data:
+  brokerUrl: ""  # из external secret: redis://...
+```
+
+Webserver replicas + ingress:
+
+```yaml
+webserver:
+  replicas: 3
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 2Gi }
+  defaultUser:
+    enabled: false  # отключаем default admin/admin
+  webserverConfig: |
+    # webserver_config.py — для OIDC/LDAP, см. урок 08
+    from airflow.www.fab_security.manager import AUTH_OAUTH
+    AUTH_TYPE = AUTH_OAUTH
+    OAUTH_PROVIDERS = [...]
+
+ingress:
+  web:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - name: airflow.example.com
+        tls:
+          enabled: true
+          secretName: airflow-tls
+```
+
+Scheduler с HA и standalone DAG processor:
+
+```yaml
+scheduler:
+  replicas: 2  # HA через row-level locks (модуль 04)
+  resources:
+    requests: { cpu: 1000m, memory: 2Gi }
+    limits: { cpu: 4000m, memory: 6Gi }
+
+dagProcessor:
+  enabled: true  # Standalone DAG processor (опционально в 2.x)
+  replicas: 1
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 4Gi }
+
+triggerer:
+  enabled: true
+  replicas: 2  # HA для deferrable operators
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 1000m, memory: 2Gi }
+```
+
+---
+
+## DAG delivery — три стратегии
+
+В Airflow 2.x три способа доставить DAGs в Pod: **gitSync sidecar**, **PersistentVolumeClaim (PVC)**, **baked into image**. У каждого свои tradeoff.
+
+### Стратегия 1: gitSync sidecar (рекомендованная для 2.x)
+
+```yaml
+dags:
+  gitSync:
+    enabled: true
+    repo: git@github.com:org/airflow-dags.git
+    branch: main
+    subPath: "dags"
+    sshKeySecret: airflow-git-ssh-key
+    wait: 60  # sync каждые 60 секунд
+    containerName: git-sync
+    rev: HEAD
+    depth: 1
+    maxFailures: 0
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: 200m, memory: 256Mi }
+```
+
+Sidecar контейнер `git-sync` запускается в каждом Pod (webserver, scheduler, dag-processor, triggerer, worker) и поддерживает `/opt/airflow/dags` синхронизированным с Git. Latency обновления — `wait` секунд после merge в main.
+
+**Плюсы**: immutable infrastructure (DAG = commit), atomic rollout (откатился — старая версия DAG), GitOps-friendly, нет shared filesystem.
+
+**Минусы**: каждый pod держит свою копию репозитория (memory overhead для больших repo), 60s latency между push и видимостью в scheduler.
+
+<Callout type="note">
+В Airflow 3.x gitSync sidecar заменяется на **DAG Bundles** (AIP-66) — pluggable abstraction где DAGs приходят из Git/S3/HTTP source с versioning. В 2.x этого ещё нет, gitSync — стандартный путь.
+</Callout>
+
+### Стратегия 2: PVC (shared filesystem)
+
+```yaml
+dags:
+  persistence:
+    enabled: true
+    storageClassName: efs-sc  # AWS EFS / GCP Filestore
+    size: 10Gi
+    accessMode: ReadWriteMany
+    existingClaim: airflow-dags-pvc
+```
+
+Один PVC монтируется во все pods. CI/CD pipeline копирует DAGs в PVC (через `kubectl cp` или dedicated sync job).
+
+**Плюсы**: instant updates (нет 60s gitSync delay), один источник truth, нет per-pod overhead.
+
+**Минусы**: shared filesystem performance может стать bottleneck, EFS дорогой, нет atomic rollout. **Не рекомендуется** для большинства production cases.
+
+### Стратегия 3: baked into image
+
+```yaml
+# Dockerfile
+FROM apache/airflow:2.10.5
+COPY dags/ /opt/airflow/dags/
+
+defaultAirflowRepository: registry.example.com/airflow-with-dags
+defaultAirflowTag: "2.10.5-dags-${GIT_SHA}"
+```
+
+DAGs упакованы в Docker image. CI/CD builds new image при каждом merge.
+
+**Плюсы**: полная immutability, нет gitSync sidecar overhead, full Docker layer caching.
+
+**Минусы**: каждое DAG-изменение требует image rebuild + Helm upgrade — slow iteration. Подходит когда DAGs меняются редко и команда уже на GitOps (Argo CD).
+
+| Стратегия | Latency обновления | Overhead | Atomicity |
+|---|---|---|---|
+| gitSync | ~60s | sidecar per pod | High (commit-based) |
+| PVC | <5s | EFS cost | Low (shared mutable) |
+| Baked image | Minutes (rebuild) | Image size | Very high (immutable) |
+
+---
+
+## Secrets management
+
+Хранить секреты в plain values.yaml — критическая ошибка. Production использует:
+
+```yaml
+# Один способ — Kubernetes Secrets, manual created
+extraEnvFrom: |
+  - secretRef:
+      name: airflow-env-secret
+
+# Better: External Secrets Operator (ESO) — sync из Vault/AWS Secrets Manager
+```
+
+External Secret для Fernet key:
+
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: airflow-fernet-key
+  namespace: airflow
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: airflow-fernet-key
+    creationPolicy: Owner
+  data:
+    - secretKey: fernet-key
+      remoteRef:
+        key: secret/airflow/fernet
+        property: key
+```
+
+И в values.yaml:
+
+```yaml
+fernetKeySecretName: airflow-fernet-key  # будет смонтирован как env AIRFLOW__CORE__FERNET_KEY
+```
+
+Аналогично для metadata DB password, Redis password, OAuth client secret, OpenLineage API key.
+
+---
+
+## Init container для DB migrations
+
+В Airflow 2.x official chart по умолчанию запускает init container `wait-for-airflow-migrations` в каждом pod. Он ждёт пока migrate job завершится.
+
+```yaml
+migrateDatabaseJob:
+  enabled: true  # Job создаётся при helm upgrade
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+```
+
+**Production gotcha**: при первом deploy migrate job может занять 5-15 минут (создание ~150 таблиц + indexes). Не таймаутируйте Helm chart раньше:
+
+```bash
+helm upgrade --install airflow apache-airflow/airflow \
+  --namespace airflow \
+  --version 1.15.0 \
+  --values values.yaml \
+  --timeout 30m \
+  --wait
+```
+
+---
+
+## Production gotchas
+
+**Не используйте `redis.enabled: true` в production.** Built-in Redis chart — single-node без persistence, потеря брокера = потеря всех queued tasks. Используйте managed Redis (ElastiCache, GCP Memorystore) с cluster mode.
+
+**Не используйте `postgresql.enabled: true` в production.** То же самое — single-node Bitnami postgres без backup. Managed RDS Multi-AZ обязательно.
+
+**Webserver-у нужен access к gitSync DAGs.** В 2.x webserver рендерит UI из serialized_dag в DB, но для DAG code view (исходник в UI) — читает с disk через `[core] load_examples=False`. Если webserver без gitSync — code view broken.
+
+**Resource requests > limits для scheduler.** Scheduler — CPU-bound, при spike нужен burst. Установите limits в 3-4× requests, чтобы scheduler не throttled при peak.
+
+**KEDA для autoscaling Celery — must-have.** Helm chart умеет HPA, но HPA не видит длину Celery queue. KEDA с `celery-queue-trigger` смотрит на Redis queue length — точно знает когда добавлять workers.
+
+```yaml
+# KEDA ScaledObject
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: airflow-worker-celery
+spec:
+  scaleTargetRef:
+    name: airflow-worker
+  minReplicaCount: 2
+  maxReplicaCount: 32
+  triggers:
+    - type: redis
+      metadata:
+        addressFromEnv: REDIS_HOST
+        listName: default
+        listLength: "10"  # 10 tasks в queue per worker
+```
+
+**Astronomer chart не совместим 1:1 с official.** Migrate между ними — non-trivial. Выбирайте сразу один и стойте на нём.
+
+---
+
+<KnowledgeCheck
+  question="Production deployment 800 DAGs использует gitSync sidecar в каждом pod. Метрики показывают, что webserver и scheduler pods занимают по 2-3 GB RAM каждый — больше чем ожидалось. После kubectl describe pod видно, что git-sync container хранит ~1.5 GB. Что произошло и как фиксить?"
+  answer="Git repository занимает много места из-за: (1) полная история коммитов (если depth: 0 или не указан); (2) большие binary blobs в Git (data fixtures, ноутбуки); (3) много веток в .git/refs. Каждый pod (webserver, scheduler-1, scheduler-2, triggerer, dag-processor + workers) хранит свою копию репозитория — overhead multiplies. Fixes: (1) gitSync.depth: 1 — shallow clone, только последний commit (типично 50-100 MB вместо GB); (2) gitSync.subPath: dags — sync только нужную подпапку, не весь монорепо; (3) Очистить .gitignore — убрать binary fixtures, переместить их в S3/PVC; (4) Использовать BFG Repo-Cleaner для удаления больших blobs из истории; (5) Альтернатива — переключиться на baked image strategy: DAGs упакованы в Docker image, gitSync вообще не нужен, экономия RAM огромная. Для 800 DAGs второй вариант (baked image) часто оптимален — image rebuild на CI занимает 2-3 min, но pod startup faster и нет sidecar overhead. После fix объём pod-а должен упасть до 500-800 MB (только Airflow + DAGs)."
+/>

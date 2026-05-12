@@ -1,0 +1,452 @@
+---
+title: "Distributed tracing: OTel spans для DagRun → Task → DB"
+description: "OpenTelemetry traces в Airflow 2.10+, span hierarchy, context propagation, Jaeger/Tempo integration"
+order: 5
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Distributed Tracing", "OpenTelemetry", "Spans", "Jaeger", "Tempo", "Context Propagation"]
+---
+
+# Distributed tracing: OTel spans для DagRun → Task → DB
+
+Metrics отвечают на «**что** не так» (latency высокий, error rate растёт). Traces отвечают на «**где** не так» (в какой конкретно стадии медленно, какой downstream service виноват). В Airflow 2.10+ через OTel это становится доступным **из коробки**.
+
+Этот урок — как traces работают в Airflow, как их настроить, как использовать для production debugging. Главная сила traces — это **drill-down**: от Grafana alert «scheduler slow» → конкретный run → конкретный span внутри scheduler loop → DB query на 4 секунды.
+
+---
+
+## Что такое distributed tracing
+
+**Trace** — это collection of spans, представляющая один request/operation через distributed систему. Каждый span — один step с длительностью.
+
+```
+Trace: DagRun "etl_orders/2026-05-12"
+├── span: scheduler.create_dagrun (15ms)
+├── span: scheduler.schedule_tasks (250ms)
+│   ├── span: db.query.task_instance_select (180ms)
+│   └── span: db.query.update_state (60ms)
+├── span: task.extract_orders (45 sec)
+│   ├── span: db.query.source_select (2 sec)
+│   └── span: s3.upload (40 sec)
+├── span: task.transform_orders (3 min)
+│   └── span: spark.submit (2.5 min)
+└── span: task.load_orders (1 min)
+    └── span: snowflake.copy (50 sec)
+```
+
+Каждый span имеет:
+- `trace_id` — общий для всего трейса (16 байт UUID)
+- `span_id` — уникальный для span (8 байт)
+- `parent_span_id` — для построения дерева
+- `start_time` / `end_time`
+- `attributes` — k/v tags (dag_id, task_id, sql, error)
+- `events` — point-in-time events внутри span
+
+---
+
+## Архитектура traces в Airflow 2.10+
+
+<DiagramContainer title="OTel traces в Airflow" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Scheduler tick"
+        tooltip="Каждый scheduler loop iteration создаёт span 'scheduler.loop'. Внутри — child spans для каждой phase: dag_parsing, schedule_tasks, critical_section, executor.send_messages."
+      >
+        span: scheduler.loop
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="parent span context" />
+    <FlowRow>
+      <DataBox
+        label="DagRun creation"
+        tooltip="Когда scheduler создаёт DagRun, генерируется новый trace_id для всего run. Привязывается к dag_run.id в metadata через trace_id field."
+      >
+        span: dagrun (root)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="parent_span_id propagated" />
+    <FlowRow>
+      <DataBox
+        label="TaskInstance start"
+        tooltip="Worker pulls trace_id + parent_span_id из task_instance row. Создаёт child span 'task.execute'. Длительность — реальный task runtime."
+      >
+        span: task.execute
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="auto-instrumentation" />
+    <FlowRow>
+      <DataBox
+        label="DB queries, HTTP calls"
+        tooltip="OTel auto-instrumentation для requests, sqlalchemy, boto3 создаёт child spans автоматически. Если task делает 10 SQL queries — 10 child spans с SQL и duration."
+      >
+        span: db.query, span: http
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="OTLP/gRPC" />
+    <FlowRow>
+      <DataBox
+        label="OTel Collector → Tempo/Jaeger"
+        tooltip="Collector batches traces, exporters в Tempo (часть Grafana stack) или Jaeger. Grafana drill-down: clickability к traces из metrics dashboards."
+      >
+        Tempo / Jaeger backend
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Включение в `airflow.cfg`:
+
+```ini
+[traces]
+otel_on = True
+otel_host = otel-collector
+otel_port = 4318
+otel_ssl_active = False
+
+# Сэмплинг: 1.0 = все, 0.1 = 10%. Для production обычно 0.05-0.1
+otel_task_log_event = True
+sampler_type = parentbased_traceidratio
+sampler_arg = 0.1
+```
+
+---
+
+## Span hierarchy — что Airflow генерирует
+
+В 2.10/2.11 OTel auto-creates spans для:
+
+### Scheduler-level
+
+- `scheduler.run_loop` — один tick
+  - `scheduler.create_dagruns` — создание новых DagRun
+  - `scheduler.schedule_tis` — переход TI scheduled → queued
+  - `scheduler.critical_section` — внутри critical section (row-level lock)
+  - `scheduler.executor_send` — отправка в executor queue
+  - `scheduler.housekeeping` — adopt orphans, etc.
+
+### DagRun-level
+
+- `dag.dag_run` (root span на весь run)
+  - `dag.dependency_check`
+  - Childs: `task.execute` для каждой TI
+
+### Task-level
+
+- `task.execute` — основной span
+  - `task.queued_to_running` — время от queued_dttm до start_date
+  - `task.pre_execute` — pre-hooks, jinja rendering
+  - `task.execute_callable` — собственно user code
+  - `task.post_execute` — XCom write, callbacks
+
+### Database queries
+
+С auto-instrumentation `opentelemetry-instrumentation-sqlalchemy`:
+
+- `db.query` — каждый SELECT/UPDATE/INSERT, с SQL в `db.statement` attribute, длительность.
+
+### HTTP calls
+
+С `opentelemetry-instrumentation-requests`:
+
+- `http.request` — каждый requests.get/post, с URL, status_code, latency.
+
+---
+
+## Context propagation — как trace passes between processes
+
+Главная техническая сложность traces — это **propagation context** между независимыми процессами:
+
+1. **Scheduler** создаёт root span "dag_run", получает `trace_id` и `span_id`.
+2. **Worker** запускается отдельным процессом — как ему узнать о trace_id?
+3. **Решение:** trace context сохраняется в `task_instance` row.
+
+В Airflow это устроено так:
+
+```sql
+-- task_instance имеет специальные поля
+SELECT dag_id, task_id, run_id, state,
+       trace_id, span_id,  -- ← OTel context
+       executor_config
+FROM task_instance;
+```
+
+Worker при старте:
+
+```python
+# Псевдокод LocalTaskJob
+ti = session.query(TaskInstance).get(...)
+context = TraceContextTextMapPropagator().extract(
+    carrier={"traceparent": f"00-{ti.trace_id}-{ti.span_id}-01"}
+)
+with otel_tracer.start_as_current_span("task.execute", context=context):
+    task.execute(...)
+```
+
+Это создаёт span "task.execute" **как child** scheduler's span "dag_run" — даже если они в разных процессах, на разных машинах.
+
+### Через executor queues
+
+Для CeleryExecutor / KubernetesExecutor context передаётся через message/pod annotations:
+
+```python
+# CeleryExecutor — в task command
+celery_task.apply_async(
+    args=[command],
+    headers={"traceparent": current_span.context.trace_id, ...}
+)
+```
+
+```yaml
+# KubernetesPodOperator — в pod annotations
+metadata:
+  annotations:
+    traceparent: "00-<trace_id>-<span_id>-01"
+```
+
+Worker process читает headers/annotations при старте и инжектит в OTel context.
+
+---
+
+## Backend: Jaeger vs Tempo
+
+Два main open-source backends для traces. Сравнение:
+
+| Аспект | Jaeger | Tempo |
+|---|---|---|
+| Origin | Uber, CNCF graduated | Grafana Labs |
+| Storage | Cassandra / Elasticsearch / Badger | S3 / GCS / local FS |
+| Query | Jaeger UI + API | Grafana Tempo datasource |
+| Trace ID lookup | Fast (indexed) | Fast (block index) |
+| Trace search by attributes | Yes (indexed) | Yes (TraceQL) |
+| Cost (storage) | Высокий (RAM-heavy) | Низкий (object storage) |
+| Grafana integration | Через plugin | Native |
+| Когда выбрать | Standalone, без Grafana | С Grafana stack, low cost |
+
+### Tempo setup
+
+```yaml
+# docker-compose.tracing.yaml
+services:
+  tempo:
+    image: grafana/tempo:2.4.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - 3200:3200    # tempo
+      - 4317:4317    # OTLP gRPC
+```
+
+`tempo.yaml`:
+
+```yaml
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+
+storage:
+  trace:
+    backend: local  # для production: s3
+    local:
+      path: /var/tempo/blocks
+```
+
+Grafana datasource:
+
+```yaml
+datasources:
+  - name: Tempo
+    type: tempo
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogs:
+        datasourceUid: loki
+      tracesToMetrics:
+        datasourceUid: prometheus
+        tags: ['dag_id', 'task_id']
+```
+
+---
+
+## Drill-down workflow — production debugging
+
+Это самое полезное применение traces в production.
+
+### Workflow: «Scheduler slow alert»
+
+1. **Alert:** Grafana shows `scheduler.scheduler_loop_duration p95 > 30s`.
+2. **Query metrics:** найти период spike, hostname affected scheduler.
+3. **Exemplar trace:** в Grafana metric panel есть **exemplar dots** — точки на графике, links на конкретные traces в slow period.
+4. **Open trace:** click exemplar → Tempo trace view.
+5. **Span tree:** видим, что `scheduler.critical_section` занял 28s из 30s.
+6. **Drill child spans:** `critical_section.acquire_lock` показывает `SELECT * FROM slot_pool FOR UPDATE NOWAIT` занял 25s.
+7. **Root cause:** lock на slot_pool взят другим long-running scheduler. Проверить DB через `pg_stat_activity` за тот период.
+8. **Action:** identify scheduler hostname с long transaction, restart pod.
+
+Без traces это занимало бы часы DB investigations. С traces — минуты drill-down.
+
+### Workflow: «Task slow alert»
+
+1. **Alert:** `task.duration{dag_id=etl_orders, task_id=transform} p95 > 1h`.
+2. **Trace open:** конкретный slow run.
+3. **Span tree:** `task.execute` → `spark.submit` (50 min) → `spark.driver.wait_for_workers` (45 min из 50).
+4. **Root cause:** Spark cluster auto-scaling slow — pods не приходят.
+5. **Action:** проверить k8s namespace, scale-up policy.
+
+---
+
+## Sampling — компромисс между detail и cost
+
+Traces дороги: 1 trace per run × 100k runs/day × ~50 spans = **5M spans/day**. Каждый span ~1KB serialized → **5GB/day** raw + indexing.
+
+### Sampling strategies
+
+| Strategy | Что делает | Когда использовать |
+|---|---|---|
+| **Head-based (probabilistic)** | Random N% traces (по trace_id hash) | Default 5-10%. Простой. |
+| **Tail-based** | Decide после full trace (e.g., только errors, slow) | Production. Дорогой (буфер всех traces). |
+| **Adaptive** | Динамически меняется rate based on load | Advanced |
+| **Always-on for selected** | 100% для specific DAGs (critical) | Combine с probabilistic для остальных |
+
+### Tail-based в OTel Collector
+
+```yaml
+processors:
+  tail_sampling:
+    decision_wait: 30s
+    policies:
+      # Всегда semplear errors
+      - name: errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      # Slow traces (>30s)
+      - name: slow
+        type: latency
+        latency: { threshold_ms: 30000 }
+      # 1% всего остального
+      - name: random
+        type: probabilistic
+        probabilistic: { sampling_percentage: 1 }
+```
+
+Это даёт **best signal-to-noise** — 100% errors и slow traces, плюс sampled normal traffic для baseline.
+
+---
+
+## Связь traces и logs
+
+Каждый log line из task должен содержать `trace_id` — это позволяет drill-down от trace к log.
+
+Provider 2.10+ автоматически инжектит trace_id в log records через `LoggingInstrumentor`:
+
+```
+2026-05-12T10:23:45 INFO transform_orders [trace_id=a3f1b2c4 span_id=de56f7a8] Processing 1.2M rows
+```
+
+В Loki/Elasticsearch добавьте `trace_id` как indexed field. Тогда из Grafana Tempo trace → "View logs for this trace" — фильтр в Loki по `trace_id`.
+
+Это **полный observability triad**: metrics → trace → logs. Это то, что OTel задумывался обеспечить.
+
+---
+
+## Performance impact
+
+OTel traces have **overhead**:
+
+- Span creation: ~1-5 µs (pure CPU)
+- Attribute set: ~0.5 µs each
+- Span end + export: ~10-100 µs (batched)
+- Auto-instrumentation: ~5-10% CPU overhead
+
+**Worst case:** noisy task с 1000s of DB queries → 1000s spans → noticeable overhead.
+
+**Mitigation:**
+
+- Sampling 5-10% для normal
+- Disable auto-instrumentation для tight loops
+- Manually create coarse spans (один span per logical operation, not per DB call)
+
+---
+
+## Production gotchas
+
+### 1. trace_id неуникален между clusters
+
+OTel trace_id — 128-bit random. Collision практически невозможна. Но если у вас 2 Airflow clusters → 1 Tempo, обязательно различать через `service.name`:
+
+```bash
+OTEL_SERVICE_NAME=airflow-prod-eu
+```
+
+Иначе в Tempo два trace_id могут визуально пересечься.
+
+### 2. Connection pool у Tempo limited
+
+Tempo по default = 10 connections. На 1000 traces/sec — bottleneck. Tune `ingestion_rate_limit` в Tempo config.
+
+### 3. Slow traces (>20-30 minutes) могут timeout в OTel SDK
+
+Default span buffer flush на 10-30 секунд. Длинный task → span сидит в memory долго → может потеряться при worker crash.
+
+**Fix:** intermediate `add_event()` для прогресса:
+
+```python
+with tracer.start_as_current_span("long_task") as span:
+    for i, batch in enumerate(batches):
+        process(batch)
+        span.add_event(f"batch_{i}_done", {"rows": len(batch)})
+```
+
+Events flushed как часть span — даже incomplete span содержит progress info.
+
+### 4. Sensitive data в span attributes
+
+SQL spans могут содержать запросы с literal values (`SELECT * FROM users WHERE email = 'user@example.com'`). Это leak в traces.
+
+**Fix:** SQL sanitization в auto-instrumentation:
+
+```python
+SQLAlchemyInstrumentor().instrument(
+    engine=engine,
+    enable_commenter=False,  # не добавлять SQL comments
+    # Custom sanitizer
+)
+```
+
+Или в OTel Collector через `attributes` processor — strip `db.statement` field.
+
+### 5. Worker crash — traces lost
+
+Если worker умер до span flush — события не дошли до Collector. Tempo не покажет trace полностью.
+
+**Fix:** OTel Collector с persistent queue:
+
+```yaml
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    sending_queue:
+      enabled: true
+      storage: file_storage  # disk-backed queue
+      num_consumers: 10
+      queue_size: 5000
+```
+
+### 6. Cardinality blow-up на span attributes
+
+`dag_run_id` как attribute — fine (cardinality по design). Но если custom code добавляет `request_id`, `user_id` как attributes — Tempo indexing страдает.
+
+Tempo TraceQL ищет лучше всего по: `service.name`, `span.name`, `http.status_code`. Это main indexable. Custom high-cardinality attrs — searchable но slow.
+
+---
+
+<KnowledgeCheck
+  question="Production alert: scheduler.scheduler_loop_duration p95 = 25s (норма <5s). Используя OTel traces в Tempo, как пройти drill-down workflow до root cause?"
+  answer="**Step 1: Find exemplar trace.** В Grafana panel с scheduler_loop_duration histogram → exemplar dot в высоком percentile → click → open trace в Tempo. Альтернатива: TraceQL query `{service.name='airflow-scheduler' && duration > 20s}` за период spike. **Step 2: Inspect span tree.** Корневой span 'scheduler.run_loop' — длительность 25s. Child spans: 'scheduler.create_dagruns' (50ms — fast), 'scheduler.schedule_tis' (200ms), 'scheduler.critical_section' (22s — HOT), 'scheduler.housekeeping' (1s). **Step 3: Drill 'critical_section'.** Дальнейшие children: 'db.query.acquire_pool_lock' (20s) — это `SELECT * FROM slot_pool FOR UPDATE NOWAIT` ждёт 20s? Но NOWAIT должен мгновенно вернуть error... **Step 4: Smell test.** Если SELECT FOR UPDATE NOWAIT ждёт 20s — bug. Скорее всего — другой scheduler не использует NOWAIT в своём transaction (custom code? legacy DAG?). **Step 5: DB confirmation.** SQL `SELECT pid, query, query_start, state FROM pg_stat_activity WHERE state='active' ORDER BY query_start;` за тот timestamp. Найти blocking transaction. **Step 6: Action.** (a) Kill long-running transaction (`pg_terminate_backend(pid)`). (b) Identify source: hostname + application_name show какое приложение. (c) Если это user query из dashboard — добавить statement_timeout. (d) Если это custom Airflow code — fix через NOWAIT или избежать lock'а slot_pool. **Без traces:** анализ DB logs + scheduler logs + correlation timestamps = часы. **С traces:** 5-10 минут от alert до root cause. Это ценность distributed tracing."
+/>

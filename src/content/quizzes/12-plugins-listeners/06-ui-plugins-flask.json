@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "12-plugins-listeners/06-ui-plugins-flask",
+  "moduleId": "12-plugins-listeners",
+  "_meta": { "idPrefix": "airflow-m12-06" },
+  "questions": [
+    {
+      "id": "airflow-m12-06-q1",
+      "type": "multiple-choice",
+      "question": "В Airflow 2.x webserver построен на:",
+      "options": [
+        { "id": "a", "text": "React + TypeScript + Vite" },
+        { "id": "b", "text": "Flask + Flask-AppBuilder (FAB). Server-side rendered HTML, Bootstrap CSS. Plugin UI customization через Flask blueprints + FAB views. React UI планируется в Airflow 3.1+ через react_apps plugin category" },
+        { "id": "c", "text": "Django" },
+        { "id": "d", "text": "Vue" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "2.x — Flask + FAB. Server-side templates, RBAC, auth manager. 3.0 — переход на React frontend (TypeScript + Vite), но 3.1+ потребует время для plugin API. В 2.10/2.11 LTS Flask единственный путь. Customization limits: только новые pages, не modification existing (DAG list, graph view hard-coded).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m12-06-q2",
+      "type": "multiple-choice",
+      "question": "AppBuilder view (FAB) vs Flask blueprint в plugin — когда какой?",
+      "options": [
+        { "id": "a", "text": "Они эквивалентны" },
+        { "id": "b", "text": "AppBuilder view: HTML pages с menu integration в Airflow navbar (appbuilder_views=[{'name': ..., 'category': ..., 'view': ...}]), inherits airflow/main.html template, has_access декоратор для RBAC. Flask blueprint: REST endpoints, JSON APIs, custom routes без menu. CSRF protection встроен" },
+        { "id": "c", "text": "Только blueprint работает" },
+        { "id": "d", "text": "Только AppBuilder работает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AppBuilder view для UI pages (HTML + menu); blueprint для API (JSON endpoints). Often используются вместе: AppBuilder view рендерит dashboard, blueprint обеспечивает AJAX data endpoints. AppBuilder integrates с RBAC permissions; blueprint требует manual auth check.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-06-q3",
+      "type": "multiple-choice",
+      "question": "Что НЕЛЬЗЯ сделать через UI plugin в Airflow 2.x?",
+      "options": [
+        { "id": "a", "text": "Добавить новый menu item" },
+        { "id": "b", "text": "Модифицировать существующие pages (DAG list, graph view, gantt) — все hard-coded server-rendered. Inject React widget в существующую page тоже нельзя — нет SPA architecture в 2.x. Можно ТОЛЬКО новые pages. Modification existing UI планируется в Airflow 3.1+ через react_apps" },
+        { "id": "c", "text": "Создать новую view" },
+        { "id": "d", "text": "Зарегистрировать REST endpoint" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Architecture 2.x: server-rendered Flask templates, hard-coded routes. Plugin может добавить новое (pages, endpoints, menu), но не модифицировать существующее (нельзя добавить колонку в DAG list, нельзя injection React widget). 3.x React-based — даст возможность через micro-frontends (3.1+).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-06-q4",
+      "type": "true-false",
+      "question": "Production pattern: для богатых interactive dashboards (Cost dashboard, complex monitoring) часто лучше внешний tool (Grafana, Metabase) + ссылка из Airflow UI через appbuilder_menu_items, чем строить custom AppBuilder view.",
+      "correctAnswer": true,
+      "explanation": "Grafana/Metabase оптимизированы для viz: rich charts, drill-down, alerts, dashboarding. AppBuilder view в 2.x — server-rendered, ограниченный JS, no real-time. Pattern: данные emit в Prometheus/InfluxDB → Grafana визуализирует → Airflow UI содержит link на Grafana panel. Best of both: Airflow для orchestration, специализированный tool для observability. В 3.1+ React plugins дадут возможность full SPA внутри Airflow UI — пока external tool лучше.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

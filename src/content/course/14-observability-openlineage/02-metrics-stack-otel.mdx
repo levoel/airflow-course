@@ -1,0 +1,455 @@
+---
+title: "Metrics stack: OpenTelemetry (AIP-49) — современный observability в 2.10+"
+description: "OTel rollout в Airflow 2.10, ключевые metrics, migration со StatsD, OTel Collector setup"
+order: 2
+difficulty: "advanced"
+estimatedTime: 30
+topics: ["OpenTelemetry", "AIP-49", "Metrics", "StatsD", "OTel Collector", "Prometheus"]
+---
+
+# Metrics stack: OpenTelemetry (AIP-49) — современный observability в 2.10+
+
+В Airflow 2.10 наконец стабилизировался **OpenTelemetry (OTel) support** — реализация AIP-49 ("Add OpenTelemetry support"). Это **главное изменение в observability** за последние 5 лет: вместо устаревшего StatsD появляется единый vendor-neutral стандарт для metrics, traces и logs.
+
+Это критично важно для production: OTel — это не «ещё один способ слать metrics», это **унификация всего observability stack**, который перестаёт зависеть от конкретного вендора (Datadog, New Relic, Dynatrace) или транспорта (StatsD vs Prometheus pull). Airflow генерирует OTel events → OTel Collector маршрутизирует в нужный backend.
+
+---
+
+## Архитектура OTel в Airflow 2.10/2.11
+
+<DiagramContainer title="OpenTelemetry stack для Airflow" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Scheduler"
+        tooltip="Эмитит metrics на каждом scheduler loop: scheduler_loop_duration, dag_processing.total_parse_time, executor.open_slots, queued_tasks_count. Через OTel SDK по gRPC/HTTP."
+      >
+        scheduler.* metrics
+      </DataBox>
+      <DataBox
+        label="Triggerer"
+        tooltip="Эмитит triggerer.running_triggers, triggerer.events_per_second. Также traces для async deferred operators."
+      >
+        triggerer.* metrics
+      </DataBox>
+      <DataBox
+        label="Workers / TaskInstance"
+        tooltip="ti.start, ti.finish с tags (dag_id, task_id, state). Длительность tasks, retries, queue wait time. Может быть очень granular."
+      >
+        ti.* metrics + traces
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="OTLP/gRPC :4317 (или /HTTP :4318)" />
+    <FlowRow>
+      <DataBox
+        label="OpenTelemetry Collector"
+        tooltip="Центральная точка маршрутизации. Принимает OTLP. Обрабатывает: aggregation (1m windows), filtering, sampling, tagging (cluster, env). Запущен sidecar или daemonset в k8s."
+      >
+        OTel Collector
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="exporters (parallel)" />
+    <FlowRow>
+      <DataBox
+        label="Prometheus"
+        tooltip="Самый частый backend для metrics. OTel Collector exposes /metrics endpoint, Prometheus scrape pull. Grafana визуализация поверх."
+      >
+        Prometheus → Grafana
+      </DataBox>
+      <DataBox
+        label="Tempo / Jaeger"
+        tooltip="Backend для traces. OTel Collector batches traces и шлёт в Tempo (Grafana stack) или Jaeger. URL trace ID привязывается к metric для drill-down."
+      >
+        Distributed traces
+      </DataBox>
+      <DataBox
+        label="Loki / ES / CloudWatch"
+        tooltip="Backend для structured logs. Airflow 2.10+ может эмитить logs через OTel (опционально). Чаще логи всё ещё файлы на disk + remote backend (модуль 14/06)."
+      >
+        Centralized logs
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Конфигурация в `airflow.cfg`:
+
+```ini
+[metrics]
+# Включить OTel — заменяет StatsD
+otel_on = True
+
+# OTel Collector endpoint
+otel_host = otel-collector.observability.svc.cluster.local
+otel_port = 4318  # 4317 для gRPC, 4318 для HTTP
+otel_ssl_active = True
+
+# Префикс всех metrics
+otel_prefix = airflow
+
+# Интервал отправки (default 60 секунд)
+otel_interval_milliseconds = 60000
+
+# Дополнительные атрибуты, идущие во ВСЕ metrics
+# (через env vars OTel SDK)
+
+# StatsD можно держать включённым параллельно для миграции
+statsd_on = False
+```
+
+Дополнительно через переменные окружения OTel SDK:
+
+```bash
+OTEL_SERVICE_NAME=airflow-scheduler
+OTEL_RESOURCE_ATTRIBUTES=cluster=prod-eu,env=production,version=2.10.5
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer ${OTEL_TOKEN}
+```
+
+---
+
+## Ключевые metrics — что мониторить
+
+Airflow эмитит **~80 metrics**. Не нужно ставить alert на каждую — есть критичный набор для production health.
+
+### Scheduler health
+
+| Metric | Тип | Что значит | Alert |
+|---|---|---|---|
+| `scheduler.scheduler_loop_duration` | histogram | Длительность одного scheduler tick. Default <5s | p95 > 30s alert |
+| `dag_processing.total_parse_time` | gauge | Время на parse всех DAG файлов | > 60s critical |
+| `dag_processing.processes` | gauge | Активных DagFileProcessor processes | < 2 (если parsing_processes > 2) |
+| `dag_processing.import_errors` | gauge | Файлы с parse errors | > 0 alert для production |
+
+### Executor / TaskInstance throughput
+
+| Metric | Тип | Что значит | Alert |
+|---|---|---|---|
+| `executor.open_slots` | gauge | Свободные slots в executor | = 0 длительно → bottleneck |
+| `executor.queued_tasks` | gauge | TI в queue executor (внутренний) | > 100 длительно alert |
+| `executor.running_tasks` | gauge | TI выполняющиеся | n/a (для capacity planning) |
+| `ti.start.<dag_id>.<task_id>` | counter | Количество started TI | trend down — что-то сломалось |
+| `ti.finish.<dag_id>.<task_id>.<state>` | counter | Завершившиеся TI per state | failed rate spike alert |
+| `task.queued_duration` | histogram | Сколько TI ждал в queued state | p95 > 5min alert |
+
+### Triggerer
+
+| Metric | Тип | Что значит | Alert |
+|---|---|---|---|
+| `triggerer.running_triggers` | gauge | Активные deferred triggers | для capacity planning |
+| `triggerer.events_per_second` | counter | События triggerer | trend down → triggerer hang |
+| `triggerer.failed_triggers` | counter | Failed triggers | spike → bad async operator |
+
+### Pool occupancy
+
+| Metric | Тип | Что значит |
+|---|---|---|
+| `pool.open_slots.<pool>` | gauge | Свободные slots в pool |
+| `pool.used_slots.<pool>` | gauge | Занятые slots |
+| `pool.starving_tasks.<pool>` | gauge | TI ждущие slot |
+
+### DAG health
+
+| Metric | Тип | Что значит |
+|---|---|---|
+| `dagrun.duration.success.<dag_id>` | histogram | Длительность успешных runs |
+| `dagrun.duration.failed.<dag_id>` | histogram | Длительность failed runs |
+| `dagrun.dependency-check.<dag_id>` | histogram | Время проверки deps перед запуском |
+
+---
+
+## OTel Collector — центральное звено
+
+Без Collector OTel в Airflow бесполезен. Collector делает:
+
+1. **Reception** — принимает OTLP gRPC/HTTP от Airflow.
+2. **Processing** — aggregation, batching, filtering.
+3. **Export** — отправка в backends.
+
+Минимальный config `otel-collector-config.yaml`:
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1000
+
+  # Добавить статичные атрибуты
+  resource:
+    attributes:
+      - key: cluster
+        value: prod-eu
+        action: insert
+      - key: deployment.environment
+        value: production
+        action: insert
+
+  # Filtering — drop noisy metrics
+  filter:
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - "ti\\.heartbeat\\..*"  # noise
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: airflow
+    const_labels:
+      cluster: prod-eu
+
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch, resource, filter]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [otlp]
+      processors: [batch, resource]
+      exporters: [loki]
+```
+
+Deployment как DaemonSet (один OTel pod на node, минимизирует network):
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.94.0
+        args: ["--config=/conf/config.yaml"]
+        ports:
+        - containerPort: 4317  # gRPC
+        - containerPort: 4318  # HTTP
+        - containerPort: 8889  # Prometheus metrics
+```
+
+Airflow подключается к Collector через service в том же namespace, что даёт low latency.
+
+---
+
+## StatsD legacy — migration path
+
+В Airflow до 2.10 единственный встроенный backend metrics — **StatsD** (UDP, push-based, простой). Многие production deployments на StatsD + statsd_exporter + Prometheus.
+
+```ini
+# Legacy stack
+[metrics]
+statsd_on = True
+statsd_host = statsd-exporter
+statsd_port = 8125
+statsd_prefix = airflow
+```
+
+### Можно держать оба одновременно
+
+Это критично для миграции — параллельный rollout:
+
+```ini
+[metrics]
+statsd_on = True      # legacy stack продолжает работать
+otel_on = True        # новый stack начинает получать data
+```
+
+Phase 1: deploy с обоими включёнными → проверить, что OTel metrics корректны на Grafana → выключить StatsD.
+
+### Чем OTel лучше StatsD
+
+| Аспект | StatsD | OTel |
+|---|---|---|
+| Transport | UDP (lossy) | gRPC/HTTP (reliable) |
+| Schema | Loose strings | Strict types (counter/gauge/histogram) |
+| Cardinality control | Tags в name (`metric.dag_id.task_id`) | Native labels, может aggregation |
+| Traces | Нет | Native span hierarchy |
+| Logs | Нет | Опционально через OTel logs |
+| Vendor lock-in | StatsD-specific exporters | Vendor-neutral |
+| Encoding | Plain text | Protobuf efficient |
+
+<Callout type="note">
+В Airflow 2.10/2.11 OTel — preferred path. В 3.x StatsD будет deprecated (но not removed сразу). Для greenfield deployment начинайте с OTel. Для существующих — gradual migration через parallel running.
+</Callout>
+
+---
+
+## Cardinality — главный риск OTel в Airflow
+
+Metric с **слишком many unique label combinations** взрывает storage Prometheus и слайшит дашборды.
+
+Пример **плохого** metric:
+
+```
+ti.duration{dag_id="etl_orders", task_id="extract", run_id="manual__2026-05-12T10:23:45", try_number="2"}
+```
+
+Каждый run_id уникален → каждые 24 часа добавляется N тысяч новых time series. Prometheus storage растёт unbounded.
+
+**Правильный подход** — Airflow сам ограничивает high-cardinality labels:
+
+- `dag_id` — OK (typically <10k уникальных)
+- `task_id` — OK с dag_id
+- `state` — OK (<10 значений)
+- `run_id` — НЕ tag, только в traces (где cardinality OK)
+- `try_number` — OK (<5)
+
+Если ваш custom metric добавляет dag_run_id как label — это будет проблема. Используйте exemplars (для drill-down к конкретному run через trace) вместо labels.
+
+```yaml
+# OTel Collector filtering для контроля cardinality
+processors:
+  attributes/strip:
+    actions:
+      - key: dag_run_id
+        action: delete  # удалить before export
+```
+
+---
+
+## Production setup checklist
+
+### 1. Deploy OTel Collector до Airflow
+
+Без Collector Airflow с `otel_on=True` будет логировать errors при попытке connect. Deploy Collector first, проверить health (`curl http://collector:13133`), потом включать в Airflow.
+
+### 2. Conservative interval
+
+Default `otel_interval_milliseconds = 60000` (60s). Не уменьшайте без причины — каждый push это network roundtrip, для большого кластера это значительная нагрузка.
+
+### 3. Resource attributes — обязательны
+
+Без `OTEL_RESOURCE_ATTRIBUTES` Airflow эмитит metrics без context (какой cluster, env, version). В мультикластерной среде это превращает Grafana в мусор.
+
+### 4. Histogram buckets
+
+Default histogram buckets для `*_duration` metrics могут не подойти. Если ваш scheduler loop типично 1-2s, default buckets (5ms, 10ms, ... 10s) дают плохое разрешение в нужной области. Override через OTel SDK config.
+
+### 5. Memory limit для Collector
+
+OTel Collector — Go процесс, default memory consumption ~50-200MB. Под нагрузкой (10k+ metrics/sec) может расти. Set `memory_limiter` processor:
+
+```yaml
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1500
+    spike_limit_mib: 500
+```
+
+### 6. Health monitoring самого Collector
+
+`collector.up == 0` — meta-monitoring. Если Collector мёртв, вы перестаёте получать metrics, но Airflow продолжает работать. Без отдельного alert на Collector — slient observability blindness.
+
+---
+
+## Гранулярные task metrics — pro/con
+
+С 2.10 Airflow эмитит OTel events для каждой TaskInstance:
+
+```
+ti.start.etl_orders.transform_data  → counter increment
+ti.finish.etl_orders.transform_data.success  → counter increment
+ti.duration.etl_orders.transform_data  → histogram
+```
+
+На 100k TI/день это **300k events** + tags. Cardinality в Prometheus:
+
+```
+unique_series = N_dags × N_tasks_per_dag × N_states × N_other_tags
+```
+
+Для большого кластера (10k DAGs × 20 tasks × 5 states) = **1M time series**. Это много.
+
+**Альтернатива** — sampling в OTel Collector:
+
+```yaml
+processors:
+  probabilistic_sampler:
+    sampling_percentage: 10  # только 10% events
+```
+
+Или фильтровать только critical DAGs:
+
+```yaml
+filter:
+  metrics:
+    include:
+      match_type: regexp
+      metric_names:
+        - "ti\\.(start|finish|duration)\\.(critical|sla).*"
+```
+
+---
+
+## Comparison: Push (OTel/StatsD) vs Pull (Prometheus native)
+
+| Аспект | Push (OTel/StatsD) | Pull (Prometheus scrape) |
+|---|---|---|
+| Latency | <1s до Collector | scrape_interval (15-60s) |
+| Reliability | OTel gRPC has retry | Scrape failures → gap |
+| Short-lived processes | OK (push before exit) | Не работает (worker умер до scrape) |
+| Network direction | Out-of-cluster Collector | Prometheus → workers (firewall) |
+| Schema | Strict (OTel) / Loose (StatsD) | Loose |
+
+**Airflow short-lived workers** (например, KubernetesExecutor pods) — отлично fit push model. Pull (native Prometheus exporter) обычно используется только для long-running компонентов (scheduler, webserver) — через `airflow.providers.statsd` или third-party prometheus exporter, но это **не recommended** в 2.10+.
+
+---
+
+## Production gotchas
+
+### 1. OTel SDK silent failures
+
+Если Collector недоступен — OTel SDK по default НЕ падает (это feature: observability shouldn't break production). Errors уходят в Airflow logs (DEBUG level). Включить INFO для debug, потом обратно.
+
+### 2. Histogram buckets не настраиваются легко
+
+В 2.10 nuances с настройкой buckets через config. Если default buckets неподходят — workaround: переагрегация в OTel Collector через `metricstransform` processor или просто использовать Grafana queries `histogram_quantile()` на native buckets.
+
+### 3. Triggerer metrics могут быть нулями
+
+`triggerer.running_triggers` показывает 0 — частая проблема. Причины: triggerer не запущен (старый deployment), или OTel не включён для triggerer specifically. Проверить `airflow jobs list --job-type TriggererJob`.
+
+### 4. `otel_prefix` нельзя менять mid-flight
+
+Изменение `otel_prefix` от `airflow` к `production_airflow` — все existing time series в Prometheus превращаются в `production_airflow_*`. Old series продолжают существовать (но не получают data), новые series в новом namespace. Грейфана dashboards ломаются. Migrate с care.
+
+### 5. SSL/TLS к Collector
+
+В production обязательно `otel_ssl_active=True` + TLS на Collector side. Без этого metrics идут plaintext, могут leak sensitive labels (например `dag_id` с customer names).
+
+---
+
+<KnowledgeCheck
+  question="Production Airflow 2.10 с OTel включён, Grafana показывает scheduler.scheduler_loop_duration p95 = 8s (norm <5s) растущим. Какой workflow для диагностики через OTel stack?"
+  answer="**Step 1: drill-down в metrics dimensions.** В Prometheus query поделить по hostname (per scheduler в HA setup): `histogram_quantile(0.95, rate(airflow_scheduler_loop_duration_bucket[5m])) by (hostname)` — увидеть, один scheduler hot или все. **Step 2: correlated metrics.** Смотреть параллельно: `dag_processing.total_parse_time` (если parsing медленный — replace dag-processor), `dag_processing.import_errors` (новый bad DAG ломает parser), `executor.open_slots` (если =0 длительно — TI накапливаются, scheduler работает с большим backlog). **Step 3: traces.** OTel traces от scheduler spans (если включены) покажут конкретные slow stages внутри loop: `_create_dagruns`, `_schedule_dag_run`, `_critical_section_enqueue`. **Step 4: drill-down к DB.** Если slow stage — DB query, смотреть `pg_stat_statements` для slowest queries (обычно SELECT на task_instance, dag_run). **Step 5: action.** В зависимости от root cause: scale scheduler (если CPU bound), tune Postgres (VACUUM, indexes), reduce DAG count, переход на standalone dag-processor. Этот workflow невозможен без OTel — StatsD не даёт correlation, нет traces, нет per-hostname breakdown."
+/>

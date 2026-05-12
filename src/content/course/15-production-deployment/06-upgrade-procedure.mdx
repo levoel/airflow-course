@@ -1,0 +1,365 @@
+---
+title: "Upgrade procedure — blue/green deploy, DB migration, rollback"
+description: "Blue/green deployment для новой Airflow version, airflow db migrate, downtime windows, staging тестирование, rollback procedure"
+order: 6
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Upgrade", "Blue-Green", "DB Migration", "Rollback", "Staging"]
+---
+
+# Upgrade procedure — blue/green deploy, DB migration, rollback
+
+Upgrade Airflow в production — операция, к которой большинство команд относится с опаской. И обоснованно: метаданные DB shared между старой и новой версией, и неаккуратный upgrade ломает в worst case **всё**. Этот урок — production-tested процедура blue/green upgrade с минимальным downtime и проверенной rollback стратегией.
+
+Покроем upgrade в пределах одной major (например 2.9 → 2.10, 2.10 → 2.11 LTS). Upgrade на 3.x — отдельная история (модуль 18), потому что включает архитектурные изменения (Task SDK, FastAPI server, FAB removal).
+
+---
+
+## Версионная политика Airflow
+
+Сначала разберём, что и как версионируется:
+
+| Уровень | Пример | Безопасность upgrade |
+|---|---|---|
+| Patch | 2.10.4 → 2.10.5 | Безопасно — bugfixes only. Можно rolling restart, без downtime |
+| Minor | 2.10.x → 2.11.x | Требует `db migrate` + careful testing. Может содержать deprecations |
+| Major | 2.x → 3.x | Breaking changes. Отдельная процедура (модуль 18) |
+| Provider | apache-airflow-providers-amazon 8.x → 9.x | Может содержать breaking changes в operators. Test thoroughly |
+
+**LTS политика**: Airflow 2.11 — последний LTS в 2.x ветке (release ~Q3 2025, поддержка до Q3 2027). Patches и security fixes до EOL. Стандартная рекомендация — быть **либо на 2.11 LTS** до миграции на 3.x, либо на 3.x latest.
+
+---
+
+## Pre-upgrade checklist
+
+Перед любым minor upgrade выполните:
+
+```bash
+# 1. Backup metadata DB — обязательно ДО изменений
+pg_dump -h $RDS_HOST -U airflow -d airflow -F custom \
+  --no-owner --no-acl \
+  -f airflow_pre_upgrade_$(date +%Y%m%d).dump
+
+# Или для RDS:
+aws rds create-db-snapshot \
+  --db-instance-identifier airflow-prod \
+  --db-snapshot-identifier airflow-pre-upgrade-$(date +%Y%m%d)
+
+# 2. Запустить upgrade-check (если двигаемся на ближайший major)
+airflow upgrade-check --to-version 2.11
+
+# 3. Прочитать release notes от текущей до целевой версии
+# https://airflow.apache.org/docs/apache-airflow/stable/release_notes.html
+
+# 4. Проверить deprecated config параметры
+airflow config list --section core | grep -i deprecated
+
+# 5. Проверить custom plugins на compatibility
+python -c "from airflow.plugins_manager import PluginsDirectorySource; PluginsDirectorySource('/opt/airflow/plugins').load_plugins()"
+
+# 6. Запустить tests против target version в staging
+docker run -v $(pwd)/dags:/opt/airflow/dags apache/airflow:2.11.0 \
+  airflow dags list
+```
+
+<Callout type="warning">
+Backup metadata DB ОБЯЗАТЕЛЕН ДО любого upgrade. Не "снимем потом если что". Migration scripts необратимы — после `airflow db migrate` revert возможен только restore из backup.
+</Callout>
+
+---
+
+## Blue/green deployment стратегия
+
+Blue/green — запуск новой версии (green) параллельно со старой (blue), переключение трафика, hold-back на blue для rollback.
+
+<DiagramContainer title="Blue/Green Airflow upgrade — фазы" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Phase 0: Pre-upgrade"
+        tooltip="Blue (2.10.5) работает в production. Создаём snapshot DB, готовим green (2.11.0) namespace, копируем values.yaml с новым image tag."
+      >
+        Blue прод / green ready / DB snapshot
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="запускаем green в parallel" />
+    <FlowRow>
+      <DataBox
+        label="Phase 1: Green up, DAGs paused"
+        tooltip="Green namespace deploy. Scheduler/webserver/triggerer green pods запущены, но НЕ обрабатывают tasks — все DAGs paused в DB. Webserver green можно открыть через separate ingress (airflow-green.example.com) для smoke testing."
+      >
+        Green pods up, all DAGs paused
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="airflow db migrate в green" />
+    <FlowRow>
+      <DataBox
+        label="Phase 2: DB migration"
+        tooltip="ВАЖНО: запускаем airflow db migrate ОДИН раз, из green. PostgreSQL миграции idempotent для same version. После migration схема обновлена — blue scheduler может крашиться при следующем restart. Поэтому Phase 3 не задерживаем."
+      >
+        airflow db migrate (один запуск)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="cut over traffic" />
+    <FlowRow>
+      <DataBox
+        label="Phase 3: Traffic cutover"
+        tooltip="Изменяем DNS / Ingress на green. Blue webserver scheduler stop. Green становится primary. Время cutover — 10-30s downtime для UI (DNS TTL). Tasks НЕ прерываются если в pause."
+      >
+        DNS swap blue → green
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="unpause DAGs" />
+    <FlowRow>
+      <DataBox
+        label="Phase 4: Unpause + verify"
+        tooltip="Unpause DAGs gradually — сначала тестовые/некритичные, потом critical. Мониторить scheduler.scheduler_loop_duration, executor.queued_tasks, errors в logs первые 30 минут."
+      >
+        Unpause gradually, monitor 30 min
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="hold blue 24h" />
+    <FlowRow>
+      <DataBox
+        label="Phase 5: Hold for rollback (24h)"
+        tooltip="Blue остаётся stopped но deployed — для quick rollback. Через 24h без issues — DELETE blue namespace, освобождаем ресурсы. ВАЖНО: rollback после 24h означает restore DB из snapshot — потеря 24h состояния."
+      >
+        Blue stopped, hold 24h, then delete
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Step-by-step upgrade 2.10.5 → 2.11.0
+
+Конкретная процедура для Kubernetes deployment через official Helm chart.
+
+### Step 1 — Pre-flight
+
+```bash
+# Backup
+kubectl exec -n airflow airflow-scheduler-0 -- \
+  pg_dump --no-owner --no-acl -F custom \
+  postgresql://airflow:$PASS@pgbouncer:6432/airflow > backup.dump
+
+# Запустить upgrade-check на текущем (для будущего 3.x — отдельная история)
+kubectl exec -n airflow airflow-scheduler-0 -- airflow upgrade-check
+
+# Прочитать release notes
+curl https://airflow.apache.org/docs/apache-airflow/2.11.0/release_notes.html
+```
+
+### Step 2 — Deploy green namespace
+
+```bash
+# Создать green namespace
+kubectl create namespace airflow-green
+
+# Deploy с новой версией, БЕЗ migration (отдельно)
+helm upgrade --install airflow-green apache-airflow/airflow \
+  --namespace airflow-green \
+  --version 1.16.0 \  # Chart version с Airflow 2.11
+  --values values-green.yaml \
+  --set migrateDatabaseJob.enabled=false \
+  --set webserver.defaultUser.enabled=false \
+  --wait
+```
+
+`values-green.yaml` отличается от blue только tag:
+
+```yaml
+airflowVersion: "2.11.0"
+defaultAirflowTag: "2.11.0"
+# Всё остальное идентично blue
+```
+
+### Step 3 — Pause DAGs в blue
+
+```bash
+# Через airflow CLI
+kubectl exec -n airflow airflow-webserver-0 -- \
+  bash -c 'airflow dags list -o json | jq -r ".[].dag_id" | xargs -I{} airflow dags pause {}'
+
+# Wait для in-flight tasks (timeout 10 min)
+kubectl exec -n airflow airflow-webserver-0 -- \
+  airflow tasks states-for-dag-run | grep -c 'running' # ждём 0
+```
+
+### Step 4 — DB migration
+
+```bash
+# Запустить migration job
+kubectl exec -n airflow-green airflow-green-scheduler-0 -- \
+  airflow db migrate
+
+# Проверить миграцию завершена успешно
+kubectl exec -n airflow-green airflow-green-scheduler-0 -- \
+  airflow db check-migrations
+```
+
+**Что делает `airflow db migrate`**:
+- Применяет Alembic migration scripts (в `airflow/migrations/versions/`)
+- Может добавлять колонки, индексы, новые таблицы
+- В Airflow 2.10 → 2.11 migration занимает ~30s на 50 GB DB
+- Idempotent: повторный запуск ничего не делает (Alembic tracks current version)
+
+### Step 5 — Cutover
+
+```bash
+# Stop blue webserver/scheduler (но не удаляем — для rollback)
+kubectl scale deployment -n airflow \
+  airflow-webserver --replicas=0
+kubectl scale deployment -n airflow \
+  airflow-scheduler --replicas=0
+kubectl scale deployment -n airflow \
+  airflow-triggerer --replicas=0
+kubectl scale statefulset -n airflow \
+  airflow-worker --replicas=0
+
+# Switch ingress на green
+kubectl patch ingress airflow-ingress -n airflow \
+  -p '{"spec":{"backend":{"service":{"name":"airflow-green-webserver"}}}}'
+
+# Verify green up
+kubectl get pods -n airflow-green
+curl -k https://airflow.example.com/health
+```
+
+### Step 6 — Unpause gradually
+
+```bash
+# Сначала test DAGs (низкая критичность)
+for dag in test_dag_1 test_dag_2; do
+  kubectl exec -n airflow-green airflow-green-webserver-0 -- \
+    airflow dags unpause $dag
+  sleep 30  # observe
+done
+
+# Потом по группам — staging DAGs, потом production
+kubectl exec ... -- airflow dags unpause --tag staging
+sleep 5m
+kubectl exec ... -- airflow dags unpause --tag production
+```
+
+### Step 7 — Hold blue + cleanup
+
+```bash
+# Hold blue 24h
+# Через 24h без issues:
+helm uninstall airflow -n airflow
+kubectl delete namespace airflow
+```
+
+---
+
+## Downtime windows
+
+Для blue/green с paused DAGs реальный downtime:
+- **UI downtime**: ~30s-2min (DNS TTL + ingress reload)
+- **Task execution downtime**: 0 (in-flight tasks завершились до pause, новые запустятся после unpause)
+- **Polling sensors**: Reschedule mode — паузируются, продолжат после unpause. Poke mode — могут timeout, retries сработают.
+
+Total perceived downtime для пользователей: 5-15 минут (включая wait для in-flight + smoke testing green).
+
+**In-place upgrade (если не blue/green):**
+```bash
+helm upgrade airflow apache-airflow/airflow \
+  --version 1.16.0 --reuse-values
+```
+Downtime — 5-10 минут (scheduler/webserver restart + db migrate + rolling pods). Подходит для small deployments / dev. Production — blue/green.
+
+---
+
+## Rollback procedure
+
+### Rollback в течение 1 минуты (до Phase 3)
+
+Если green не запустился — просто delete green namespace и unpause blue DAGs.
+
+```bash
+helm uninstall airflow-green -n airflow-green
+kubectl delete namespace airflow-green
+# Unpause blue DAGs обратно
+kubectl exec -n airflow airflow-webserver-0 -- \
+  bash -c 'airflow dags list -o json | jq -r ".[].dag_id" | xargs -I{} airflow dags unpause {}'
+```
+
+### Rollback после Phase 4 (DB уже migrated)
+
+Здесь сложнее — DB schema уже обновлена. Прямой revert невозможен (Alembic downgrade scripts существуют, но **не рекомендуются** в production — могут потерять данные новых колонок).
+
+**Production-grade rollback**:
+
+```bash
+# 1. Stop green
+kubectl scale deployment -n airflow-green --all --replicas=0
+
+# 2. Restore DB из snapshot
+aws rds restore-db-instance-from-db-snapshot \
+  --db-instance-identifier airflow-prod-restored \
+  --db-snapshot-identifier airflow-pre-upgrade-20260512
+
+# 3. Update connection strings → restored instance
+# Через ESO secret refresh или manual
+
+# 4. Restart blue
+kubectl scale deployment -n airflow --all --replicas=2
+
+# 5. Unpause blue DAGs
+```
+
+**Data loss**: всё что произошло после snapshot — DagRuns, XCom, logs — теряется. Обычно это 30 минут — 1 час (время от snapshot до cutover).
+
+<Callout type="warning">
+Rollback после cutover — операция последнего средства. Если можно — лучше fix forward (apply hotfix на green) чем rollback. Поэтому критично иметь staging environment, где upgrade проходит идентично production на data sample.
+</Callout>
+
+---
+
+## Production gotchas
+
+**Не запускайте `airflow db migrate` из blue после green up.** Если blue scheduler рестартанулся после green migration — он может попытаться применить старые миграции снова или фейлится при чтении новой схемы. Pause blue scheduler **до** migration.
+
+**Helm `--atomic` flag не делает rollback DB.** `helm upgrade --atomic` rollback-нет K8s manifests, но Alembic migrations уже применены. Не полагайтесь на `--atomic` для rollback.
+
+**Provider compatibility**. Major provider upgrade (например providers-amazon 8.x → 9.x) может содержать breaking changes. Тестируйте отдельно от Airflow upgrade. Pinning providers в `requirements.txt`:
+
+```
+apache-airflow==2.11.0
+apache-airflow-providers-amazon==8.27.0
+apache-airflow-providers-postgres==5.13.1
+```
+
+**Custom plugins breakage**. Plugins API в 2.x относительно стабилен, но Listener API эволюционирует. Запустите test suite ваших plugins против target version перед upgrade.
+
+**Webserver session invalidation**. После upgrade FAB может invalidate user sessions — пользователям нужно re-login. Это нормально, но коммуницируйте.
+
+**Helm chart vs Airflow versions**. Chart version ≠ Airflow version. Chart 1.15.0 содержит Airflow 2.10.5 по default, но можно переопределить через `defaultAirflowTag`. Всегда проверяйте mapping в chart NOTES.txt.
+
+---
+
+## Staging environment как обязательное условие
+
+Production-grade upgrade требует staging environment, где:
+- Та же версия Airflow что в production
+- Та же версия PostgreSQL
+- Те же providers с pinned versions
+- Sample DAGs (5-10 production DAGs)
+- 1-2 schedulers (не 1 как в dev)
+
+Процедура upgrade прокатывается на staging **минимум 1 неделю до production**. За эту неделю наблюдаете за:
+- Schedule decisions latency
+- DAG parse times
+- Error logs (особенно warnings про deprecation)
+- Provider operator behavior
+
+Без staging upgrade — это russian roulette. Один из самых страшных production incidents в Airflow community — Airbnb's 1.10 → 2.0 upgrade in-place, который вылился в 72-часовой outage.
+
+---
+
+<KnowledgeCheck
+  question="Команда сделала upgrade Airflow 2.10.5 → 2.11.0 через blue/green. Через 6 часов после cutover на green появляются жалобы: некоторые DAGs не triggered по расписанию, scheduler.scheduler_loop_duration вырос с 200ms до 3s. В блоге Airflow 2.11 упоминается изменение в DAG processor. Что делать — rollback или fix forward?"
+  answer="Сначала диагностика, потом решение. Шаги: (1) Проверить логи scheduler — если ошибки про import_error или DAG parse failures, скорее всего deprecation в одном из providers — нужно fix forward; (2) `SELECT count(*) FROM import_error;` — должно быть 0; (3) Проверить standalone DAG processor — в 2.11 могут быть изменения в file claim logic; смотреть метрику dag_processing.total_parse_time; (4) Сравнить scheduler.scheduler_loop_duration по фазам — какая phase стала медленнее? `pg_stat_statements` покажет если new slow query; (5) Проверить PgBouncer — может быть exhausted из-за нового query pattern. Решение зависит от root cause: (a) Если это transient issue (e.g., autovacuum behind) — wait + monitor; (b) Если bug в 2.11 (но 2.11.0 — first minor release, bugs возможны) — fix forward на 2.11.1 patch если есть, иначе hotfix через extra config; (c) Если deprecation в provider — pin старую provider version в requirements.txt и rebuild image. **Rollback после 6 часов — крайне нежелателен**: 6 часов DagRuns в новой схеме потеряются при restore DB. Production правило — не делайте upgrade пятницу вечером; делайте утром понедельника когда команда доступна для fix forward. Также: 2.10.x → 2.11.x должен был быть протестирован на staging минимум 1 неделю — если такого не было, проблема в процессе. Долгосрочный fix: добавить staging environment + 1-week soak test перед prod."
+/>

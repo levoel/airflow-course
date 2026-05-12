@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "08-datasets-assets/05-cross-dag-cascade",
+  "moduleId": "08-datasets-assets",
+  "_meta": { "idPrefix": "airflow-m08-05" },
+  "questions": [
+    {
+      "id": "airflow-m08-05-q1",
+      "type": "multiple-choice",
+      "question": "Когда оправдан TriggerDagRunOperator вместо Datasets для cross-DAG dependency?",
+      "options": [
+        { "id": "a", "text": "Никогда — Datasets всегда лучше" },
+        { "id": "b", "text": "Manual ad-hoc triggers из UI/CLI, programmatic triggers с custom Python logic, one-time triggers не связанные с data updates" },
+        { "id": "c", "text": "Только в Airflow 1.x" },
+        { "id": "d", "text": "Когда DAG-и в разных Airflow instances" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Datasets — strict superset для DATA-DRIVEN cross-DAG dependency (95% cases). TriggerDagRunOperator остаётся valid для: (1) Manual ad-hoc triggers — user в UI запускает downstream вручную; (2) Programmatic — task вычисляет какой DAG триггерить через сложную logic; (3) One-time — bootstrap триггер при init. Cross-Airflow требует REST API + Connection (TriggerDagRunOperator поддерживает remote через config). Tight coupling — anti-pattern, использовать Datasets.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m08-05-q2",
+      "type": "multiple-choice",
+      "question": "Producer hourly (24 events/day), consumer schedule=[ds_producer]. Запускается ли consumer 24 раза в день?",
+      "options": [
+        { "id": "a", "text": "Да — один event = один run" },
+        { "id": "b", "text": "Зависит: если consumer fast и max_active_runs=1 — да, ~24 runs; если consumer slow (выполняется 2 часа), accumulated events в queue collapse в один run, всего ~12 runs/day" },
+        { "id": "c", "text": "Нет — runs не зависят от event count" },
+        { "id": "d", "text": "Один раз в день — accumulated event semantics" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Поведение зависит от consumer duration vs producer frequency. Если consumer < producer interval — каждый event triggers новый run (24/day). Если consumer > producer interval — events накапливаются в queue (один row из-за idempotent PK), после завершения current run scheduler видит queue и создаёт ОДИН следующий run (не 24 catch-up). Это collapse behavior — dataset events не множат runs. Для гарантированного 'один run на каждый event' нужны другие mechanisms (например ExternalTaskSensor + TriggerDagRunOperator).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-05-q3",
+      "type": "multiple-choice",
+      "question": "DatasetOrTimeSchedule(timetable=CronTriggerTimetable('0 6 * * *'), datasets=[ds_x]). Когда DAG запустится?",
+      "options": [
+        { "id": "a", "text": "Только в 06:00" },
+        { "id": "b", "text": "Только при обновлении ds_x" },
+        { "id": "c", "text": "Либо в 06:00 по cron, либо раньше — если ds_x обновился. Whichever first. Это hybrid SLA pattern: cron как lower bound, dataset как efficiency upper bound" },
+        { "id": "d", "text": "В 06:00 И при обновлении ds_x (AND)" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "DatasetOrTimeSchedule (2.9+) — OR semantics между cron schedule и dataset events. Используется для SLA-driven reports: 'отчёт должен быть к 06:00, но если данные пришли раньше — запускайся сразу'. Cron — fallback гарантия, dataset — efficiency optimization. Whichever first triggers. Это elegant решение для batch ETL, где fixed deadline + variable upstream timing.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-05-q4",
+      "type": "true-false",
+      "question": "При backfill через 'airflow dags backfill' каскад через Datasets автоматически распространяется на downstream consumers (они тоже запустятся для backfilled периодов).",
+      "correctAnswer": false,
+      "explanation": "Backfill НЕ propagates через datasets автоматически. Каждый DAG backfill изолирован — нужно backfill каждый downstream DAG отдельно. Это design choice: backfill события не идут через scheduler dataset processing phase (они создают DagRuns directly через CLI). Production workaround: (1) backfill каждый уровень cascade вручную в правильном порядке; (2) написать custom helper, который итерирует через cascade; (3) использовать --reset-dagruns для cleanup. Часто упускают — backfill bronze layer, ждут что silver автоматически прокатится, разочаровываются. В 3.x ситуация улучшается с Asset Partitions, но в 2.x ручная работа.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/06-remote-logging",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-06" },
+  "questions": [
+    {
+      "id": "airflow-m14-06-q1",
+      "type": "multiple-choice",
+      "question": "Почему DB log handler — catastrophic antipattern для production?",
+      "options": [
+        { "id": "a", "text": "Слишком сложно" },
+        { "id": "b", "text": "Каждая log line task = INSERT в `log` table metadata DB. На 200k TI/day × 100 lines/task = 20M INSERTs/day → table растёт до 100s GB → scheduler critical section contention с INSERT log → VACUUM застревает → backups часы. Standard observation: 'log' таблица = 70% объёма metadata DB" },
+        { "id": "c", "text": "Только нет UI" },
+        { "id": "d", "text": "Зависит от RDBMS" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DB log handler — legacy, существует но **никогда не использовать** в production. Unbounded growth (нет natural retention в DB), lock contention с scheduler critical section, backup explosion. На большом cluster (10k DAGs) DB пухнет до 800GB+, 70% занимает log. Migration off: switch config к S3/GCS/ES, restart, затем cleanup log table через batched DELETE + VACUUM. Это самая частая 'production rescue' для Airflow installations.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-06-q2",
+      "type": "multiple-choice",
+      "question": "Local file logs всегда записываются сначала, даже при remote_logging=True. Зачем?",
+      "options": [
+        { "id": "a", "text": "Legacy" },
+        { "id": "b", "text": "Это buffer + надёжность: если remote upload фейлится (S3 throttle, network), лог не потерян. После TI complete async upload в remote. Worker pod должен иметь enough disk для in-flight logs + cleanup (`delete_local_logs_after_upload = True` после 2.7)" },
+        { "id": "c", "text": "Для UI чтения" },
+        { "id": "d", "text": "Только в Local executor" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Local-first design для надёжности. Worker пишет log lines напрямую в local file через FileTaskHandler — это никогда не блокирует execute(). После TI complete, custom handler делает async upload в remote (S3/GCS). Если upload fails — retries. **Без cleanup** local fills disk → `delete_local_logs_after_upload = True` (2.7+). Race condition: scheduler возвращает success ДО upload finished — UI пытается читать с S3, может получить 404 первые секунды. Fallback на worker RPC (port 8793).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m14-06-q3",
+      "type": "multiple-choice",
+      "question": "Какие IAM permissions нужны worker vs webserver для S3 logging?",
+      "options": [
+        { "id": "a", "text": "Одинаковые — full access" },
+        { "id": "b", "text": "Worker — **write** (PutObject, ListBucket для checks). Webserver — **read** (GetObject, ListBucket). Минимум privileges, никогда не давайте webserver write — он не должен модифицировать logs (audit integrity). В EKS через IRSA, в GKE через Workload Identity" },
+        { "id": "c", "text": "Worker read, webserver write" },
+        { "id": "d", "text": "Permissions не нужны" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Principle of least privilege: каждый component получает только нужный access. Worker pod пишет logs (PutObject) — должен иметь IAM role с write. Webserver читает logs для UI (GetObject) — read-only role. Это важно для **audit integrity**: если webserver compromised (XSS, RCE), attacker не сможет манипулировать historical logs. Также — separate IAM roles для worker vs webserver pods (через service accounts в k8s). DELETE permission не нужен ни одному — retention через S3 lifecycle policy.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-06-q4",
+      "type": "true-false",
+      "question": "Elasticsearch backend для logs — uniquely supports search across логов всех DAGs через Kibana ('dag_id:etl_orders AND level:ERROR за неделю'). S3 не позволяет search без external tool (Loki, Athena, OpenSearch).",
+      "correctAnswer": true,
+      "explanation": "S3 — простой object storage, нет full-text search. Чтобы найти 'all errors в etl_orders за неделю' нужно: либо download all files и grep, либо external tool (Loki/Athena/OpenSearch). ES indexed по полям из JSON log lines (json_format=True), Kibana даёт query UI и dashboards. Trade-offs: ES сложнее operate (cluster, shards, RAM-heavy), дороже storage. Loki (Grafana stack) — middle ground: cheap storage (S3 backend) + label-based search. Для большинства deployments — S3 для archive + Loki для search = balance cost и searchability.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

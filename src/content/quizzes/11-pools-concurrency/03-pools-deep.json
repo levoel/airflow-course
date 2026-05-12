@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "11-pools-concurrency/03-pools-deep",
+  "moduleId": "11-pools-concurrency",
+  "_meta": { "idPrefix": "airflow-m11-03" },
+  "questions": [
+    {
+      "id": "airflow-m11-03-q1",
+      "type": "multiple-choice",
+      "question": "В таблице slot_pool хранятся used_slots, queued_slots, scheduled_slots?",
+      "options": [
+        { "id": "a", "text": "Да, обновляются scheduler каждый tick" },
+        { "id": "b", "text": "Нет — slot_pool хранит только pool name, slots (capacity), description, include_deferred. used/queued/scheduled вычисляются dynamic через aggregate query JOIN task_instance" },
+        { "id": "c", "text": "Хранятся в Redis cache" },
+        { "id": "d", "text": "Хранятся только в логах" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Scheduler НЕ держит счётчики в slot_pool — каждый tick aggregate query на task_instance с GROUP BY pool. Это упрощает consistency (нет stale counters), но требует индексы на task_instance(pool, state). Lock берётся на саму строку slot_pool для serialization decisions, не для атомарного UPDATE счётчика.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-03-q2",
+      "type": "multiple-choice",
+      "question": "Почему pool — самый 'защищённый' уровень concurrency control в Airflow?",
+      "options": [
+        { "id": "a", "text": "Потому что хранится в DB" },
+        { "id": "b", "text": "Pool decision происходит внутри critical section scheduler с row-level lock на slot_pool (SELECT FOR UPDATE NOWAIT). Это гарантирует atomicity — even multi-scheduler HA не может over-allocate" },
+        { "id": "c", "text": "Pool single-threaded по дизайну" },
+        { "id": "d", "text": "Pool блокирует все updates" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Multi-scheduler HA: только один scheduler входит в critical section через FOR UPDATE NOWAIT lock на slot_pool. Внутри section: recompute pool usage + UPDATE TI state='queued' атомарно в одной транзакции. Невозможно over-allocate — это фундаментальная гарантия Airflow.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-03-q3",
+      "type": "multiple-choice",
+      "question": "default_pool — что это и можно ли его удалить?",
+      "options": [
+        { "id": "a", "text": "Опциональный pool создаваемый при первом TI" },
+        { "id": "b", "text": "System pool создаваемый при airflow db init с slots=128. Любая task без явного pool=... использует его. Удалить нельзя; slots можно менять" },
+        { "id": "c", "text": "Это alias для no-pool" },
+        { "id": "d", "text": "Удаляется командой airflow pools delete default_pool" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "default_pool создан automatically с slots=128. Все task без явного pool используют его. Нельзя удалить — Airflow ругнётся. Best practice: не оставлять production tasks без явного pool. Создать per-resource pools (warehouse, rds, api), default_pool — резерв для тривиальных tasks (sensors, branches).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m11-03-q4",
+      "type": "true-false",
+      "question": "@task(pool='warehouse', pool_slots=4) занимает 4 slot вместо 1 — это weighted concurrency, позволяющая описывать heavy tasks как занимающие больше resource quota.",
+      "correctAnswer": true,
+      "explanation": "Pool можно рассматривать как 'economic budget' resource. pool_slots > 1 описывает что task потребляет больше slots — например, heavy Snowflake JOIN занимает 4 slots, light SELECT — 1 slot. В pool slots=8: 1 heavy + 4 light одновременно (4+4=8), или 8 light, или 2 heavy. Это weighted concurrency — мощный pattern для описания real resource consumption.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

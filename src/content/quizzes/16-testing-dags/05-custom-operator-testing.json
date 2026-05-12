@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/05-custom-operator-testing",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-05" },
+  "questions": [
+    {
+      "id": "airflow-m16-05-q1",
+      "type": "multiple-choice",
+      "question": "template_fields в custom operator — что необходимо тестировать?",
+      "options": [
+        { "id": "a", "text": "Только что они объявлены" },
+        { "id": "b", "text": "Explicit test rendering: создать DAG context, op.render_template_fields({'ds': '2026-05-12', ...}), assert что field stage = expected value. Это catches: typo в template, missing field в template_fields tuple, wrong variable name, что render_template_fields реально работает" },
+        { "id": "c", "text": "Не нужно — Airflow делает сам" },
+        { "id": "d", "text": "Только integration test" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Template rendering — silent failure mode. Если поле не в template_fields, оно НЕ rendered, остается '{{ ds }}' literal в production data. Один explicit unit test ловит это: создать DAG, op.render_template_fields(context), assert op.field == 'rendered'. Это catches typo в template (`{{ ds_nodash }}` vs `{{ds_nodash}}`), missing field в tuple, wrong var name. Производственная catastrophe вроде S3 keys 'data_{{ ds }}.parquet' (literal!) — один день дебага vs 30 секунд test.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-05-q2",
+      "type": "multiple-choice",
+      "question": "retry logic operator — как unit-test?",
+      "options": [
+        { "id": "a", "text": "Запустить полный Airflow scheduler и смотреть retries" },
+        { "id": "b", "text": "Unit test проверяет CONFIGURATION: op.retries == 3, op.retry_delay == timedelta(...), op.retry_exponential_backoff is True. REAL retry поведение — integration test через airflow tasks test (Airflow runtime обрабатывает retries)" },
+        { "id": "c", "text": "Mocking time.sleep" },
+        { "id": "d", "text": "Невозможно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Operator только raises exception при failure — REAL retry мechanism handled by Airflow runtime (LocalTaskJob retries based on op.retries). Unit test проверяет настройки (retries=N, retry_delay, retry_exponential_backoff, max_retry_delay). Test что execute raises правильный exception при failure (для propagate в retry). Real retry behavior — integration test через airflow tasks test, который видит full retry flow.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-05-q3",
+      "type": "multiple-choice",
+      "question": "Для testing XCom-pushing operator:",
+      "options": [
+        { "id": "a", "text": "Нужен real DB" },
+        { "id": "b", "text": "Mock context['task_instance'].xcom_push = MagicMock(). После op.execute(context), assert xcom_push.assert_called_with(key='rows', value=42). XCom не пишется в real DB" },
+        { "id": "c", "text": "Только через @task" },
+        { "id": "d", "text": "Через MockSession" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "XCom push в operator делается через context['task_instance'].xcom_push(key, value). В unit test ti — MagicMock(). После execute проверяем что xcom_push был called с правильными аргументами. То же для xcom_pull — ti.xcom_pull.return_value = expected_value, тогда operator получит mock value. Это полный mocking pattern. Real DB writes — integration test через airflow tasks test.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-05-q4",
+      "type": "true-false",
+      "question": "@apply_defaults decorator на custom operator в Airflow 2.x deprecated — BaseOperator делает это автоматически.",
+      "correctAnswer": true,
+      "explanation": "В Airflow 2.x @apply_defaults deprecated. BaseOperator.__init__ автоматически применяет default_args от DAG к operator's __init__. Новые operators не нуждаются в @apply_defaults. Если видите его в existing code — можно безопасно убрать. Это упрощение от 1.x где @apply_defaults был обязателен. Также: super().__init__(**kwargs) в __init__ обязателен — иначе default_args не применяются.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

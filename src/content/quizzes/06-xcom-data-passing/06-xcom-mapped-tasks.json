@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "06-xcom-data-passing/06-xcom-mapped-tasks",
+  "moduleId": "06-xcom-data-passing",
+  "_meta": { "idPrefix": "airflow-m06-06" },
+  "questions": [
+    {
+      "id": "airflow-m06-06-q1",
+      "type": "multiple-choice",
+      "question": "DAG `process.expand(item=get_items())` где get_items() возвращает list из 100 элементов. Сколько строк в xcom table после успешного run и что в каждой?",
+      "options": [
+        { "id": "a", "text": "1 row, value=полный list" },
+        { "id": "b", "text": "101 row: 1 для `get_items` (map_index=-1, key=return_value, value=весь list); 100 для `process` (map_index 0..99, каждая со своим result). PK (dag_run_id, task_id, map_index, key) обеспечивает unique" },
+        { "id": "c", "text": "100 rows, без get_items" },
+        { "id": "d", "text": "200 rows" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "101 row: один для upstream get_items (map_index=-1, обычный non-mapped task), 100 для process (map_index 0..99 от mapped expansion). PK включает map_index → unique per mapped TI. SQL: `SELECT FROM xcom WHERE run_id=... AND task_id='process' ORDER BY map_index` возвращает 100 rows. Downstream consumer без map_indexes получает агрегированный list[100] в порядке map_index.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m06-06-q2",
+      "type": "multiple-choice",
+      "question": "Downstream task делает `xcom_pull(task_ids='process')` без map_indexes на mapped task. Что происходит?",
+      "options": [
+        { "id": "a", "text": "Возвращает None" },
+        { "id": "b", "text": "Aggregation: SELECT map_index, value FROM xcom WHERE task_id='process' ORDER BY map_index. ORM hydrates все rows в Python list в порядке map_index. На 1000 mapped TI × 10KB XCom = 10MB в memory worker-а — потенциальный bottleneck" },
+        { "id": "c", "text": "Падает с error" },
+        { "id": "d", "text": "Возвращает только map_index=0" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Без map_indexes Airflow делает aggregation pull — SELECT всех XCom для task_id ORDER BY map_index, hydrates в Python list. TaskFlow делает это автоматически когда передаёте MapXComArg в downstream task argument. Для huge mapping (>1000) — memory bottleneck (10MB+ в memory aggregator-а). Mitigation: batch processing внутри одного task, streaming aggregation через manual SQLAlchemy iterator, или Custom Backend offload в S3.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-06-q3",
+      "type": "multiple-choice",
+      "question": "Custom XCom Backend и mapped tasks — что критично в _build_s3_key?",
+      "options": [
+        { "id": "a", "text": "Использовать UUID4 везде" },
+        { "id": "b", "text": "Включить map_index в storage path: `s3://bucket/xcom/<dag_id>/<run_id>/<task_id>/map_<map_index>/<key>`. Иначе все mapped TI пишут в один S3 key — overwriting, downstream получает только last written. Один из самых частых production bug в custom backend" },
+        { "id": "c", "text": "Не использовать prefix" },
+        { "id": "d", "text": "Использовать timestamp" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical: map_index должен быть в S3 path. Иначе 100 mapped TI делают PUT в один key → последний выигрывает race, остальные потеряны. Downstream aggregation видит 100 одинаковых values (или 1 если SELECT по DB ref). Это subtle bug, виден только при mapping. Pattern: `s3://bucket/xcom/{dag_id}/{run_id}/{task_id}/map_{map_index or -1}/{key}.parquet`. Также не используйте UUID — нужна детерминированность для idempotent rerun.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-06-q4",
+      "type": "true-false",
+      "question": "`XComArg.zip(a, b)` — это lazy reference на parallel zip pairs от двух mapped sources. `.map(fn)` применяет transformation per element тоже lazy. Оба evaluate только при resolve (на runtime worker-а), не материализуют list в memory scheduler-а.",
+      "correctAnswer": true,
+      "explanation": "Да. XComArg операции в TaskFlow — lazy. zip(a, b) создаёт ZipXComArg, .map(fn) — MapXComArgWithMap. На scheduler — Airflow только считает length (для определения N mapped TI), не materializes pairs в memory. На worker для конкретного map_index — resolve достаёт нужные elements от sources, применяет fn. Это позволяет работать с большими mapped sources без OOM scheduler-а. Caveat: lambda в .map() должна быть picklable (no closures с local vars).",
+      "bloomLevel": "applied"
+    }
+  ]
+}

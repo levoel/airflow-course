@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/05-migration-2-to-3-overview",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-05" },
+  "questions": [
+    {
+      "id": "airflow-m18-05-q1",
+      "type": "multiple-choice",
+      "question": "Самое фундаментальное изменение в 3.x — AIP-72 Task SDK. Что это и почему important?",
+      "options": [
+        { "id": "a", "text": "Только rename imports" },
+        { "id": "b", "text": "Tasks communicate с Airflow через REST API, НЕ direct SQLAlchemy session к metadata DB. Security (malicious DAG не может drop tables), future-proof (DB schema can change без breaking workers), multi-team isolation. Workers больше не имеют direct DB access — все через API server" },
+        { "id": "c", "text": "Performance optimization" },
+        { "id": "d", "text": "UI feature" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-72 Task SDK — biggest architectural change в 3.x. В 2.x workers имеют direct SQLAlchemy session — security risk (malicious code может query/modify arbitrary tables). В 3.x — Task SDK = REST API client. Worker calls API server для Variable.get, Connection.get, XCom push/pull. Benefits: security boundary, multi-team isolation, future-proof DB schema. Migration: imports rename `airflow.decorators` → `airflow.sdk` через ruff AIR301. Most user code minimal changes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-05-q2",
+      "type": "multiple-choice",
+      "question": "Какие 3.x changes требуют manual rewrite (не auto-fix)?",
+      "options": [
+        { "id": "a", "text": "Все" },
+        { "id": "b", "text": "Manual: SubDAG → TaskGroup (rare), FAB hooks в webserver_config.py → auth provider (если custom auth), SLA parameter → Listener API monitoring, custom Flask plugins → FastAPI/React. Auto-fixable: imports (ruff AIR301), execution_date → logical_date (AIR302), schedule_interval → schedule" },
+        { "id": "c", "text": "Только imports" },
+        { "id": "d", "text": "Только SLA" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Migration breakdown: ~80% changes auto-fixable через ruff (imports, parameter renames, deprecated API calls). Manual rewrites: (1) SubDAG → TaskGroup (rare в modern codebase); (2) FAB custom auth — use apache-airflow-providers-fab для compat или rewrite через AuthManager; (3) SLA — removed в 3.x (AIP-89), replace через Listener API duration monitoring; (4) Custom Flask views → FastAPI + React (если есть). Most production codebases — 1-2 weeks effort для migration code changes.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-05-q3",
+      "type": "multiple-choice",
+      "question": "DAG Versioning (AIP-63) и DAG Bundles (AIP-66) — что они дают?",
+      "options": [
+        { "id": "a", "text": "Performance" },
+        { "id": "b", "text": "DAG Versioning: history DAG в DB, UI shows old run vs old version (audit, debugging). DAG Bundles: pluggable DAG sources (Git/S3/HTTP) с per-bundle versioning, refresh intervals. Replaces gitSync sidecar — multi-source, no per-pod overhead" },
+        { "id": "c", "text": "Replaces scheduler" },
+        { "id": "d", "text": "Only UI changes" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-63 DAG Versioning — каждое DAG mod creates new version в DB. UI can show old run against old DAG (debugging crucial), compare versions, rollback. Storage cost. AIP-66 DAG Bundles — pluggable abstraction для DAG sources. Multiple bundles (production-git + experimental-s3 + dev-http) one Airflow instance, per-bundle refresh, per-bundle versioning. Replaces gitSync sidecar (модуль 15.03) — no per-pod overhead, multi-source. Both новые features 3.x — not breaking, additive.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m18-05-q4",
+      "type": "true-false",
+      "question": "В 2026 большинство production deployments на 2.10/2.11 LTS и могут отложить migration к 3.x до 2027.",
+      "correctAnswer": true,
+      "explanation": "2.11 LTS support до ~Q3 2027 — security fixes и patches. 2026 — большинство production остаётся на 2.x. 3.0 released early 2025, 3.1 late 2025 (HITL), 3.2 mid 2026 (Multi-Team) — ecosystem всё ещё maturing. Reasonable migration window: Q1-Q2 2027 когда 3.2+ stable, ecosystem (providers, tools) caught up, но time before 2.11 EOL. Spешка не нужна — major version upgrade — strategic planning event, не reactive.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

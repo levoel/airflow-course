@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/06-approval-workflow-sensor",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-06" },
+  "questions": [
+    {
+      "id": "airflow-m17-06-q1",
+      "type": "multiple-choice",
+      "question": "Approval sensor с 24h timeout — mode='poke' или mode='reschedule'?",
+      "options": [
+        { "id": "a", "text": "poke" },
+        { "id": "b", "text": "reschedule — критично для long timeouts. С poke worker занят 24h ждёт; 16 concurrent approvals × poke = exhaust pool. С reschedule worker free между pokes, TI re-scheduled" },
+        { "id": "c", "text": "Не важно" },
+        { "id": "d", "text": "exec" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Sensor modes: poke — worker busy lifetime sensor (long timeout = waste pool slots). reschedule — worker free между poke iterations, task re-scheduled через poke_interval. For approval workflows с 24h+ timeout — ОБЯЗАТЕЛЬНО reschedule. С poke 24h × 16 concurrent = 16 workers tied up forever. С reschedule worker используется только poke_interval seconds, then free. Production rule: timeout > 10 min = reschedule mode.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-06-q2",
+      "type": "multiple-choice",
+      "question": "Approval sensor poke_interval=300 (5 min), notify_approver на каждом poke. Какая проблема?",
+      "options": [
+        { "id": "a", "text": "Только performance" },
+        { "id": "b", "text": "Spam — Slack channel получает уведомление каждые 5 минут × 288 раз/день. Approver fatigue, real notifications missed. Fix: send notification только при ПЕРВОМ poke (INSERT ON CONFLICT DO NOTHING — check если new row inserted)" },
+        { "id": "c", "text": "Slack rate limit" },
+        { "id": "d", "text": "Нет проблемы" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Notification fatigue — anti-pattern. Production fix: при первом poke INSERT approval row INTO approvals ON CONFLICT (approval_id) DO NOTHING; если RETURNING shows row inserted (new), send notification. Subsequent pokes — row already exists, INSERT skipped, notification skipped. Approver получает ONE notification at start, потom тишина. Если хочется reminder — separate task (e.g., notify_if_pending > 1h).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-06-q3",
+      "type": "multiple-choice",
+      "question": "Airflow 3.1+ HITL operator vs 2.x sensor pattern — main benefit?",
+      "options": [
+        { "id": "a", "text": "Faster execution" },
+        { "id": "b", "text": "Built-in UI в Airflow для approvers (нет нужды в external app), role-based authorization через FAB/RBAC, Slack/Teams notifications out-of-box, audit trail в metadata DB. 1 line code вместо external table + sensor + UI + notifications" },
+        { "id": "c", "text": "Совместимость с 2.x" },
+        { "id": "d", "text": "Performance" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "HITL operator (3.1+) — major UX improvement. 2.x требует: build external approval app, design DB schema, write sensor, integrate Slack — 1-2 weeks work. 3.x: ApprovalOperator(task_id='x', prompt='...', timeout=..., notify_channels=['#approvals']) — 5 minutes setup. Plus built-in features: RBAC, audit, native UI integration. Migration path: 2.x sensor → 3.x HITL — preserve external approval table если нужно (HITL allows custom backends), or migrate в Airflow metadata.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-06-q4",
+      "type": "true-false",
+      "question": "Approval sensor с retries=3 имеет смысл — retries помогут если approver временно недоступен.",
+      "correctAnswer": false,
+      "explanation": "retries=0 для approval sensor — обязательно. Approval либо approved/rejected/expired — retry sensor не меняет approval state. Если sensor 'fails' (timeout — approver не decided за 24h), retry просто запустит sensor again и опять 24h ждать. Это infinite loop wasting resources. retries=0 + clear timeout semantic: timeout → AirflowFailException → DagRun fails → manual intervention или scheduled retry next day (если applicable). Retries для approval = nonsense.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

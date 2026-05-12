@@ -1,0 +1,89 @@
+{
+  "moduleId": "06-xcom-data-passing",
+  "title": "Module 06 Exam — XCom & Data Passing",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m06-exam",
+    "description": "6-question integrated exam for Module 06"
+  },
+  "questions": [
+    {
+      "id": "airflow-m06-exam-q1",
+      "type": "multiple-choice",
+      "question": "В production xcom table 500GB, scheduler queries тормозят. Корневая причина и mitigation?",
+      "options": [
+        { "id": "a", "text": "Нужен лучший CPU" },
+        { "id": "b", "text": "Default `do_xcom_push=True` для всех PythonOperator → каждый return автоматически в XCom; накопилось за месяцы. Mitigation: (1) `do_xcom_push=False` для tasks без data flow, (2) periodic `DELETE FROM xcom WHERE timestamp < now() - interval '90 days'`, (3) migration на Custom Backend / XComObjectStorageBackend для offload large XCom в S3, (4) включить xcom_cleanup_on_dagrun_delete" },
+        { "id": "c", "text": "Bug Postgres" },
+        { "id": "d", "text": "Перезагрузить scheduler" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "do_xcom_push=True по default + время → раздутая table. 10k DAG × 10 tasks × 1KB return × 24 runs/day = 2.4GB/day. Mitigation: (1) Audit DAGs — установить do_xcom_push=False где не нужно; (2) Scheduled cleanup задача; (3) FK CASCADE через cleanup DagRun (xcom_cleanup_on_dagrun_delete=True default); (4) Critical: migrate XCom > threshold в Object Storage backend — DB остаётся компактной, большой data в S3 (cheap). После migration table обычно усыхает в 100×.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-exam-q2",
+      "type": "multiple-choice",
+      "question": "TaskFlow DAG передаёт pandas DataFrame через @task return. Что произойдёт и как fix?",
+      "options": [
+        { "id": "a", "text": "Работает идеально" },
+        { "id": "b", "text": "TypeError при serialize: XComEncoder не знает pd.DataFrame. Default JSON serializer поддерживает только primitives + dict/list + datetime/Decimal/UUID. Fix: (1) convert to dict через df.to_dict('records'), (2) Custom XCom Backend с Parquet support, (3) reference passing — task пишет df в S3, возвращает URI string" },
+        { "id": "c", "text": "Сохраняется в pickle автоматически" },
+        { "id": "d", "text": "DataFrame teleportируется" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default JSON serializer падает на pandas — TypeError. Никогда не включайте pickle (RCE security risk). Три proper fix: (1) Quick: df.to_dict('records') — list of dicts JSON-serializable, но dtypes теряются и память×2-3; (2) Best: Custom XCom Backend с native Parquet — preserves dtypes, compression 5-10x, fast; (3) Alternative: reference passing — task сам пишет в S3, передаёт URI string. Reference passing более явно, custom backend более DRY.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-exam-q3",
+      "type": "multiple-choice",
+      "question": "XComObjectStorageBackend (2.8+) — какие 2 production-critical настройки кроме backend и path?",
+      "options": [
+        { "id": "a", "text": "scheduler_heartbeat_sec" },
+        { "id": "b", "text": "(1) xcom_objectstorage_threshold=1024-4096 (default -1 значит ВСЕ XCom в S3 — overkill для small status, hybrid с threshold намного лучше); (2) S3 lifecycle policy для auto-delete после 30-90 дней (backend НЕ удаляет files при cleanup DagRun, без policy bucket растёт infinitely). Бонус: xcom_objectstorage_compression=zstd для 4-7× ratio" },
+        { "id": "c", "text": "max_threads и parallelism" },
+        { "id": "d", "text": "dagbag_import_timeout" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Threshold -1 (default) = все XCom в Object Storage. Каждый pull = S3 latency 50-200ms. Лучше hybrid: threshold 1024-4096, small status в DB (sub-ms), large в S3. Lifecycle policy КРИТИЧНА — XCom files не очищаются automatically (в отличие от DB rows через FK CASCADE). Без policy через 6 месяцев — миллионы orphan blobs, S3 cost storm. Compression zstd — 4-7× ratio для JSON, fast CPU; gzip медленнее, lz4 huge на ratio.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m06-exam-q4",
+      "type": "multiple-choice",
+      "question": "TaskFlow `result = expensive_task()` + `result + 1` в DAG body. Какая проблема?",
+      "options": [
+        { "id": "a", "text": "Всё работает" },
+        { "id": "b", "text": "TypeError. В DAG body `expensive_task()` возвращает XComArg (placeholder), не value. XComArg не поддерживает arithmetic. Любая Python transformation должна быть внутри downstream @task — там получает resolved value. Альтернатива: .map(lambda x: x+1) для lazy простых ops" },
+        { "id": "c", "text": "Магически работает на runtime" },
+        { "id": "d", "text": "Это feature 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "expensive_task() в DAG body НЕ выполняется — возвращает XComArg, lazy reference. Python arithmetic над XComArg → TypeError. Правильно: создать downstream @task который получает value как argument и делает transformation. Альтернатива для простых case: `result.map(lambda x: x+1)` — это lazy MapXComArg, transformation применяется на resolve в worker. Но .map() lambda должна быть picklable (no closures). Для complex logic — лучше явный @task.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-exam-q5",
+      "type": "multiple-choice",
+      "question": "Custom XCom Backend deployment на K8s — какая частая production проблема?",
+      "options": [
+        { "id": "a", "text": "K8s не поддерживается" },
+        { "id": "b", "text": "Backend класс не доступен на ВСЕХ pod-ах (scheduler, webserver, worker, triggerer). При попытке deserialize XCom — ImportError, task failed, UI broken. Fix: embed backend в Python package (airflow-extensions), install через pip в общем Dockerfile, не полагаться на plugins/ folder mount" },
+        { "id": "c", "text": "kubectl bug" },
+        { "id": "d", "text": "Network policy" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "На K8s часто scheduler pod видит plugins/ folder через volume mount, но worker pod использует другой image без mount → ImportError при XCom operations. Это subtle — proof of concept работает на scheduler (UI показывает push), но downstream worker (другой pod) падает с ImportError при deserialize. Правильный pattern: backend → Python package → pip install в Dockerfile, image used везде. Helm chart values: убедитесь plugins mounted во все component pods если используете plugins/ approach.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-exam-q6",
+      "type": "true-false",
+      "question": "DAG `process.expand(item=huge_list)` где huge_list имеет 1500 элементов. Default `max_map_length=1024` приведёт к AirflowException. После увеличения до 2048 — DAG работает, но создаёт 1500 строк в task_instance и 1500 в xcom — scheduler critical section становится longer, UI slow, downstream aggregation memory blow.",
+      "correctAnswer": true,
+      "explanation": "Default max_map_length=1024 — soft safeguard. Превышение → AirflowException. Можно увеличить, но careful: 1500 mapped TI = 1500 task_instance rows + 1500 xcom rows. Каждый Phase 2 scheduler loop проходит больше TI → critical section longer. UI grid view 1500 cells → slow render. Downstream aggregation pulls 1500 XCom — memory blow (если каждый 10KB → 15MB). Mitigation: batch processing (один task обрабатывает N items вместо N tasks), streaming aggregation, или ограничение через max_active_tis_per_dag для control concurrency.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/08-migration-infrastructure",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-08" },
+  "questions": [
+    {
+      "id": "airflow-m18-08-q1",
+      "type": "multiple-choice",
+      "question": "В 3.x standalone DAG Processor — mandatory. Что это значит для migration?",
+      "options": [
+        { "id": "a", "text": "DAGs не работают" },
+        { "id": "b", "text": "Helm chart 2.x всегда deploys DAG Processor (no enable/disable). Migration prep: enable dagProcessor.enabled=true в 2.x уже — preview behavior. Capstone deployment (модуль 15.02) already configured. Verify performance не regression перед actual migration" },
+        { "id": "c", "text": "Single scheduler removed" },
+        { "id": "d", "text": "Required additional license" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Standalone DAG Processor отделяет parsing от scheduling main loop. В 2.x optional (default — внутри scheduler). В 3.x mandatory — Helm chart 2.x always deploys. Best practice: enable на 2.x сейчас (модуль 15.02 capstone deployment), test, verify performance. Smooth transition в migration — already running standalone, just Helm config change.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-08-q2",
+      "type": "multiple-choice",
+      "question": "Webserver Flask → FastAPI в 3.x — implications для custom webserver_config.py?",
+      "options": [
+        { "id": "a", "text": "No changes" },
+        { "id": "b", "text": "Renamed К apiServer в Helm values. Custom Flask views/blueprints broken — rewrite в React + FastAPI. FAB auth — use apache-airflow-providers-fab для backward compat (30 min setup), OR rewrite через AuthManager interface для native (major rewrite). Most teams choose FAB provider initially" },
+        { "id": "c", "text": "Все Flask code works as-is" },
+        { "id": "d", "text": "Switches к Django" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "FastAPI server + React UI replace Flask + FAB. Implications: (1) Helm: `webserver` → `apiServer` rename; (2) Custom Flask plugins (views, blueprints) — broken, need React + FastAPI rewrite (significant work); (3) Auth — was bundled FAB, now pluggable: `apache-airflow-providers-fab` drop-in compat OR new AuthManager (Okta, AWS IAM, custom). Production migration easiest path — install FAB provider для compat, then gradually migrate к native auth providers.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-08-q3",
+      "type": "multiple-choice",
+      "question": "REST API v1 → v2 — что делать с API consumers (monitoring tools, CI scripts)?",
+      "options": [
+        { "id": "a", "text": "Stop using API" },
+        { "id": "b", "text": "v1 deprecated в 3.x но supported 6-12 months parallel с v2 — graceful migration period. Update consumers gradually: use apache-airflow-client Python package (auto-generated client от OpenAPI spec) — handles auth, types. Bearer token auth preferred. Some response format changes (camelCase, _links HATEOAS)" },
+        { "id": "c", "text": "Immediate breaking change" },
+        { "id": "d", "text": "v2 не существует" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "REST API v1 → v2 — gradual migration. 3.x maintains v1 для 6-12 months parallel. Consumers can update incrementally. apache-airflow-client Python package — auto-generated client от FastAPI OpenAPI spec. Plus: typed responses, Bearer token auth (modern), camelCase responses (some breaking). Migration: update one consumer at a time, verify, deprecate v1 calls gradually. NO requirement to migrate всех day 1.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-08-q4",
+      "type": "true-false",
+      "question": "Helm chart 1.x values.yaml можно использовать directly с Helm chart 2.x без changes.",
+      "correctAnswer": false,
+      "explanation": "Helm chart 2.x (aligned с Airflow 3.x) имеет major key renames: webserver → apiServer, dags.gitSync → dagBundles, FAB-related keys differ. Direct copy fails. Process: (1) `helm get values airflow > values-1x.yaml` backup; (2) Manual translate к 2.x schema (Helm 2.x docs); (3) Test на staging; (4) Production upgrade. Some chart migration scripts may help, but expect manual work. Read Helm 2.x release notes thoroughly — many small changes.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

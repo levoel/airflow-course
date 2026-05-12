@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/04-integration-tests",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-04" },
+  "questions": [
+    {
+      "id": "airflow-m16-04-q1",
+      "type": "multiple-choice",
+      "question": "Чем `airflow tasks test` отличается от `airflow dags test`?",
+      "options": [
+        { "id": "a", "text": "Они идентичны" },
+        { "id": "b", "text": "`tasks test` — один task в memory, не пишет state в DB. `dags test` — full DagRun, создаёт реальный DagRun в DB, запускает all tasks sequentially по dependencies, XCom через DB. Оба inline без executor" },
+        { "id": "c", "text": "tasks test для test, dags test для production" },
+        { "id": "d", "text": "dags test поддерживает только Celery" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`airflow tasks test` — single task, fake context, no DB writes. Use case: rapid iteration на одном task. `airflow dags test` — full DagRun semantics: создаёт DagRun, запускает tasks по dependencies sequentially, XCom передаётся через DB, trigger_rules/retries/branching работают. Оба используют SequentialExecutor inline (не Celery/K8s). Production-стандарт для integration testing в CI — `airflow dags test`.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m16-04-q2",
+      "type": "multiple-choice",
+      "question": "Для CI integration tests — SQLite или Postgres?",
+      "options": [
+        { "id": "a", "text": "Только SQLite — быстрее" },
+        { "id": "b", "text": "Зависит: SQLite для quick local feedback (<5min CI), Postgres через testcontainers для production-like testing (нужен LocalExecutor, real concurrency). Hybrid — SQLite на каждый PR, Postgres на main merge" },
+        { "id": "c", "text": "Только Postgres" },
+        { "id": "d", "text": "Не важно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "SQLite — fast (in-memory или file), но: only SequentialExecutor (нет real concurrency), different SQL dialect чем production Postgres. Postgres через testcontainers-python — same engine как production, supports LocalExecutor, slower setup (5-10s docker pull). Production strategy: SQLite на каждый PR commit (fast feedback <5min), Postgres-based integration tests на main merge + nightly (full coverage).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-04-q3",
+      "type": "multiple-choice",
+      "question": "Для mocking AWS services в integration tests — что использовать?",
+      "options": [
+        { "id": "a", "text": "Real AWS credentials" },
+        { "id": "b", "text": "moto — drop-in mock для всего AWS SDK. Decorator @mock_aws или context manager. In-memory S3/SQS/DynamoDB. Airflow S3Hook видит mocked service. Тоже testcontainers-python (wiremock для HTTP APIs)" },
+        { "id": "c", "text": "Только unit-tests с mocked S3Hook" },
+        { "id": "d", "text": "Localstack обязательно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "moto — стандарт для AWS mocking в Python tests. @mock_aws decorator intercepts boto3 calls к AWS — все API работают в memory. Airflow S3Hook использует boto3 → видит mocked S3. Не нужны AWS credentials в CI. Альтернативы: LocalStack (heavier, real-like AWS environment), testcontainers-aws (через LocalStack container). Для HTTP APIs — wiremock через testcontainers. Никогда не используйте real AWS в CI — security risk + cost + slow.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-04-q4",
+      "type": "true-false",
+      "question": "`airflow dags test` пишет state DagRun в metadata DB и не cleans up автоматически между tests.",
+      "correctAnswer": true,
+      "explanation": "`airflow dags test` создаёт реальный DagRun в DB. Tests с одним DAG run на одной execution_date — повторный запуск может failed: 'DagRun already exists'. Solution — pytest fixture autouse=True который cleans DagRuns: query(DagRun).delete() между tests. Без cleanup tests становятся interdependent — order matters, flaky. Также: airflow db reset перед integration test suite — clean state guarantee.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

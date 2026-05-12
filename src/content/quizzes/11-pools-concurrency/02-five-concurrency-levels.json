@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "11-pools-concurrency/02-five-concurrency-levels",
+  "moduleId": "11-pools-concurrency",
+  "_meta": { "idPrefix": "airflow-m11-02" },
+  "questions": [
+    {
+      "id": "airflow-m11-02-q1",
+      "type": "multiple-choice",
+      "question": "Какой из пяти уровней concurrency проверяется первым и блокирует scheduling даже если все остальные свободны?",
+      "options": [
+        { "id": "a", "text": "Pool slots — потому что row-level lock atomic" },
+        { "id": "b", "text": "[core] parallelism — cluster-wide потолок на сумму running + queued TI. Если parallelism - running_count_global ≤ 0, scheduler не пытается ничего enqueue, даже если pool пустой" },
+        { "id": "c", "text": "max_active_runs_per_dag — проверяется при создании DagRun" },
+        { "id": "d", "text": "max_active_tis_per_dag — самый строгий уровень" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В scheduler loop первым считается `cluster_open = parallelism - running_count_global`. Если ≤0 — return [] и scheduling skip. Только когда cluster_open > 0 идёт перебор кандидатов с проверкой levels 2-5. Default [core] parallelism = 32 — слишком мало для production, типично 128-512.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-02-q2",
+      "type": "multiple-choice",
+      "question": "DAG с fan-out на 30 mapped tasks. max_active_tasks_per_dag=16 (default), pool 'warehouse' slots=8. Сколько mapped TI running одновременно?",
+      "options": [
+        { "id": "a", "text": "30 — fan-out не ограничен" },
+        { "id": "b", "text": "16 — max_active_tasks bottleneck" },
+        { "id": "c", "text": "8 — pool slots самый узкий gate, выигрывает в AND-цепочке" },
+        { "id": "d", "text": "1 — sequential default" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Все пять уровней AND. cluster ok, max_active_runs не bottleneck (1 DagRun), max_active_tis не задан, max_active_tasks пропускает 16, но pool slots=8 — финальный gate. 8 running, 8 queued (consumed slot не дали), 14 застряли level 2. Чтобы реально 30 параллельно — поднять и max_active_tasks≥30 и pool slots≥30.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-02-q3",
+      "type": "multiple-choice",
+      "question": "Backfill за 30 дней — но видите только 16 active DagRun одновременно. Почему?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow" },
+        { "id": "b", "text": "[core] max_active_runs_per_dag = 16 default ограничивает сколько DagRun одного DAG могут быть running одновременно. Backfill за период подчиняется этому. Override через @dag(max_active_runs=30) или config" },
+        { "id": "c", "text": "Cluster parallelism достигнут" },
+        { "id": "d", "text": "Backfill всегда sequential" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Уровень 3 — max_active_runs_per_dag, default 16. Это самый частый 'забытый' ограничитель при backfill. Override per-DAG через `@dag(max_active_runs=30)`. Часто хочется max_active_runs=1 для sequential ETL с side effects, и 30+ для idempotent independent runs.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-02-q4",
+      "type": "true-false",
+      "question": "max_active_tis_per_dag=1 на task 'write_orders' гарантирует, что только одна копия этой function запущена одновременно — даже если она дублирована в трёх разных DAG.",
+      "correctAnswer": false,
+      "explanation": "Per-DAG counter, не глобальный. Если та же функция (через `@task` или PythonOperator) в трёх разных DAG — у каждой свой счётчик. Каждый DAG может иметь 1 running копию = 3 одновременных. Для cross-DAG mutex единственный способ — pool с slots=1. Это распространённое заблуждение.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

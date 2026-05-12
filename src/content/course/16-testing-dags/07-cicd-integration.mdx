@@ -1,0 +1,541 @@
+---
+title: "CI/CD integration — GitHub Actions, GitLab CI, pre-commit, ruff, upgrade-check"
+description: "Полный CI/CD pipeline для Airflow: GitHub Actions workflow с ruff, pytest, airflow upgrade-check, DAG validation. GitLab CI patterns. Pre-commit hooks. Best practices"
+order: 7
+difficulty: "advanced"
+estimatedTime: 22
+topics: ["CI/CD", "GitHub Actions", "GitLab CI", "ruff", "Pre-commit", "upgrade-check"]
+---
+
+# CI/CD integration — GitHub Actions, GitLab CI, pre-commit, ruff, upgrade-check
+
+CI/CD — это место, где testing strategy становится governance. Каждый commit проходит через pipeline: linting → unit tests → DAG validity → integration tests. Без CI testing existed только on paper. С хорошим CI — каждый PR — это automated verification, что код production-ready.
+
+Этот урок — production-grade CI/CD workflow для Airflow проектов: GitHub Actions (most common), GitLab CI patterns, pre-commit hooks для local feedback, ruff для linting/formatting, `airflow upgrade-check` для readiness checks при migration prep.
+
+---
+
+## Структура pipeline
+
+Production-grade Airflow CI/CD pipeline имеет 5 stages:
+
+```
+PR opened
+  ↓
+Stage 1: Pre-commit (local + CI)         ~5s
+  - ruff check
+  - ruff format
+  - yaml validation
+  ↓
+Stage 2: Static analysis                  ~30s
+  - mypy type check
+  - bandit security scan
+  - airflow upgrade-check
+  ↓
+Stage 3: DAG validity                    ~30s
+  - test_no_import_errors
+  - structural tests
+  ↓
+Stage 4: Unit tests                      ~2-5min
+  - Mocked operators
+  - Factory edge cases
+  - Coverage report
+  ↓
+Stage 5: Integration tests              ~10-20min
+  - airflow tasks test для critical DAGs
+  - testcontainers postgres
+  - moto/wiremock для external services
+  ↓
+[PR can be merged]
+  ↓
+Stage 6 (post-merge): Deploy
+  - astro deploy / kubectl apply
+```
+
+Stages 1-4 — **blocking** на каждом PR push. Stage 5 — на main branch и nightly (slow). Stage 6 — на main merge.
+
+---
+
+## GitHub Actions — complete workflow
+
+```yaml
+# .github/workflows/ci.yml
+name: Airflow CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AIRFLOW_VERSION: "2.10.5"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  pre-commit:
+    name: Pre-commit checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: pre-commit/action@v3.0.1
+
+  ruff:
+    name: Ruff linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v1
+        with:
+          version: "0.6.0"
+          args: "check --output-format=github ."
+      - name: Ruff format check
+        uses: astral-sh/ruff-action@v1
+        with:
+          args: "format --check ."
+
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    needs: [ruff]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install "apache-airflow==${{ env.AIRFLOW_VERSION }}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${{ env.AIRFLOW_VERSION }}/constraints-${{ env.PYTHON_VERSION }}.txt"
+          pip install -r requirements.txt
+          pip install mypy bandit
+
+      - name: mypy
+        run: mypy dags/ plugins/ --ignore-missing-imports
+        continue-on-error: true  # warnings only, not blocking
+
+      - name: bandit security scan
+        run: bandit -r dags/ plugins/ -ll -ii
+
+      - name: airflow upgrade-check
+        run: |
+          airflow db init
+          airflow upgrade-check 2>&1 | tee upgrade-check.log
+          # Exit non-zero если есть deprecation warnings
+          if grep -q "WARNING" upgrade-check.log; then
+            echo "::warning::Found upgrade warnings"
+          fi
+
+  dag-validity:
+    name: DAG validity tests
+    runs-on: ubuntu-latest
+    needs: [ruff]
+    env:
+      AIRFLOW_HOME: /tmp/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////tmp/airflow/airflow.db
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install "apache-airflow==${{ env.AIRFLOW_VERSION }}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${{ env.AIRFLOW_VERSION }}/constraints-${{ env.PYTHON_VERSION }}.txt"
+          pip install -r requirements.txt
+          pip install pytest pytest-mock pytest-cov
+
+      - name: Initialize Airflow
+        run: airflow db init
+
+      - name: Run DAG validity tests
+        run: pytest tests/test_dag_validity.py -v --tb=short
+
+      - name: Run airflow dags list-import-errors
+        run: |
+          if [ -n "$(airflow dags list-import-errors --output json | jq -r '.[] | .filename')" ]; then
+            airflow dags list-import-errors
+            exit 1
+          fi
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: [dag-validity]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install "apache-airflow==${{ env.AIRFLOW_VERSION }}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${{ env.AIRFLOW_VERSION }}/constraints-${{ env.PYTHON_VERSION }}.txt"
+          pip install -r requirements.txt
+          pip install pytest pytest-mock pytest-cov hypothesis moto
+
+      - name: Run unit tests with coverage
+        env:
+          AIRFLOW_HOME: /tmp/airflow
+          AIRFLOW__CORE__UNIT_TEST_MODE: "True"
+        run: |
+          airflow db init
+          pytest tests/unit/ \
+            --cov=dags --cov=plugins \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --tb=short
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+
+  integration-tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    if: github.event_name == 'push'  # Only on push to main, not on PRs
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: airflow
+          POSTGRES_PASSWORD: airflow
+          POSTGRES_DB: airflow_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+
+    env:
+      AIRFLOW_HOME: /tmp/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://airflow:airflow@localhost:5432/airflow_test
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install
+        run: |
+          pip install "apache-airflow==${{ env.AIRFLOW_VERSION }}" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${{ env.AIRFLOW_VERSION }}/constraints-${{ env.PYTHON_VERSION }}.txt"
+          pip install -r requirements.txt
+          pip install pytest moto wiremock-py
+
+      - name: airflow db init
+        run: airflow db init
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --timeout=600
+
+      - name: Run airflow dags test
+        run: |
+          for dag in $(airflow dags list -o json | jq -r '.[].dag_id' | head -5); do
+            airflow dags test "$dag" 2026-05-12 || exit 1
+          done
+
+  deploy:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy via astro CLI
+        run: |
+          curl -sSL install.astronomer.io | sudo bash -s
+          astro deploy --deployment-name staging
+        env:
+          ASTRONOMER_KEY_ID: ${{ secrets.ASTRO_KEY_ID }}
+          ASTRONOMER_KEY_SECRET: ${{ secrets.ASTRO_KEY_SECRET }}
+```
+
+---
+
+## Pre-commit hooks
+
+Pre-commit hooks дают **локальный** feedback за секунды — раньше чем CI:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  # Ruff — fast linting + formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # YAML validation
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-c=.yamllint.yml]
+
+  # Built-in hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: check-case-conflict
+
+  # Airflow-specific
+  - repo: local
+    hooks:
+      - id: dag-validity
+        name: DAG validity check
+        entry: python -m pytest tests/test_dag_validity.py -x -q
+        language: system
+        files: ^(dags|plugins)/.*\.py$
+        pass_filenames: false
+
+      - id: airflow-upgrade-check
+        name: Airflow upgrade-check
+        entry: bash -c 'airflow db init && airflow upgrade-check 2>&1 | grep -i warning && exit 1 || exit 0'
+        language: system
+        files: ^(dags|plugins|requirements\.txt)$
+        pass_filenames: false
+        stages: [manual]  # Run manually, not auto (slow)
+```
+
+Установка:
+
+```bash
+pip install pre-commit
+pre-commit install
+# Hooks теперь автоматически запускаются на git commit
+```
+
+---
+
+## Ruff — replace black + flake8 + isort
+
+`ruff` — Rust-implemented linter, 100x быстрее legacy tools. Заменяет black, flake8, isort, pyupgrade, pydocstyle:
+
+```toml
+# pyproject.toml
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["migrations", ".airflow"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "AIR",  # airflow specific (added in ruff 0.4+)
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults (Airflow uses this)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"dags/**" = ["E402"]  # module level import not at top — DAGs могут иметь conditional imports
+"tests/**" = ["F401", "F811"]  # unused imports/redefinition в tests OK
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+```
+
+**Airflow-specific ruff rules** (AIR301, AIR302):
+- `AIR301` — deprecated airflow imports (нужно переименовать на 3.x)
+- `AIR302` — deprecated APIs (execution_date, etc)
+
+```bash
+# Найти все AIR301/302 violations
+ruff check --select AIR301,AIR302 dags/
+
+# Auto-fix
+ruff check --fix --select AIR301 dags/
+```
+
+Это critical для preparation к 3.x migration (модуль 18.06).
+
+---
+
+## airflow upgrade-check
+
+`airflow upgrade-check` — built-in command для readiness:
+
+```bash
+# Check для текущей версии (deprecation warnings)
+airflow upgrade-check
+
+# Check для targeted version (например для 3.x prep)
+airflow upgrade-check --to-version 3.0
+```
+
+Output example:
+
+```
+WARNING: dags/orders_etl.py:15 - usage of `execution_date` is deprecated, use `logical_date`
+WARNING: dags/old_pattern.py:23 - SubDagOperator is removed in 3.0
+WARNING: plugins/old_plugin.py:8 - airflow.contrib is removed in 3.0
+```
+
+В CI:
+
+```yaml
+- name: Airflow upgrade-check
+  run: |
+    airflow upgrade-check 2>&1 | tee upgrade.log
+    # Count warnings — fail если > 0 (strict mode)
+    WARNINGS=$(grep -c "WARNING" upgrade.log || true)
+    if [ "$WARNINGS" -gt 0 ]; then
+      echo "::warning::Found $WARNINGS upgrade warnings"
+      # exit 1  # Uncomment for strict mode
+    fi
+```
+
+---
+
+## GitLab CI patterns
+
+Структура аналогичная, синтаксис другой:
+
+```yaml
+# .gitlab-ci.yml
+stages:
+  - lint
+  - test
+  - integration
+  - deploy
+
+variables:
+  AIRFLOW_VERSION: "2.10.5"
+  PYTHON_VERSION: "3.11"
+  AIRFLOW_HOME: /tmp/airflow
+
+.python_env: &python_env
+  image: python:3.11
+  before_script:
+    - pip install "apache-airflow==${AIRFLOW_VERSION}" \
+        --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+    - pip install -r requirements.txt
+
+ruff:
+  <<: *python_env
+  stage: lint
+  script:
+    - pip install ruff==0.6.0
+    - ruff check .
+    - ruff format --check .
+
+dag-validity:
+  <<: *python_env
+  stage: test
+  script:
+    - pip install pytest
+    - airflow db init
+    - pytest tests/test_dag_validity.py -v
+
+unit-tests:
+  <<: *python_env
+  stage: test
+  needs: [dag-validity]
+  script:
+    - pip install pytest pytest-cov pytest-mock
+    - airflow db init
+    - pytest tests/unit/ --cov=dags --cov-report=xml
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+integration:
+  <<: *python_env
+  stage: integration
+  needs: [unit-tests]
+  services:
+    - postgres:15
+  variables:
+    POSTGRES_USER: airflow
+    POSTGRES_DB: airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql://airflow@postgres:5432/airflow"
+  script:
+    - airflow db init
+    - pytest tests/integration/ --timeout=600
+
+deploy-staging:
+  stage: deploy
+  needs: [integration]
+  only: [main]
+  script:
+    - astro deploy --deployment-name staging
+```
+
+---
+
+## Production gotchas
+
+**Constraints файл — must-have в CI**. Без `--constraint` Airflow install может pick incompatible package versions. Используйте official constraints file:
+
+```bash
+pip install "apache-airflow==2.10.5" \
+  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
+```
+
+**Кэширование dependencies**. `actions/setup-python@v5` имеет `cache: 'pip'` — это сохраняет ~30s per job. Без кэша pip install Airflow занимает 1-2 минуты.
+
+**Concurrency groups в GitHub Actions**. `concurrency.group` с `cancel-in-progress: true` отменяет старые runs когда новый push в тот же PR — экономит CI minutes.
+
+**Не запускайте integration tests на каждый PR**. Slow, не нужны для каждого commit. Используйте `if: github.event_name == 'push'` или path filters.
+
+**Codecov / coverage badge — optional but valuable**. Coverage в PR comments показывает что новый код tested. Mandatory >80% coverage для critical modules.
+
+**Secrets management**. Не commit API keys в `.github/workflows/`. Использовать `secrets.X` — GitHub Encrypted Secrets. Для OIDC (preferred) — `permissions: id-token: write` + cloud trust relationship.
+
+**Pre-commit и CI — same hooks**. Использовать pre-commit/action@v3 в CI запускает те же hooks, что локально. Гарантирует, что local `git commit` и CI consistent.
+
+**`airflow upgrade-check` warnings — не сразу strict**. На существующем codebase запуск `upgrade-check` даст десятки warnings. Strategy: (1) baseline текущие warnings; (2) add new warning ALERT в CI (warning, не block); (3) Постепенно убирать существующие; (4) После всех fix — enable strict mode (`exit 1` при warning).
+
+---
+
+<KnowledgeCheck
+  question="Команда хочет быть готовой к migration на Airflow 3.x в течение года. Какой CI/CD setup максимизирует readiness — что должно быть в pipeline для smooth миграции?"
+  answer="Comprehensive readiness pipeline для 3.x migration: (1) **ruff rules AIR301/AIR302 enforced** — `ruff check --select AIR301,AIR302 dags/` в CI как blocking step. AIR301 detect deprecated imports (`from airflow.decorators` → нужно `from airflow.sdk` в 3.x), AIR302 detect deprecated APIs (execution_date → logical_date). Auto-fix через `--fix` для simple cases; manual review для complex; (2) **airflow upgrade-check --to-version 3.0** — built-in command, запускается в CI. Найдёт breaking changes specific для 3.x. Initially — warning, не block. Постепенно — strict mode когда warnings 0; (3) **Provider version pinning** — `requirements.txt` с pinned versions всех providers + automated PR через Dependabot для periodic upgrade. Helps catch provider breaking changes отдельно от Airflow upgrade; (4) **DAG validity test для Datasets/Assets** — Datasets в 2.x rename в Assets в 3.x. Write tests, которые validate что custom code не имports `from airflow import Dataset` (deprecated 3.x), а используют abstraction; (5) **Tests для standalone DAG processor** — в 3.x DAG processor mandatory. Test что DAGs работают с `standalone_dag_processor=True` в staging уже сейчас; (6) **FAB removal preparation** — если используете custom webserver_config.py с Flask-AppBuilder hooks — write tests, переписывайте на pluggable auth providers; (7) **Staging environment на 2.11 LTS** — production на 2.10, staging уже на 2.11. 2.11 включает migration helpers + большую часть warnings AIR301/302 active; (8) **Quarterly upgrade drill** — раз в квартал на staging запустить full upgrade 2.x → 3.x dry-run; document timing + issues. Goals: к moment of real migration ALL warnings resolved, codebase already работает в 3.x-compatible style, real migration становится rolling upgrade без architectural surprises. Без этой готовности migration — pain point на 6-12 месяцев. С этой готовностью — week-long planned event. Module 18 рассматривает full migration playbook."
+/>

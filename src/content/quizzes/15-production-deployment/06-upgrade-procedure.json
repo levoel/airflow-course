@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/06-upgrade-procedure",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-06" },
+  "questions": [
+    {
+      "id": "airflow-m15-06-q1",
+      "type": "multiple-choice",
+      "question": "Blue/green deployment для Airflow upgrade — что критично сделать ДО Phase 2 (DB migration)?",
+      "options": [
+        { "id": "a", "text": "Удалить blue namespace" },
+        { "id": "b", "text": "Backup metadata DB (RDS snapshot + pg_dump). Migrations необратимы без restore — alembic downgrade в production не рекомендуется" },
+        { "id": "c", "text": "Очистить logs" },
+        { "id": "d", "text": "Стоп всем DAGs forever" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Migrations необратимы — после airflow db migrate схема обновлена. Alembic downgrade scripts существуют, но в production не используются (могут потерять данные новых колонок). Single source of rollback — restore из snapshot. Поэтому Phase 0 (Pre-upgrade) обязательно включает RDS snapshot + pg_dump. Pause DAGs тоже важен, но не критичен — главное backup.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-06-q2",
+      "type": "multiple-choice",
+      "question": "Rollback через 6 часов после успешного cutover — что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Helm rollback вернёт всё назад" },
+        { "id": "b", "text": "Restore DB из snapshot теряет 6 часов состояния — все DagRuns, XCom, logs, созданные после snapshot. Rollback после cutover крайне нежелателен — лучше fix forward (hotfix на green)" },
+        { "id": "c", "text": "Никаких проблем" },
+        { "id": "d", "text": "Helm --atomic решает это" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "После Phase 4 (Unpause + DagRuns на green) DB содержит данные новой версии — все DagRuns/TI/XCom за hold period. Restore из snapshot откатит DB на момент перед migration — потеря всех этих данных. Helm --atomic откатывает только K8s manifests, не DB. Production правило: предпочитайте fix forward. Если bug — hotfix на green, не rollback. Поэтому критично тестирование на staging минимум 1 неделю.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m15-06-q3",
+      "type": "multiple-choice",
+      "question": "Provider compatibility при minor Airflow upgrade — что проверять?",
+      "options": [
+        { "id": "a", "text": "Ничего, провайдеры всегда совместимы" },
+        { "id": "b", "text": "Major provider versions (apache-airflow-providers-amazon 8.x → 9.x) могут содержать breaking changes в operators. Pin versions в requirements.txt, test thoroughly. Не upgrade провайдеры одновременно с Airflow" },
+        { "id": "c", "text": "Только Python version" },
+        { "id": "d", "text": "Только Helm chart version" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Провайдеры имеют own versioning, separate от Airflow. Major bump провайдера может сломать operators (deprecated params removed, signature changed). Production practice: (1) Pin provider versions в requirements.txt; (2) При Airflow upgrade — НЕ upgrade провайдеры одновременно; (3) Сначала Airflow upgrade на minor, потом отдельно provider upgrade с тестированием. Это уменьшает blast radius — если что-то ломается, знаем что именно.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-06-q4",
+      "type": "true-false",
+      "question": "Patch upgrade 2.10.4 → 2.10.5 можно сделать через rolling restart без downtime и без db migrate.",
+      "correctAnswer": true,
+      "explanation": "Patch versions (third number) содержат только bugfixes — без schema changes, без deprecations. Rolling restart всех components через kubectl rollout restart deployment — pods обновляются по одному, scheduler/webserver HA продолжают работать. db migrate не нужен (alembic version unchanged). Это namely zero-downtime upgrade. Minor (2.10 → 2.11) и major (2.x → 3.x) требуют blue/green + db migrate.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

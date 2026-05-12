@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "11-pools-concurrency/06-slot-contention-scenarios",
+  "moduleId": "11-pools-concurrency",
+  "_meta": { "idPrefix": "airflow-m11-06" },
+  "questions": [
+    {
+      "id": "airflow-m11-06-q1",
+      "type": "multiple-choice",
+      "question": "Pool exhausted (used_slots = slots), tasks застряли в scheduled. Первый шаг diagnosis?",
+      "options": [
+        { "id": "a", "text": "Restart scheduler" },
+        { "id": "b", "text": "SELECT dag_id, task_id, state, NOW() - start_date AS duration FROM task_instance WHERE pool='<pool>' AND state IN ('running', 'queued') ORDER BY start_date — увидеть конкретные TI, длительности, hostname. Так можно понять: stuck/zombie vs healthy long-running" },
+        { "id": "c", "text": "Удалить pool" },
+        { "id": "d", "text": "Поднять parallelism" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Эссенциальный SQL для on-call. Возможные root causes: (1) zombie TI (hostname на dead worker) — clear; (2) healthy long-running — поднять slots или ждать; (3) внешний resource throttled — Snowflake congestion, debugging там. Не дёргайте scheduler restart без data — сейчас не bug, а normal pool exhaustion.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-06-q2",
+      "type": "multiple-choice",
+      "question": "Self-pool deadlock в DAG с max_active_tasks=1 — какой fix?",
+      "options": [
+        { "id": "a", "text": "Restart Airflow" },
+        { "id": "b", "text": "Использовать async sensors (через triggerer, mode='reschedule'/Deferrable) — TI уходит в deferred state, освобождает slot. Или поднять max_active_tasks до 2+. Или использовать pool с slots=1 + include_deferred=False вместо max_active_tasks=1 — поле deferred не считается" },
+        { "id": "c", "text": "Удалить sensor task" },
+        { "id": "d", "text": "Set state='success' manually" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Self-deadlock: sensor с PokeSensor занимает единственный concurrency slot. External job не может trigger downstream task — нет свободного slot. Async sensors решают: deferred state не занимает worker, slot освобождается. Pool с include_deferred=False — alternative implementation deferred-friendly.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-06-q3",
+      "type": "multiple-choice",
+      "question": "TI в state 'queued' уже 20 минут, не переходит в 'running'. Где проблема?",
+      "options": [
+        { "id": "a", "text": "Scheduler — он передал TI executor" },
+        { "id": "b", "text": "Executor не подхватывает: (1) CeleryExecutor — worker не subscribed на нужный queue, или Redis broker недоступен; (2) KubernetesExecutor — pod creation failure (quota / image pull); (3) executor parallelism reached. Diagnostics: celery inspect / kubectl get pods" },
+        { "id": "c", "text": "DB lock contention" },
+        { "id": "d", "text": "Это нормально" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "queued = scheduler уже всё сделал, передал executor через broker. Если не переходит в running — проблема на стороне executor: worker не доступен, broker недоступен, K8s pod в pending. Diagnostics через `celery inspect active_queues`, `kubectl describe pod`. ti.queue должен совпадать с worker --queues flag.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-06-q4",
+      "type": "true-false",
+      "question": "Pool с include_deferred=True означает: TI в state='deferred' (через async sensor) ЗАНИМАЕТ pool slot — это полезно когда pool ограничивает 'количество lifecycle TI' (например, RDS connections), не 'worker compute'.",
+      "correctAnswer": true,
+      "explanation": "Default include_deferred=False: deferred sensors не занимают slot (нет worker compute → нет потребления). С =True: deferred тоже counted — slot держится. Use case: pool ограничивает RDS connection count (deferred sensor может держать connection через webhook listener). Default подходит большинству — async sensors используют triggerer event loop, не worker.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "moduleId": "11-pools-concurrency",
+  "title": "Module 11 Exam — Pools и Concurrency",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m11-exam",
+    "description": "6-question integrated exam for Module 11"
+  },
+  "questions": [
+    {
+      "id": "airflow-m11-exam-q1",
+      "type": "multiple-choice",
+      "question": "Пять уровней concurrency Airflow работают как:",
+      "options": [
+        { "id": "a", "text": "OR — выигрывает любой разрешивший" },
+        { "id": "b", "text": "AND — TI запустится только если ВСЕ пять (cluster parallelism, max_active_tasks_per_dag, max_active_runs_per_dag, max_active_tis_per_dag, pool slots) разрешают. Самый узкий — bottleneck" },
+        { "id": "c", "text": "Только pool slots работает" },
+        { "id": "d", "text": "Последовательно — fail-fast на первом" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Все пять — AND ограничения. Scheduler в каждом тике для каждого scheduled TI проверяет все пять условий. Если any один блокирует — TI остаётся scheduled. Production debug — sequentially проверять все 5: cluster parallelism, max_active_tasks, max_active_runs, max_active_tis, pool slots через SQL queries к metadata DB.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-exam-q2",
+      "type": "multiple-choice",
+      "question": "Pool decision происходит внутри critical section scheduler — что это даёт?",
+      "options": [
+        { "id": "a", "text": "Ничего особенного — обычный mutex" },
+        { "id": "b", "text": "Row-level lock на slot_pool (SELECT FOR UPDATE NOWAIT) обеспечивает atomicity. Even multi-scheduler HA не может over-allocate — два scheduler физически не могут одновременно решать pool slots availability. Это фундаментальная гарантия отсутствия race условий в pool" },
+        { "id": "c", "text": "Это блокирует worker" },
+        { "id": "d", "text": "Просто оптимизация" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical section — самая защищённая часть Airflow. NOWAIT: второй scheduler сразу получает lock_not_available и skip tick, никаких deadlocks. Aggregate pool usage + UPDATE TI state в одной транзакции — атомарно. Это почему pool — самый правильный уровень для protection внешних ресурсов.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-exam-q3",
+      "type": "multiple-choice",
+      "question": "Production: Snowflake L warehouse 8 credits, mixed workload — 50 lightweight dashboards + 4 heavy ETL. Лучшая pool архитектура?",
+      "options": [
+        { "id": "a", "text": "Один pool slots=8 — соответствует MAX_CONCURRENCY_LEVEL" },
+        { "id": "b", "text": "Один pool slots=50 — пусть все идут" },
+        { "id": "c", "text": "Split: snowflake_l_read (slots=16) для dashboards + snowflake_l_etl (slots=4) для ETL + опционально snowflake_l_ddl (slots=1) для DDL. Isolation read/ETL, predictable cost, scale read без касания ETL" },
+        { "id": "d", "text": "Все в default_pool" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Split per query class — production pattern. Total slots может превышать MAX_CONCURRENCY_LEVEL — light queries весят мало, Snowflake priority queues справится. Isolation: heavy ETL не блокирует read dashboards, read traffic не положит warehouse heavy. Plus naming convention `<resource>_<instance>_<class>` — самодокументирующее.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-exam-q4",
+      "type": "multiple-choice",
+      "question": "weight_rule='downstream' (default) — какая контр-интуитивная ловушка?",
+      "options": [
+        { "id": "a", "text": "Глюк Airflow" },
+        { "id": "b", "text": "Корни DAG с большим хвостом (fan-out) имеют огромный effective priority. DAG из 30 mapped tasks (priority=1) — корневая task effective=~32. Короткий DAG (3 tasks) корневая ~3. Длинный DAG всегда первый в pool — даже если короткий SLA-критичен. Mitigation: explicit высокий priority_weight на critical task, или weight_rule='absolute'" },
+        { "id": "c", "text": "Priority weight не работает" },
+        { "id": "d", "text": "Это эквивалентно absolute" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Downstream bias — корни с длинным хвостом выигрывают cross-DAG в shared pool. Это design (без корня DAG не двинется), но counter-intuitive для production SLA. Fix: либо переключить weight_rule='absolute' на critical DAG через default_args (predictable ranking), либо explicit поднять priority_weight на critical корень.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-exam-q5",
+      "type": "multiple-choice",
+      "question": "TI 30 минут в state='queued', не переходит в 'running'. Где НЕ нужно искать?",
+      "options": [
+        { "id": "a", "text": "В scheduler — он уже сделал свою работу (state=queued), передал executor" },
+        { "id": "b", "text": "В executor / broker — CeleryExecutor worker может быть не subscribed на queue, Redis недоступен, KubernetesExecutor pod в pending" },
+        { "id": "c", "text": "В pool — pool уже разрешил (state=queued)" },
+        { "id": "d", "text": "В worker concurrency — может upper limit reached" }
+      ],
+      "correctAnswer": "a",
+      "explanation": "scheduled → queued — scheduler работа закончена (через pool gate, parallelism check). queued → running — executor работа. Не нужно смотреть scheduler / pool. Diagnostics: celery inspect active_queues, kubectl get pods, redis-cli ping. Worker --queues flag должен совпадать с ti.queue (default 'default').",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-exam-q6",
+      "type": "true-false",
+      "question": "Pool slots — единственный уровень concurrency, который применяется cross-DAG. max_active_tasks_per_dag, max_active_runs_per_dag, max_active_tis_per_dag — все per-DAG. Поэтому для cross-DAG mutex (например, единственный writer в Snowflake) единственный способ — pool с slots=1.",
+      "correctAnswer": true,
+      "explanation": "max_active_*_per_dag — counters внутри одного DAG. Если та же функция в 3 разных DAG — у каждой свой счётчик. Cluster parallelism — это потолок, не mutex. Pool — единственный shared quota across deployment. Production pattern: pool с slots=1 для critical writer mutex (DDL, single-row-update в UNIQUE table). Pool naming: snowflake_l_ddl, rds_orders_writer.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

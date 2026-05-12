@@ -1,0 +1,417 @@
+---
+title: "Authentication: basic, session, kerberos, custom backend"
+description: "API auth backends в 2.x, FAB permissions, rate limiting, JWT через custom impl"
+order: 3
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["Authentication", "FAB", "Basic Auth", "Kerberos", "JWT", "Rate Limiting"]
+---
+
+# Authentication: basic, session, kerberos, custom backend
+
+Без правильной аутентификации REST API становится либо дырой в безопасности (anonymous access), либо bottleneck-ом (heavy DB lookups на каждый request). В Airflow 2.x за auth отвечает Flask-AppBuilder (FAB) и набор pluggable auth backends, который вы конфигурируете в `airflow.cfg`.
+
+Этот урок — детальный разбор каждого backend, его внутренней механики, performance implications и правильного выбора под use case.
+
+---
+
+## Архитектура auth в Airflow 2.x
+
+<DiagramContainer title="Authentication & authorization pipeline" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="HTTP request"
+        tooltip="Любой запрос на /api/v1/* проходит через Flask-AppBuilder middleware. Содержит заголовки: Authorization, Cookie, X-Forwarded-User (для Kerberos/SSO)."
+      >
+        GET /api/v1/dags
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="auth_backends chain" />
+    <FlowRow>
+      <DataBox
+        label="Auth backend 1: basic_auth"
+        tooltip="Парсит Basic auth header → username/password → DB lookup в ab_user. Если матчинг успешен — сохраняет user в request context."
+      >
+        try basic_auth
+      </DataBox>
+      <DataBox
+        label="Auth backend 2: session"
+        tooltip="Если нет Authorization header — проверяет session cookie. Cookie выдан при login через /login. Использует Flask session middleware."
+      >
+        fallback session
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="user authenticated" />
+    <FlowRow>
+      <DataBox
+        label="Permission check"
+        tooltip="FAB загружает user.roles → permissions. Для endpoint вычисляется required permission (например `can_read` на DagRun resource). Если permission есть — proceed, иначе 403."
+      >
+        roles → permissions
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Endpoint handler"
+        tooltip="Flask-RESTful endpoint видит current_user. Может делать дополнительные dag-level checks (DAG-level permissions): пользователь может читать DAG только из своего team."
+      >
+        execute query
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Конфигурация — список backends, которые пробуются по очереди:
+
+```ini
+[api]
+auth_backends = airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+```
+
+Первый backend, который **успешно** определит user, выигрывает. Если все backends провалились — возвращается **401**.
+
+---
+
+## Backend 1: `basic_auth`
+
+HTTP Basic Authentication — RFC 7617. Самый простой и широко поддерживаемый способ.
+
+```http
+GET /api/v1/dags HTTP/1.1
+Authorization: Basic YWlyZmxvdzphaXJmbG93
+```
+
+Где `YWlyZmxvdzphaXJmbG93` это base64 от `airflow:airflow`.
+
+### Что происходит внутри
+
+```python
+# Псевдокод airflow/api/auth/backend/basic_auth.py
+def auth_current_user() -> User | None:
+    auth = request.authorization
+    if auth is None or not auth.username:
+        return None
+
+    # DB lookup на каждый request!
+    user = appbuilder.sm.auth_user_db(auth.username, auth.password)
+    if user is None:
+        return None
+
+    g.user = user
+    return user
+```
+
+**Критично:** каждый запрос делает DB lookup + bcrypt verify пароля. Bcrypt cost = 12 по default → **80-120ms per request CPU** на webserver. Для high-volume integration это bottleneck.
+
+### Сценарии
+
+| Использовать basic_auth когда | Не использовать когда |
+|---|---|
+| Manual curl/Postman debugging | High-volume polling (>10 RPS на один user) |
+| Machine-to-machine с redke calls | Browser-based UI (use session) |
+| CI/CD pipeline (десятки calls per build) | Public-facing integration |
+
+### Production hardening
+
+```ini
+[api]
+auth_backends = airflow.api.auth.backend.basic_auth
+auth_rate_limited = True
+auth_rate_limit = 5 per 40 seconds
+```
+
+`auth_rate_limited` (2.5+) ограничивает попытки неудачной auth — защита от brute-force.
+
+---
+
+## Backend 2: `session`
+
+Cookie-based session. Используется когда UI делает AJAX запросы к REST API: пользователь уже авторизован через `/login`, cookie выдан, API использует ту же session.
+
+```http
+GET /api/v1/dags HTTP/1.1
+Cookie: session=eyJfcGVybWFuZW50Ijp0cnVlLCJfdXNlcl9pZCI6IjEifQ...
+```
+
+### Что происходит
+
+```python
+# Псевдокод
+def auth_current_user() -> User | None:
+    user = current_user
+    if user.is_anonymous or not user.is_active:
+        return None
+    return user
+```
+
+`current_user` — это объект из `flask_login`, который декодирует cookie и lookup user. **Cookie cached**, поэтому DB lookup случается только при первом запросе сессии — далее быстро.
+
+### Когда использовать
+
+- AJAX из UI (это default behavior, ничего настраивать не нужно)
+- Internal dashboards, которые шарят домен с Airflow webserver (cookie передаётся)
+
+### НЕ использовать для machine-to-machine
+
+Machine не может выполнить login flow с CSRF и cookie storage — session backend для них непригоден.
+
+---
+
+## Backend 3: `kerberos_auth`
+
+Корпоративный SSO через Kerberos / SPNEGO. Используется в enterprise deployments с Active Directory.
+
+```ini
+[api]
+auth_backends = airflow.providers.fab.auth_manager.api.auth.backend.kerberos_auth
+```
+
+### Поток
+
+```
+Client request → 401 Unauthorized + WWW-Authenticate: Negotiate
+Client → kinit получает TGT → service ticket → отправляет в Authorization: Negotiate <token>
+Server → валидирует token через keytab → username
+```
+
+Конфигурация:
+
+```ini
+[kerberos]
+keytab = /etc/airflow/airflow.keytab
+principal = airflow/host.example.com@EXAMPLE.COM
+ccache = /tmp/airflow_krb5_ccache
+```
+
+<Callout type="warning">
+Kerberos требует правильно настроенного DNS (forward + reverse), синхронизированных часов (NTP, расхождение > 5 минут ломает auth), и корректного SPN в keytab. Это самый сложный backend в setup, но даёт seamless SSO для enterprise users.
+</Callout>
+
+---
+
+## Backend 4: Custom (включая JWT)
+
+Airflow позволяет писать **свой auth backend** через Python module. Это нужно для:
+
+- JWT (через Auth0, AWS Cognito, Okta) — JWT **не входит в коробку** в 2.x
+- mTLS — client certificate based
+- API key (простой `X-API-Key` header)
+- HMAC signing
+
+### Скелет custom backend
+
+```python
+# airflow_plugins/jwt_auth.py
+from functools import wraps
+from typing import Callable, TypeVar, Sequence
+import jwt
+from flask import Response, request, g
+from airflow.www.fab_security.sqla.manager import SecurityManager
+
+CLIENT_AUTH = None  # required attribute (для outbound auth)
+
+PUBLIC_KEY = open("/etc/airflow/jwt_public.pem").read()
+T = TypeVar("T", bound=Callable)
+
+def init_app(_):
+    """Hook вызываемый при старте webserver."""
+    pass
+
+def requires_authentication(function: T) -> T:
+    @wraps(function)
+    def decorated(*args, **kwargs):
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return Response("Unauthorized", 401, {"WWW-Authenticate": "Bearer"})
+
+        token = header[len("Bearer "):]
+        try:
+            claims = jwt.decode(token, PUBLIC_KEY, algorithms=["RS256"], audience="airflow")
+        except jwt.PyJWTError as e:
+            return Response(f"Invalid token: {e}", 401)
+
+        # Mapping JWT claim → Airflow user
+        username = claims.get("preferred_username") or claims.get("sub")
+        sm: SecurityManager = current_app.appbuilder.sm
+        user = sm.find_user(username=username)
+        if user is None:
+            # Auto-provision user из JWT claims
+            user = sm.add_user(
+                username=username,
+                first_name=claims.get("given_name", ""),
+                last_name=claims.get("family_name", ""),
+                email=claims["email"],
+                role=sm.find_role(map_jwt_role_to_airflow(claims.get("roles", []))),
+            )
+
+        g.user = user
+        return function(*args, **kwargs)
+
+    return decorated
+```
+
+Регистрация:
+
+```ini
+[api]
+auth_backends = airflow_plugins.jwt_auth
+```
+
+Файл должен быть в `PYTHONPATH` на webserver pod.
+
+### Что важно при custom backend
+
+1. **`CLIENT_AUTH` атрибут обязателен** — даже если используется только для server-side. Без него Airflow падает при старте.
+2. **Auto-provisioning users** — JWT не имеет встроенного registration flow в Airflow. Backend сам решает: либо требовать pre-created user (с матчингом по username), либо создавать на лету.
+3. **Role mapping** — JWT claims → Airflow roles. Обычно через config map.
+
+---
+
+## FAB permissions — авторизация после аутентификации
+
+Auth backend отвечает «**кто это**?». Permissions отвечают «**что им можно**?». Это две разные стадии.
+
+```python
+# Внутри endpoint Airflow проверяет:
+@security.requires_access(
+    permissions=[(permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG_RUN)]
+)
+def get_dag_runs(...):
+    ...
+```
+
+Permissions хранятся в FAB tables:
+
+```sql
+SELECT
+    u.username,
+    r.name AS role,
+    p.name AS permission,
+    v.name AS resource
+FROM ab_user u
+JOIN ab_user_role ur ON u.id = ur.user_id
+JOIN ab_role r ON ur.role_id = r.id
+JOIN ab_permission_view_role pvr ON r.id = pvr.role_id
+JOIN ab_permission_view pv ON pvr.permission_view_id = pv.id
+JOIN ab_permission p ON pv.permission_id = p.id
+JOIN ab_view_menu v ON pv.view_menu_id = v.id
+WHERE u.username = 'ci_user'
+ORDER BY resource, permission;
+```
+
+### Built-in roles
+
+| Role | Что можно | Когда использовать |
+|---|---|---|
+| **Public** | Ничего (auth обязательна) | — |
+| **Viewer** | Read DAGs/runs/logs | Read-only dashboards |
+| **User** | Viewer + trigger/clear | Power users |
+| **Op** | User + manage connections/variables/pools | DevOps |
+| **Admin** | Всё | Super-admin |
+
+### DAG-level permissions (с 2.x)
+
+С версии 2.0 permissions могут быть **per-DAG**. Это позволяет multi-tenant deployments:
+
+```sql
+-- Team A может только читать свои DAGs
+SELECT * FROM ab_view_menu WHERE name LIKE 'DAG:team_a_%';
+```
+
+Resource named `DAG:my_dag_id` означает разрешение конкретно на этот DAG. CI service account можно ограничить только своими DAGs:
+
+```bash
+airflow users create \
+  --username ci_team_a \
+  --role TeamA_CI \
+  --firstname CI \
+  --lastname Team A \
+  --email ci@team-a.example.com \
+  --password ...
+
+airflow roles add-perms TeamA_CI \
+  --action can_read --resource "DAG:team_a_*"
+```
+
+---
+
+## Rate limiting
+
+С 2.5+ Airflow имеет встроенный rate limiter (Flask-Limiter):
+
+```ini
+[api]
+auth_rate_limited = True
+auth_rate_limit = 5 per 40 seconds
+
+[webserver]
+rate_limit_for_authenticated = 100 per minute
+```
+
+`auth_rate_limit` — глобальный per-IP лимит на **попытки login** (защита от brute-force). НЕ ограничивает успешные запросы.
+
+Для production высоконагруженных integration используйте rate limit на уровне reverse proxy (NGINX `limit_req_zone`, AWS API Gateway throttling) — это даёт более тонкий контроль и не нагружает webserver.
+
+---
+
+## Сравнение auth backends
+
+| Backend | Latency overhead | DB lookups | Use case | Setup сложность |
+|---|---|---|---|---|
+| `basic_auth` | 80-120ms (bcrypt) | каждый request | Manual, CI/CD low-volume | Низкая |
+| `session` | <1ms (cookie cached) | первый request | UI AJAX | Default |
+| `kerberos_auth` | 5-15ms (token validate) | первый request | Enterprise SSO | Высокая |
+| Custom JWT | 1-5ms (signature verify) | первый request (provision) | M2M, OAuth integrations | Средняя |
+| `aws_auth_manager` (provider) | 10-50ms (IAM call) | каждый request | MWAA, AWS-native | Средняя |
+
+---
+
+## Production gotchas
+
+### 1. `basic_auth` + bcrypt — webserver CPU bottleneck
+
+Бенчмарк: 4 vCPU webserver с `basic_auth` обслуживает ~30-50 RPS auth requests, потом bcrypt становится bottleneck. Симптомы: 99% CPU на gunicorn workers, latency UI растёт.
+
+**Fix:** для high-volume использовать JWT (sub-millisecond verify) или session cookie.
+
+### 2. CSRF token блокирует POST
+
+Если включена FAB CSRF protection (`WTF_CSRF_ENABLED = True`), все POST/PATCH/DELETE требуют CSRF token. Для API это не нужно — отключить:
+
+```ini
+[webserver]
+WTF_CSRF_ENABLED = False  # но это влияет и на UI forms!
+```
+
+Лучше — exempt только API:
+
+```python
+# webserver_config.py
+from flask_wtf.csrf import CSRFProtect
+csrf = CSRFProtect()
+
+def init_app(app):
+    csrf.init_app(app)
+    csrf.exempt(api_v1_blueprint)
+```
+
+### 3. `[api] auth_backends` влияет на public endpoints
+
+Endpoint `/health`, `/api/v1/version` — публичные. Но если включён `deny_all` backend, они тоже блокируются. Tip: использовать `airflow.api.auth.backend.deny_all` в production когда API не нужен (но UI работает через FAB напрямую).
+
+### 4. Anonymous DAG triggers (legacy)
+
+В 1.x был параметр `[api] auth_backend = airflow.api.auth.backend.default` — anonymous access. **Это deprecated и опасно**. Никогда не используйте в production.
+
+### 5. SSO + JWT — auto-provisioning permissions
+
+Custom backend auto-creates user, но **роль присваивается какая?** По default — `Public` (без permissions) → пользователь авторизован, но ничего не может. Fix: явно mapping JWT claims `roles` → Airflow roles в backend.
+
+---
+
+<KnowledgeCheck
+  question="CI/CD pipeline делает ~50 RPS к Airflow REST API: trigger DAG + poll status. Используется `basic_auth`. После роста volume webserver начинает тормозить, в UI пользователи жалуются на 5-секундные задержки. Что произошло и как починить?"
+  answer="**Bcrypt CPU bottleneck.** `basic_auth` на каждый request делает `auth_user_db()` → bcrypt verify пароля (~80-120ms CPU). На 50 RPS это 4-6 vCPU-seconds в секунду — потребляет всю мощность gunicorn workers. UI users конкурируют за тот же pool → latency растёт. Fixes по приоритету: (1) **JWT custom backend** — signature verify <5ms, нет DB lookup; (2) Если JWT недоступен — **выделенный API webserver** (отдельный pod с большим pool, NGINX роутит /api/v1/* на него, /admin/* на UI webserver); (3) Снизить bcrypt cost до 8-10 (но это слабит password hashing); (4) Cache decoded credentials (HMAC of password → user_id) в Redis на 60s — но это требует custom backend. Не помогают: scaling webserver (linearly растёт DB load), rate limiting (просто роняет CI). Production answer: JWT через OAuth провайдер."
+/>

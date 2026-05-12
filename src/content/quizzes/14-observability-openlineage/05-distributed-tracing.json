@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/05-distributed-tracing",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-05" },
+  "questions": [
+    {
+      "id": "airflow-m14-05-q1",
+      "type": "multiple-choice",
+      "question": "Context propagation между scheduler и worker — как trace_id passes между независимыми процессами?",
+      "options": [
+        { "id": "a", "text": "Глобальная переменная" },
+        { "id": "b", "text": "Через metadata DB: scheduler сохраняет trace_id и parent span_id в task_instance row. Worker при старте читает их, создаёт child span 'task.execute' с правильным parent context. Для Celery/K8s — также через headers/annotations" },
+        { "id": "c", "text": "Через файл на shared filesystem" },
+        { "id": "d", "text": "Trace не propagates" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Distributed tracing требует context propagation. Scheduler создаёт root span (e.g., 'dag_run'), получает trace_id + span_id. Сохраняет в `task_instance.trace_id, task_instance.span_id`. Worker pulls TI row, читает trace context, создаёт child span. Для CeleryExecutor — также через task message headers. Для K8sExecutor — через pod annotations. Это позволяет полный trace tree: scheduler.loop → dagrun → task.execute → DB query, даже когда они в разных процессах/нодах.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m14-05-q2",
+      "type": "multiple-choice",
+      "question": "Tail-based sampling в OTel Collector. Зачем и как?",
+      "options": [
+        { "id": "a", "text": "Random N% traces" },
+        { "id": "b", "text": "Decision о sampling делается ПОСЛЕ полного trace (буфер 30s). Policies: always sample errors, always sample slow (>30s), probabilistic 1% для остального. Даёт high signal-to-noise — 100% interesting traces без storage blow-up. Cost: requires buffer всех traces в Collector memory" },
+        { "id": "c", "text": "Только для metrics" },
+        { "id": "d", "text": "Не поддерживается" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Head-based sampling (random N% от start) — простой, но дешёвый: иногда теряет important traces (slow request не sampled). Tail-based — Collector ждёт complete trace, decision based on **полная картина**. Policies в OTel Collector: status_code=ERROR (всегда semplear), latency > threshold (slow traces), probabilistic 1% baseline. Trade-off: Collector нужно больше memory (buffer всех active traces 30s). Production cost: ~$0.10-0.50/GB stored vs $5-50/GB при head sampling 100%.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-05-q3",
+      "type": "multiple-choice",
+      "question": "Exemplar в Grafana — что это и зачем?",
+      "options": [
+        { "id": "a", "text": "Type of metric" },
+        { "id": "b", "text": "Линки от metric к trace. На histogram chart есть точки (exemplars), каждая = real trace ID в высоком percentile. Click → open в Tempo. Это main drill-down workflow: alert → metric → exemplar trace → root cause" },
+        { "id": "c", "text": "Sampling tier" },
+        { "id": "d", "text": "Aggregation function" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Exemplars — bridge между metrics и traces. Prometheus поддерживает exemplars (OpenMetrics format). OTel Collector exports metric points с attached trace_id sample (тот, что contributed к bucket). Grafana renders как dots на histogram chart. Click dot → opens trace в Tempo. Это game-changer для production debugging: 'почему scheduler slow?' → metric panel показывает p95 spike → exemplar dot → конкретный trace → drill spans → root cause. Без exemplars нужно manually искать slow traces в Tempo by time range.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-05-q4",
+      "type": "true-false",
+      "question": "Best practice: каждый log line из task должен содержать trace_id для cross-correlation. OTel provider 2.10+ автоматически инжектит trace_id в log records через LoggingInstrumentor — это позволяет drill-down trace → 'View logs for this trace' в Loki/ES.",
+      "correctAnswer": true,
+      "explanation": "Полная observability triad: metrics → trace → logs. Auto-instrumentation `LoggingInstrumentor` модифицирует Python logging — каждый record получает trace_id и span_id из current OTel context. Log line становится: `INFO [trace_id=a3f... span_id=de5...] Processing rows`. В Loki/ES добавьте `trace_id` как indexed field. В Grafana datasource: Tempo `tracesToLogs` config с datasourceUid: loki. Click span → 'View logs' → автоматически filter Loki по trace_id. Это main workflow для investigation: что произошло в task X конкретно когда.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,498 @@
+---
+title: "Security hardening — network policies, RBAC, secrets backend, audit logs, TLS"
+description: "Production security checklist: K8s NetworkPolicies, DB user permissions, Secrets backend mandatory, audit logs export, TLS everywhere, vulnerability scanning, OWASP top 10 для Airflow"
+order: 8
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Security", "RBAC", "Network Policies", "Secrets", "TLS", "Audit Logs"]
+---
+
+# Security hardening — network policies, RBAC, secrets backend, audit logs, TLS
+
+Airflow — высокопривилегированная система. Она имеет credentials к prod DB, S3 buckets, Snowflake warehouses, Kafka clusters. Compromised Airflow = compromised data platform. Этот урок — production security checklist для Airflow 2.10/2.11 LTS: что обязательно настроить до того, как пустить пользователей.
+
+Покроем семь слоёв: network segmentation (K8s NetworkPolicies), DB user permissions, Secrets Backend (Vault / AWS SM), audit logging, TLS everywhere, FAB RBAC roles, vulnerability scanning. Каждый слой блокирует определённый класс атак — пропуск любого делает других недостаточными.
+
+---
+
+## Threat model — что мы защищаем
+
+```
+Attack vectors:
+1. Compromised DAG file (insider или supply chain в pip packages)
+2. Compromised worker pod (exploit в task code)
+3. SQL injection через UI / REST API
+4. Stolen connection credentials (cleartext в DB)
+5. Lateral movement: webserver → DB → other systems
+6. Privilege escalation: viewer → admin
+7. Data exfiltration через logs / XCom
+```
+
+Каждая угроза address-ится разными слоями защиты.
+
+---
+
+## Network segmentation (K8s NetworkPolicy)
+
+Default Kubernetes — flat network: любой pod может connect к любому pod. Это плохо. Airflow worker, выполняющий user-provided code, должен иметь **минимально необходимый** network access.
+
+### NetworkPolicy для worker
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: airflow-worker-egress
+  namespace: airflow
+spec:
+  podSelector:
+    matchLabels:
+      component: worker
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+
+    # PgBouncer (NOT direct DB)
+    - to:
+        - podSelector:
+            matchLabels:
+              component: pgbouncer
+      ports:
+        - port: 6432
+
+    # Redis (Celery broker)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis-master
+      ports:
+        - port: 6379
+
+    # External: S3, Snowflake — explicit allowed list
+    - to:
+        - ipBlock:
+            cidr: 52.219.0.0/16  # S3 us-east-1
+        - ipBlock:
+            cidr: 35.0.0.0/8     # Snowflake
+      ports:
+        - port: 443
+```
+
+### NetworkPolicy для webserver
+
+Webserver доступен извне через ingress, но egress — только к PgBouncer/Redis:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: airflow-webserver
+spec:
+  podSelector:
+    matchLabels:
+      component: webserver
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: pgbouncer
+      ports: [{port: 6432}]
+    - to: # DNS
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports: [{port: 53, protocol: UDP}]
+```
+
+### Чем это защищает
+
+| Атака | Без NetworkPolicy | С NetworkPolicy |
+|---|---|---|
+| Worker exploit → DB direct | Атакующий читает DB напрямую (Fernet, audit) | Заблокировано (worker → только PgBouncer) |
+| Worker exploit → Kubernetes API | Privilege escalation возможен | Заблокировано |
+| Webserver exploit → metadata DB | Прямой SQL access | Только через PgBouncer (logged) |
+| Lateral movement к Vault | Возможен | Только allowed pods могут хитнуть Vault |
+
+---
+
+## DB user permissions — principle of least privilege
+
+Default Helm chart создаёт **один** Postgres user `airflow` с full access. Это плохо. Production setup использует разные users для разных компонентов:
+
+```sql
+-- 1. airflow_admin (только для migrations)
+CREATE USER airflow_admin WITH PASSWORD '<strong>';
+GRANT ALL PRIVILEGES ON DATABASE airflow TO airflow_admin;
+-- Используется ТОЛЬКО для `airflow db migrate`, потом не доступен
+
+-- 2. airflow_scheduler (для scheduler/dag-processor/triggerer)
+CREATE USER airflow_scheduler WITH PASSWORD '<strong>';
+GRANT CONNECT ON DATABASE airflow TO airflow_scheduler;
+GRANT USAGE ON SCHEMA public TO airflow_scheduler;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO airflow_scheduler;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO airflow_scheduler;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO airflow_scheduler;
+
+-- 3. airflow_webserver (для webserver — может потребоваться более узкий)
+CREATE USER airflow_webserver WITH PASSWORD '<strong>';
+GRANT CONNECT ON DATABASE airflow TO airflow_webserver;
+GRANT USAGE ON SCHEMA public TO airflow_webserver;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO airflow_webserver;
+-- Note: webserver делает INSERT в log (audit), UPDATE на dag_run.is_paused
+
+-- 4. airflow_worker (для Celery workers — только TI и XCom)
+CREATE USER airflow_worker WITH PASSWORD '<strong>';
+GRANT CONNECT ON DATABASE airflow TO airflow_worker;
+GRANT USAGE ON SCHEMA public TO airflow_worker;
+GRANT SELECT ON dag, dag_run, task_instance, connection, variable, slot_pool TO airflow_worker;
+GRANT INSERT, UPDATE ON task_instance, xcom, log, task_fail TO airflow_worker;
+-- Worker не должен иметь access к ab_user, ab_role и т.п.
+
+-- 5. airflow_readonly (для analytics, monitoring)
+CREATE USER airflow_readonly WITH PASSWORD '<strong>';
+GRANT CONNECT ON DATABASE airflow TO airflow_readonly;
+GRANT USAGE ON SCHEMA public TO airflow_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO airflow_readonly;
+```
+
+```yaml
+# Helm values для разделённых users
+data:
+  metadataConnection:
+    user: airflow_scheduler  # default для scheduler/triggerer/dag-processor
+  resultBackendConnection:
+    user: airflow_worker
+webserver:
+  env:
+    - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+      value: postgresql://airflow_webserver:...
+```
+
+<Callout type="note">
+Эта setup сложнее в эксплуатации (5 users вместо 1), но даёт реальную defense in depth. Если webserver exploited через RCE, атакующий не может DROP TABLE — у него нет ALTER permission. Если worker exploited, нет доступа к users/roles.
+</Callout>
+
+---
+
+## Secrets Backend — mandatory
+
+Хранить connections и variables в metadata DB encrypted Fernet — **минимальная защита**. Production-grade — внешний Secrets Backend: HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager, Azure Key Vault.
+
+### Why mandatory
+
+| Risk | DB-only | External Secrets Backend |
+|---|---|---|
+| DB compromise → all credentials leaked | Yes (с Fernet key) | No (secrets не в DB) |
+| Audit «who accessed secret X» | Только UI logs | Full audit в Vault |
+| Secret rotation | Manual, all-at-once | Per-secret, automated |
+| Separate secret lifecycle | Tied to Airflow restart | Independent |
+
+### Vault config
+
+```ini
+# airflow.cfg
+[secrets]
+backend = airflow.providers.hashicorp.secrets.vault.VaultBackend
+backend_kwargs = {
+  "url": "https://vault.example.com:8200",
+  "mount_point": "airflow",
+  "connections_path": "connections",
+  "variables_path": "variables",
+  "auth_type": "kubernetes",
+  "kubernetes_role": "airflow",
+  "use_cache": true,
+  "cache_ttl_seconds": 60
+}
+```
+
+DAG code остаётся идентичным:
+
+```python
+from airflow.models import Variable
+api_key = Variable.get("snowflake_api_key")  # Resolved from Vault, not DB
+```
+
+**Performance**: `use_cache=True` критичен. Без cache каждый `Variable.get` — HTTP call в Vault. С cache (60s TTL) — Variable.get amortized к ~1μs.
+
+### AWS Secrets Manager alternative
+
+```ini
+[secrets]
+backend = airflow.providers.amazon.aws.secrets.secrets_manager.SecretsManagerBackend
+backend_kwargs = {
+  "connections_prefix": "airflow/connections",
+  "variables_prefix": "airflow/variables",
+  "profile_name": "default"
+}
+```
+
+---
+
+## TLS everywhere
+
+Production Airflow должен иметь TLS на каждой границе:
+
+| Соединение | Required? | Как |
+|---|---|---|
+| User → Webserver | Yes | ingress + cert-manager (Let's Encrypt) |
+| Webserver → DB | Yes (внешний DB) | sslmode=require/verify-full |
+| Scheduler → DB | Yes | sslmode=require |
+| Worker → DB | Yes | sslmode=require |
+| Worker → Redis | Yes (production) | rediss:// (TLS) |
+| Components → Vault | Yes | https:// |
+| Pod-to-pod (in-cluster) | Recommended | Service mesh (Istio/Linkerd mTLS) |
+| Workers → S3/Snowflake | Yes (default) | HTTPS API |
+
+### PostgreSQL TLS
+
+```yaml
+data:
+  metadataConnection:
+    sslmode: verify-full  # Verify CA + hostname match
+  metadataSSLCert: /etc/ssl/airflow/postgres-ca.pem
+
+extraVolumes:
+  - name: postgres-tls
+    secret:
+      secretName: postgres-ca-cert
+extraVolumeMounts:
+  - name: postgres-tls
+    mountPath: /etc/ssl/airflow
+    readOnly: true
+```
+
+### Webserver TLS
+
+```yaml
+ingress:
+  web:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    tls:
+      - hosts: [airflow.example.com]
+        secretName: airflow-tls
+```
+
+---
+
+## FAB RBAC — minimum roles
+
+Airflow 2.x использует Flask-AppBuilder для auth. RBAC включён по default. Стандартные роли:
+
+| Роль | Может |
+|---|---|
+| Admin | Всё (создать users, изменять config) |
+| Op | DAG operations, view connections (без password) |
+| User | Trigger DAGs, view |
+| Viewer | View only |
+| Public | Без auth |
+
+**Production policy**:
+- **Public**: disable (`AUTH_ROLE_PUBLIC = None` в webserver_config.py)
+- **Admin**: только 2-3 человека (SRE leads)
+- **Op**: data engineers (могут trigger, не могут изменять users)
+- **Viewer**: business users (read-only)
+
+### Per-DAG permissions (2.7+)
+
+С Airflow 2.7+ можно ограничить доступ к специфическим DAGs:
+
+```python
+# webserver_config.py
+AUTH_ROLES_SYNC_AT_LOGIN = True
+AUTH_ROLES_MAPPING = {
+    "okta-data-eng": ["Op"],
+    "okta-finance-team": ["User"],  # Только finance DAGs
+}
+
+# DAG-level permissions
+@dag(
+    access_control={
+        "finance-team": {"can_read", "can_edit", "can_delete"},
+    },
+)
+def finance_etl():
+    ...
+```
+
+В 3.x добавляется AIP-67 **Multi-Team** — полная изоляция team resources.
+
+### OIDC / SAML integration
+
+```python
+# webserver_config.py
+from airflow.www.fab_security.manager import AUTH_OAUTH
+
+AUTH_TYPE = AUTH_OAUTH
+AUTH_USER_REGISTRATION = True
+AUTH_USER_REGISTRATION_ROLE = "Viewer"
+
+OAUTH_PROVIDERS = [
+    {
+        'name': 'okta',
+        'icon': 'fa-circle-o',
+        'token_key': 'access_token',
+        'remote_app': {
+            'client_id': '<OKTA_CLIENT_ID>',
+            'client_secret': '<OKTA_SECRET>',
+            'api_base_url': 'https://example.okta.com/oauth2/v1/',
+            'client_kwargs': {'scope': 'openid email profile groups'},
+            'access_token_url': 'https://example.okta.com/oauth2/v1/token',
+            'authorize_url': 'https://example.okta.com/oauth2/v1/authorize',
+            'jwks_uri': 'https://example.okta.com/oauth2/v1/keys',
+        }
+    }
+]
+```
+
+---
+
+## Audit logging
+
+Airflow пишет audit log в таблицу `log` (не путать с task logs). Production должен **export** этот log в SIEM (Splunk, Datadog, ELK):
+
+```python
+# Custom log handler — добавить в plugins/log_export.py
+from airflow.utils.log.logging_mixin import LoggingMixin
+import json
+import requests
+
+class SIEMLogHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = {
+            "timestamp": record.created,
+            "level": record.levelname,
+            "event": record.getMessage(),
+            "user": getattr(record, "user", None),
+            "dag_id": getattr(record, "dag_id", None),
+            "task_id": getattr(record, "task_id", None),
+        }
+        requests.post(
+            "https://siem.example.com/api/v1/events",
+            json=log_entry,
+            headers={"Authorization": f"Bearer {SIEM_TOKEN}"}
+        )
+```
+
+**Что логировать**:
+- All UI logins / logouts (через OAuth provider audit)
+- DAG triggers (user → dag_id → time)
+- Connection creates/edits/deletes
+- Variable creates/edits/deletes
+- Role/permission changes
+- Pause/unpause DAGs
+- Clear task instances
+- Failed authentication attempts
+
+Query audit log:
+
+```sql
+-- Кто что делал за последние 24h
+SELECT dttm, owner, event, dag_id, task_id, extra::text
+FROM log
+WHERE dttm > now() - interval '24 hours'
+  AND event IN ('trigger', 'clear', 'paused', 'unpaused',
+                'edit_connection', 'add_connection', 'delete_connection')
+ORDER BY dttm DESC;
+```
+
+---
+
+## Vulnerability scanning
+
+```bash
+# 1. Container image scanning
+trivy image apache/airflow:2.10.5
+# Или Snyk, Anchore Grype
+
+# 2. Python dependencies
+pip install pip-audit
+pip-audit -r requirements.txt
+
+# 3. SAST для DAG codebase
+bandit -r dags/
+
+# 4. SBOM generation
+syft apache/airflow:2.10.5 -o spdx-json > airflow-sbom.json
+```
+
+**CI integration**:
+
+```yaml
+# .github/workflows/security.yml
+- name: Trivy image scan
+  run: trivy image --severity HIGH,CRITICAL --exit-code 1 \
+    registry.example.com/airflow:${{ github.sha }}
+
+- name: pip-audit
+  run: pip-audit -r requirements.txt --strict
+
+- name: Bandit DAG scan
+  run: bandit -r dags/ -ll -ii
+```
+
+---
+
+## Production gotchas
+
+**Default admin/admin user в Helm chart — disable**. `webserver.defaultUser.enabled: false`. Иначе при первой установке создаётся admin/admin и часто остаётся.
+
+**`expose_config = False`**. По default `/admin/configurations` в UI показывает все airflow.cfg значения. Включая paths, default users. Set `[webserver] expose_config = False`.
+
+**`example_dags` — disable**. `[core] load_examples = False`. Example DAGs могут содержать SSL bypass, hardcoded credentials examples — confusing для new users.
+
+**Worker pod NetworkPolicy без RBAC = false sense of security**. Worker pod выполняет user code — может вызвать `kubectl` если есть serviceAccount с правами. Используйте dedicated SA с минимальными permissions для worker.
+
+**Logs могут содержать secrets**. Если DAG print() secret — он попадает в task logs S3. Решение: `[logging] secret_mask_extra_keys = api_key,secret_key,...` mask-ит values по pattern. Plus mandatory code review всех print/log statements.
+
+**Webserver session cookie не secure без `[webserver] secure_cookie = True`**. По default cookie работает по HTTP. Set Secure + HttpOnly + SameSite=strict.
+
+**REST API token leak в logs**. Airflow REST API auth через Basic Auth или OAuth bearer. Token в URL query param — leak в nginx access logs. Always use Authorization header.
+
+---
+
+## OWASP Top 10 для Airflow
+
+| OWASP A-Number | Применимо к Airflow? | Mitigation |
+|---|---|---|
+| A01 Broken Access Control | Yes | FAB RBAC, per-DAG access_control |
+| A02 Cryptographic Failures | Yes | Fernet key, TLS everywhere, Secrets Backend |
+| A03 Injection | Yes (UI form fields) | FAB sanitization, parameterized DAG triggers |
+| A04 Insecure Design | Yes (multi-tenant) | AIP-67 Multi-Team в 3.x, namespace isolation в 2.x |
+| A05 Security Misconfiguration | High risk | This lesson |
+| A06 Vulnerable Components | Yes (pip packages) | Trivy, pip-audit, Snyk |
+| A07 Authentication Failures | Yes | OIDC, MFA, no default admin |
+| A08 Software/Data Integrity | Yes (DAG supply chain) | Signed commits, image signing (cosign) |
+| A09 Logging Failures | Yes | SIEM export, audit logs |
+| A10 SSRF | Yes (HTTP operators) | Worker NetworkPolicy egress restrictions |
+
+---
+
+<KnowledgeCheck
+  question="Security audit показал, что Airflow worker pod может connect к `https://169.254.169.254/latest/meta-data/iam/security-credentials/` (AWS EC2 metadata endpoint) и получить IAM credentials EC2 instance — dangerous escalation. Что делать?"
+  answer="Это classic SSRF (Server-Side Request Forgery) vulnerability. Worker pod выполняет user-provided code в DAGs/tasks. Если злонамеренный DAG (insider threat или compromised pip package) делает HTTP GET к EC2 metadata endpoint — получит IAM credentials EC2 host, которые могут иметь шире permissions чем worker должен иметь. Fixes (применять все): (1) **IMDSv2 enforcement** на EC2 instances — настроить `HttpTokens=required` в EC2 instance metadata options; IMDSv2 требует PUT request для получения token, что блокирует простой SSRF; (2) **NetworkPolicy egress block 169.254.169.254** — добавить except block в egress policy worker: `except: - ipBlock: cidr: 169.254.169.254/32`; (3) **IRSA (IAM Roles for Service Accounts)** — на EKS использовать IRSA: каждый pod имеет свою dedicated IAM role с минимальными permissions, не наследует EC2 instance role. Worker SA — только access к S3 staging bucket, не к prod IAM; (4) **kube2iam или kiam DEPRECATED** — не используйте, IRSA лучше; (5) **Egress NetworkPolicy whitelist подход** — не deny всё, а allow only known destinations (S3 prefix-list, Snowflake VPC endpoint, etc); (6) **Vault через JWT auth** — secret backend через short-lived JWT tokens, не AWS IAM напрямую; (7) Add audit alert: monitoring запросов к 169.254.169.254 из worker pods → SIEM alert. Урок: security in depth. Каждый отдельный fix может обойтись, но все вместе делают атаку практически невозможной. Этот класс атак — почему mandatory NetworkPolicy для workers и IRSA для EKS production."
+/>

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "08-datasets-assets/02-dataset-fundamentals",
+  "moduleId": "08-datasets-assets",
+  "_meta": { "idPrefix": "airflow-m08-02" },
+  "questions": [
+    {
+      "id": "airflow-m08-02-q1",
+      "type": "multiple-choice",
+      "question": "В Airflow 2.x что точно происходит при создании Dataset('s3://bucket/data.parquet')?",
+      "options": [
+        { "id": "a", "text": "Airflow проверяет существование объекта в S3 через AWS API" },
+        { "id": "b", "text": "Создаётся registry row в dataset table с UNIQUE URI; никакая валидация реального хранилища не происходит — URI это opaque identifier" },
+        { "id": "c", "text": "Запускается background sensor, который polling S3" },
+        { "id": "d", "text": "Регистрируется connection в connections table" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Dataset URI — это nominal identity. Airflow НЕ читает реальные данные, НЕ валидирует existence, НЕ устанавливает connection. Это opaque string up to 3000 chars. Schema (s3://, postgres://) — соглашение для людей, не protocol. В 3.x с AIP-82 (AssetWatcher) появляется механизм слушать external events, но это другая абстракция — Dataset сам по себе остаётся nominal в 2.x и 3.x.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m08-02-q2",
+      "type": "multiple-choice",
+      "question": "Producer task завершилась с state=skipped (из-за branching logic). Что произойдёт с dataset events?",
+      "options": [
+        { "id": "a", "text": "Event эмитится как обычно — skipped считается completion" },
+        { "id": "b", "text": "Event НЕ эмитится — outlets обрабатываются только на state=success. Это типичный gotcha при branching pattern" },
+        { "id": "c", "text": "Event эмитится с warning flag" },
+        { "id": "d", "text": "Эмитится placeholder event с extra={'skipped': true}" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Dataset emission строго привязана к state=success. Skipped, failed, up_for_retry — никакой emission. Это вызывает silent breakage при branching: producer может быть skipped, consumer ждёт forever. Защита: trigger_rule='all_done' на task-emitter (он завершится success после either path), или явно проверять в task и эмитить через outlet_events.add() с alias. В 3.x semantics та же.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-02-q3",
+      "type": "multiple-choice",
+      "question": "Consumer DAG с schedule=[ds_a, ds_b] (bare list, не DatasetAll). Какая semantics?",
+      "options": [
+        { "id": "a", "text": "OR — запустится при любом из datasets" },
+        { "id": "b", "text": "AND — запустится только когда оба обновлены с момента последнего run consumer-а" },
+        { "id": "c", "text": "XOR — запустится если ровно один обновлён" },
+        { "id": "d", "text": "Sequential — сначала ds_a, потом ds_b" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Bare list = AND by default. Это эквивалентно DatasetAll(ds_a, ds_b). Scheduler требует rows в dataset_dag_run_queue для ВСЕХ datasets из dag_schedule_dataset_reference. Для OR явно: DatasetAny(ds_a, ds_b). В 2.9+ можно комбинировать через & и |. Расхожая ошибка: ожидают OR из bare list — receive AND — DAG не запускается, потому что один из datasets обновляется реже.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m08-02-q4",
+      "type": "true-false",
+      "question": "Между producer task SUCCESS и consumer DAG queued состоянием typical latency ~5-10 секунд из-за scheduler tick interval.",
+      "correctAnswer": true,
+      "explanation": "Dataset events не pub/sub в реальном времени. Worker завершает task (success), записывает dataset_event в DB, scheduler на следующем tick (default scheduler_heartbeat_sec=5) видит pending events, делает fan-out в dataset_dag_run_queue, проверяет satisfaction, создаёт DagRun. End-to-end latency 5-15 секунд в norm. Это нормально для batch ETL, но не подходит для real-time (используйте Kafka/Flink). В 3.x с AssetWatchers латентность может быть ниже для external triggers, но internal dataset events те же 5-10s.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

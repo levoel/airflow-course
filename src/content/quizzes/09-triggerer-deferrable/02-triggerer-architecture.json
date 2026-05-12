@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "09-triggerer-deferrable/02-triggerer-architecture",
+  "moduleId": "09-triggerer-deferrable",
+  "_meta": { "idPrefix": "airflow-m09-02" },
+  "questions": [
+    {
+      "id": "airflow-m09-02-q1",
+      "type": "multiple-choice",
+      "question": "Почему scheduler использует FOR UPDATE NOWAIT, а triggerer — FOR UPDATE SKIP LOCKED?",
+      "options": [
+        { "id": "a", "text": "Они эквивалентны, выбор историчен" },
+        { "id": "b", "text": "Разные паттерны concurrency: scheduler — mutex (один в critical section, остальные skip tick), triggerer — work distribution (каждый берёт available rows, propускает locked другими)" },
+        { "id": "c", "text": "PostgreSQL версия определяет" },
+        { "id": "d", "text": "Случайный выбор" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "NOWAIT — для mutex semantics: scheduler нужен EXCLUSIVE access на slot_pool, если другой scheduler там — мы skip tick. SKIP LOCKED — для work-stealing: triggerer adopt batch unowned triggers, propускает locked другими triggerers (которые в процессе adoption своего batch). Это две принципиально разные coordination problems: critical section (один за раз) vs parallel work distribution (множество одновременно, но без конфликтов). PostgreSQL поддерживает оба с 9.5+.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-02-q2",
+      "type": "multiple-choice",
+      "question": "В custom trigger.run() использован time.sleep(60) вместо await asyncio.sleep(60). Что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Работает идентично, asyncio автоматически handle блокирующие calls" },
+        { "id": "b", "text": "Блокирует ВЕСЬ event loop triggerer-а на 60 секунд. Тысячи других concurrent triggers замораживаются — никаких events, никаких yields. Самый частый async-bug" },
+        { "id": "c", "text": "Trigger silently fails" },
+        { "id": "d", "text": "Triggerer создаёт thread для каждого" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Triggerer single-threaded asyncio loop. time.sleep — sync blocking call, не yield контроль. ВСЕ другие triggers замораживаются. Этот класс ошибок — самый частый, потому что Python developers интуитивно пишут time.sleep. Защита: code review на blocking calls (requests.get, psycopg2 sync, time.sleep). Linting: ruff ASYNC checks. Always: await asyncio.sleep, aiohttp вместо requests, asyncpg вместо psycopg2.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-02-q3",
+      "type": "multiple-choice",
+      "question": "Triggerer умер без graceful shutdown. Какова recovery latency для его triggers?",
+      "options": [
+        { "id": "a", "text": "Мгновенная — failover automatic" },
+        { "id": "b", "text": "~30-90s: triggerer_health_check_threshold (30s) + scheduler housekeeping tick (~30s) для re-orphan + next live triggerer SKIP LOCKED adoption (~5s)" },
+        { "id": "c", "text": "Triggers потеряются" },
+        { "id": "d", "text": "Несколько часов" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Recovery: (1) Triggerer не отправляет heartbeat → через triggerer_health_check_threshold (default 30s) считается dead. (2) Scheduler housekeeping job (next tick) видит stale triggerer job, UPDATE trigger SET triggerer_id=NULL для всех его triggers. (3) Other triggerers на следующем своём tick (1s default) делают SELECT FOR UPDATE SKIP LOCKED, adopting unowned triggers. Total typical 30-90s. Triggers НЕ теряются — они persistent в trigger table. Это design feature: state в DB, не in-memory.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-02-q4",
+      "type": "true-false",
+      "question": "Один triggerer process на 4-core VM может handle 5000-10000 concurrent triggers, потому что workloads I/O-bound (sleeps + polls) — single-threaded asyncio scaling от GIL не страдает.",
+      "correctAnswer": true,
+      "explanation": "Asyncio cooperative scheduling: тысячи triggers держат await asyncio.sleep, event loop переключается между ними efficiently. Workload в основном I/O wait — CPU usage 5-30% даже на 5k concurrent. Single-threaded означает нет GIL contention, никаких lock-ов между triggers. Scaling ceiling — capacity event loop на одном core (~10-20k concurrent в idle wait state). Beyond — добавить replica triggerer (HA pattern). Это фундаментальное преимущество asyncio vs thread-based concurrency: thread per trigger дал бы OOM на 1000+ из-за overhead thread stacks.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

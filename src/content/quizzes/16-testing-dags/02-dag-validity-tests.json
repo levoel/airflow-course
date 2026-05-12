@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/02-dag-validity-tests",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-02" },
+  "questions": [
+    {
+      "id": "airflow-m16-02-q1",
+      "type": "multiple-choice",
+      "question": "Самый дешёвый и полезный test для Airflow project — что это?",
+      "options": [
+        { "id": "a", "text": "Load testing scheduler" },
+        { "id": "b", "text": "test_no_import_errors через DagBag — один тест на 30 строк ловит 80% багов: typo в imports, missing providers в requirements, syntax errors. ~10-30s в CI, не требует running Airflow" },
+        { "id": "c", "text": "End-to-end tests на real cluster" },
+        { "id": "d", "text": "Stress test workers" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagBag-based test_no_import_errors — самый ROI тест. DagBag парсит все .py файлы, ловит ImportError/SyntaxError/AirflowException. Production-критичный bug 'DAG не появился в UI' обычно — import error на missing provider. Один тест ловит это до merge. Setup — день, savings — недели incident response. Это первый тест который должен быть в каждом Airflow project.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-02-q2",
+      "type": "multiple-choice",
+      "question": "DagBag fixture в pytest — какой scope использовать?",
+      "options": [
+        { "id": "a", "text": "function (default) — каждый test реparse" },
+        { "id": "b", "text": "session — DagBag parsed один раз для всей pytest sessions. На 100+ DAGs парсинг занимает секунды — без scope='session' каждый test реparses, total runtime минуты. Mandatory для performance" },
+        { "id": "c", "text": "class" },
+        { "id": "d", "text": "module" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagBag parsing на больших codebase (50-500 DAGs) занимает 5-30s. С scope='function' каждый test заново parses — 30 tests = 15 минут вместо 1. С scope='session' DagBag создаётся один раз, shared между tests. Это critical performance fix. Caveat: tests не должны mutate DagBag (treat read-only) — иначе state leak между tests.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-02-q3",
+      "type": "multiple-choice",
+      "question": "В DagBag в CI обязательно установить include_examples=False. Почему?",
+      "options": [
+        { "id": "a", "text": "Чтобы быстрее" },
+        { "id": "b", "text": "Default Airflow example DAGs могут конфликтовать (одинаковые dag_id с user DAGs), давать import errors на missing providers (например snowflake_example), confuse test output. test_no_import_errors fails из-за example, не user code" },
+        { "id": "c", "text": "Не имеет значения" },
+        { "id": "d", "text": "Examples требуют 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "include_examples=True загружает встроенные example DAGs из airflow/example_dags. Они могут: (1) использовать providers (snowflake, AWS) не установленные в test env → ImportError; (2) иметь dag_id конфликтующие с user DAGs; (3) Confuse output что test failed из-за user code когда виноват example. ВСЕГДА include_examples=False в CI. То же самое — AIRFLOW__CORE__LOAD_EXAMPLES=False в env.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-02-q4",
+      "type": "true-false",
+      "question": "Variable.get('foo') в top-level DAG-файла безопасен — DagBag handles это автоматически.",
+      "correctAnswer": false,
+      "explanation": "Variable.get в top-level требует Airflow DB connection. В CI без Variable foo set — DagBag получает ImportError 'KeyError: foo'. Test fails не из-за DAG bug, а из-за environment. Fixes: (1) move Variable.get в task callable — eval только при run, не при parse; (2) set env var AIRFLOW_VAR_FOO=bar в CI; (3) mock через monkeypatch.setattr. Best practice — НЕ делать Variable.get в top-level (модуль 02 quiz). Connection.get_connection — то же.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/03-unit-tests-operators",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-03" },
+  "questions": [
+    {
+      "id": "airflow-m16-03-q1",
+      "type": "multiple-choice",
+      "question": "Как unit-test для @task-decorated function вызвать оригинальную function напрямую?",
+      "options": [
+        { "id": "a", "text": "Просто fetch_orders('2026-05-12')" },
+        { "id": "b", "text": "fetch_orders.function('2026-05-12', hook=mock_hook) — @task сохраняет original function на .function attribute. Альтернативно — fetch_orders.__wrapped__" },
+        { "id": "c", "text": "fetch_orders.execute()" },
+        { "id": "d", "text": "Невозможно — нужен Airflow runtime" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "@task decorator оборачивает function в Task object. Прямой call `fetch_orders('2026-05-12')` создаёт Task, не вызывает function. Для unit test используется `fetch_orders.function(...)` или `fetch_orders.__wrapped__(...)` — это direct call original function. Это позволяет injecting mocked dependencies (hook=mock_hook) без запуска scheduler/executor.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-03-q2",
+      "type": "multiple-choice",
+      "question": "Patch неработает: `mocker.patch('airflow.providers.amazon.aws.hooks.s3.S3Hook')`. Реальный S3Hook все равно вызывается. Что не так?",
+      "options": [
+        { "id": "a", "text": "Bug в pytest-mock" },
+        { "id": "b", "text": "Правило: patch там, где используется, а не где определён. Operator делает `from airflow.providers...s3 import S3Hook` → name теперь в `plugins.my_op` namespace. Правильно: `mocker.patch('plugins.my_op.S3Hook')`" },
+        { "id": "c", "text": "Нужно использовать unittest.mock" },
+        { "id": "d", "text": "Нужен patch.object" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Classic Python mocking gotcha. Когда вы делаете `from X import Y`, в текущем module появляется local `Y` указывающий на тот же object. Patching `X.Y` меняет атрибут module X, но local reference в моём module уже создан и указывает на старый object. Solution: patch там где symbol used. Альтернатива — dependency injection: pass hook as parameter, pass MagicMock в test, no patching нужно.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-03-q3",
+      "type": "multiple-choice",
+      "question": "Для unit-test classic operator с execute(context) — что нужно?",
+      "options": [
+        { "id": "a", "text": "Полный Airflow runtime" },
+        { "id": "b", "text": "Mocked context (от MagicMock() или airflow.utils.context.Context), mocked hooks через patch, прямой вызов op.execute(context). Никакой scheduler/DB не нужен" },
+        { "id": "c", "text": "Real DagRun в DB" },
+        { "id": "d", "text": "airflow tasks test" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Unit test изолирует operator от Airflow runtime. Context — MagicMock() или partial Context() с нужными keys (ds, dag_run, task_instance, params). Hooks — patch через mocker.patch на используемом path. Прямой call op.execute(context). Это <100ms test. Real DagRun/DB — это integration test (следующий урок). airflow tasks test — тоже integration, использует real Airflow CLI execution path.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m16-03-q4",
+      "type": "true-false",
+      "question": "pytest-mock даёт fixture `mocker` который автоматически unmocks после test — не нужны `with patch():` блоки.",
+      "correctAnswer": true,
+      "explanation": "pytest-mock — тонкая обёртка над unittest.mock. Fixture `mocker` имеет lifecycle pytest test — automatic cleanup после test. Сравнение: `mocker.patch('module.thing')` равно `with patch('module.thing'): yield mock`. Чище синтаксис, нет nested `with` blocks. Также есть mocker.spy (call real + track), mocker.patch.object (по object reference). Production-стандарт для pytest projects.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

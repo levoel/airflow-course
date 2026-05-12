@@ -1,0 +1,412 @@
+---
+title: "Migration tools — airflow upgrade-check, ruff AIR301/AIR302"
+description: "Migration tooling: airflow upgrade-check, ruff rules AIR301 (imports rename) / AIR302 (deprecated APIs), automated fixes, CI integration для readiness"
+order: 6
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["Migration Tools", "upgrade-check", "ruff", "AIR301", "AIR302", "Automation"]
+---
+
+# Migration tools — airflow upgrade-check, ruff AIR301/AIR302
+
+Migration на Airflow 3.x — это **continuous process**, не one-time event. Tooling делает миграцию tractable: вместо ручного просмотра 200 DAGs, automated tools find deprecation issues, suggest fixes, applyautomatically где безопасно. Этот урок — практическое руководство по двум главным tools: `airflow upgrade-check` (built-in) и `ruff` lint rules AIR301/AIR302.
+
+Strategy: enable tools в CI **сейчас** (на 2.10/2.11), accumulate fixes month-by-month. К moment actual migration — codebase уже 3.x-compatible.
+
+---
+
+## `airflow upgrade-check` — built-in migration helper
+
+`airflow upgrade-check` — Airflow CLI command, который scans configuration и DAGs на deprecation issues для target version. Доступен с 2.7+, improved в 2.10/2.11.
+
+```bash
+# Check для current version (default behavior — warnings about deprecations)
+airflow upgrade-check
+
+# Check для targeted version (e.g., preparation для 3.x)
+airflow upgrade-check --to-version 3.0
+```
+
+Output example:
+
+```
+Running upgrade checks against Airflow 3.0...
+
+[WARNING] dags/orders_etl.py:15
+  Usage of `execution_date` is deprecated, use `logical_date` instead.
+
+[WARNING] dags/old_pattern.py:23
+  SubDagOperator is removed in Airflow 3.0.
+  Replace with TaskGroup.
+
+[WARNING] plugins/old_plugin.py:8
+  Import path `airflow.contrib.X` is removed in Airflow 3.0.
+  Use new provider package.
+
+[WARNING] dags/old_imports.py:5
+  Import `from airflow.decorators import dag, task` should be
+  `from airflow.sdk import dag, task` in 3.x.
+
+[CRITICAL] webserver_config.py:12
+  Direct FAB usage detected. FAB is removed в 3.x.
+  Migrate to pluggable auth providers (AIP-79).
+
+Summary:
+  WARNING: 47
+  CRITICAL: 3
+  INFO: 12
+```
+
+### Severity levels
+
+- **INFO**: informational, no action required for 3.x compatibility
+- **WARNING**: works в 3.x but deprecated — should fix
+- **CRITICAL**: will NOT work в 3.x — must fix
+
+### Categories covered
+
+- **Imports**: `airflow.decorators` → `airflow.sdk`, `from airflow import Dataset` → asset
+- **Deprecated APIs**: `execution_date`, `start_date_str`, etc
+- **Removed operators**: SubDagOperator, SmartSensor (already removed)
+- **Removed config options**: certain airflow.cfg settings
+- **FAB usage**: hooks in webserver_config.py
+- **Custom plugins**: Flask views, FAB-specific classes
+- **`airflow.contrib`** usage
+
+---
+
+## ruff AIR301 — import renames
+
+Ruff (Rust-implemented linter, заменяет flake8/black/isort) добавил Airflow-specific rules. AIR301 — deprecated imports:
+
+```bash
+# Check для AIR301 violations
+ruff check --select AIR301 dags/ plugins/
+
+# Auto-fix where safe
+ruff check --fix --select AIR301 dags/ plugins/
+```
+
+AIR301 detects:
+
+```python
+# Before (2.x)
+from airflow.decorators import dag, task              # AIR301
+from airflow.models import Variable                    # AIR301
+from airflow import Dataset                            # AIR301
+from airflow.providers.standard.decorators import dag  # AIR301
+
+# After auto-fix (3.x compatible)
+from airflow.sdk import dag, task
+from airflow.sdk import Variable
+from airflow.sdk import asset as Dataset  # alias for compat
+from airflow.sdk import dag
+```
+
+### Configuration в pyproject.toml
+
+```toml
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "B",
+    "AIR301",  # Deprecated imports for 3.x
+    "AIR302",  # Deprecated APIs for 3.x
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests могут use old imports temporarily
+"tests/**" = ["AIR301"]
+```
+
+### CI integration
+
+```yaml
+# .github/workflows/migration-readiness.yml
+- name: Ruff AIR301 — deprecated imports
+  run: |
+    # Initially warning mode (не block PR)
+    ruff check --select AIR301 dags/ plugins/ || true
+    echo "::warning::AIR301 violations detected — see logs"
+
+# After baseline fixes — strict mode
+- name: Ruff AIR301 strict
+  if: ${{ github.ref == 'refs/heads/main' }}
+  run: ruff check --select AIR301 dags/ plugins/  # exit 1 если violations
+```
+
+---
+
+## ruff AIR302 — deprecated APIs
+
+AIR302 — deprecated function/method usage:
+
+```bash
+ruff check --select AIR302 dags/
+
+# AIR302 finds:
+# - execution_date usage (use logical_date)
+# - schedule_interval (use schedule)
+# - start_date_str etc deprecated params
+# - sla parameter (removed в 3.x)
+# - DagRun.run_id formatting changes
+```
+
+Examples:
+
+```python
+# Before (AIR302 violations)
+@dag(schedule_interval="@daily")          # AIR302 — use schedule
+def my_dag():
+    @task(sla=timedelta(hours=1))         # AIR302 — sla removed в 3.x
+    def my_task(execution_date):          # AIR302 — use logical_date
+        ...
+
+# After auto-fix
+@dag(schedule="@daily")
+def my_dag():
+    @task  # sla parameter removed — alert через Listener API instead
+    def my_task(logical_date):
+        ...
+```
+
+Not all AIR302 violations auto-fixable. `sla` removal requires manual rework (replace с Listener-based monitoring).
+
+---
+
+## Migration с airflow upgrade-check workflow
+
+Recommended workflow:
+
+```bash
+# 1. Установить latest 2.x (2.10.5+ или 2.11)
+pip install "apache-airflow==2.11.0" --constraint ...
+
+# 2. Initial baseline scan
+airflow upgrade-check --to-version 3.0 > upgrade-issues.txt
+wc -l upgrade-issues.txt  # baseline count
+
+# 3. Auto-fix imports через ruff
+ruff check --fix --select AIR301 dags/ plugins/
+
+# 4. Re-scan
+airflow upgrade-check --to-version 3.0 > upgrade-issues-v2.txt
+diff upgrade-issues.txt upgrade-issues-v2.txt  # see what fixed
+
+# 5. Manual fix CRITICAL severity items
+# (SubDAG removal, FAB hooks, etc — see severity output)
+
+# 6. Continuous monitoring
+# Add upgrade-check к CI, warning mode, monitor count over time
+```
+
+---
+
+## CI integration для readiness tracking
+
+```yaml
+# .github/workflows/migration-readiness.yml
+name: Airflow 3.x Migration Readiness
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Weekly Monday 9am
+  workflow_dispatch:
+
+jobs:
+  readiness-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Airflow 2.11
+        run: |
+          pip install "apache-airflow==2.11.0" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.11.0/constraints-3.11.txt"
+          pip install ruff==0.6.0
+
+      - name: airflow upgrade-check
+        run: |
+          airflow db init
+          airflow upgrade-check --to-version 3.0 | tee upgrade-check.log
+
+          # Count warnings / criticals
+          WARNINGS=$(grep -c "WARNING" upgrade-check.log || echo 0)
+          CRITICAL=$(grep -c "CRITICAL" upgrade-check.log || echo 0)
+
+          echo "::notice::Migration readiness — WARNINGS: $WARNINGS, CRITICAL: $CRITICAL"
+
+          # Post stats к Slack
+          curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+            -H 'Content-Type: application/json' \
+            -d "{\"text\":\"Airflow 3.x migration: $WARNINGS warnings, $CRITICAL criticals (week of $(date +%Y-%m-%d))\"}"
+
+      - name: Ruff AIR301 count
+        run: |
+          AIR301_COUNT=$(ruff check --select AIR301 --quiet dags/ plugins/ 2>&1 | wc -l)
+          echo "AIR301 violations: $AIR301_COUNT"
+
+      - name: Ruff AIR302 count
+        run: |
+          AIR302_COUNT=$(ruff check --select AIR302 --quiet dags/ plugins/ 2>&1 | wc -l)
+          echo "AIR302 violations: $AIR302_COUNT"
+
+      - name: Update migration dashboard
+        run: |
+          # POST к internal dashboard tracking migration progress
+          # OR update README badge
+```
+
+Trend graph (warnings count week-by-week) — visible progress, motivates fixes.
+
+---
+
+## Pre-commit hook для new code
+
+Prevent NEW deprecated code from merging:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        args:
+          - --fix
+          - --select=E,W,F,I,B,AIR301,AIR302
+        types_or: [python]
+
+  - repo: local
+    hooks:
+      - id: no-new-execution-date
+        name: No new execution_date usage
+        entry: bash -c '! grep -rn "execution_date" dags/ plugins/ | grep -v "# legacy" | grep -v "_logical_date" || (echo "Use logical_date instead of execution_date"; exit 1)'
+        language: system
+        files: ^(dags|plugins)/.*\.py$
+        pass_filenames: false
+```
+
+Strategy:
+- Existing violations — fix gradually, ruff `--fix` automatic where safe
+- New code — pre-commit blocks deprecated usage
+- Net effect — count decreases monotonically
+
+---
+
+## Categories of common violations
+
+What you'll see в large codebase audit:
+
+### Category 1: TaskFlow imports (high volume, easy fix)
+
+```python
+# 200+ DAGs typically have:
+from airflow.decorators import dag, task
+
+# Auto-fix к:
+from airflow.sdk import dag, task
+```
+
+Ruff AIR301 `--fix` handles. 1 command fixes hundreds files.
+
+### Category 2: execution_date references (medium volume, partial auto)
+
+```python
+# Common patterns:
+@task
+def my_task(execution_date):                          # AIR302 auto-fix → logical_date
+    print(f"Running for {execution_date}")             # AIR302 auto-fix
+    ds = execution_date.strftime("%Y-%m-%d")           # AIR302 auto-fix
+    sql = f"SELECT * FROM events WHERE date = '{ds}'"
+```
+
+Most auto-fixable. Edge cases (`{{ execution_date }}` в string templates) — manual review.
+
+### Category 3: SubDAG (low volume, manual fix)
+
+```python
+# 2.x with deprecated SubDAG:
+from airflow.operators.subdag import SubDagOperator
+
+subdag_task = SubDagOperator(
+    task_id="my_subdag",
+    subdag=create_subdag(parent_dag_name, "my_subdag", start_date),
+)
+
+# 3.x — manual rewrite на TaskGroup:
+with TaskGroup(group_id="my_subdag") as my_subdag:
+    task1()
+    task2()
+```
+
+Manual rewrite per occurrence. Modern codebases typically already migrated в 2.x.
+
+### Category 4: FAB usage (low volume, high impact)
+
+```python
+# webserver_config.py — common 2.x pattern:
+from airflow.www.fab_security.manager import AUTH_OAUTH
+AUTH_TYPE = AUTH_OAUTH
+OAUTH_PROVIDERS = [...]
+
+# 3.x — replace через auth provider:
+# (1) Install apache-airflow-providers-fab для compat:
+# pip install apache-airflow-providers-fab
+# (2) Configure через [api] auth_backends
+```
+
+Manual config rework, hours-day each unique auth scenario.
+
+### Category 5: airflow.contrib (rare, already removed в 2.x)
+
+Should be 0 violations. If present — codebase severely lagging behind 2.x cleanups.
+
+---
+
+## Tooling roadmap
+
+Astronomer Astro's `astro dev upgrade-check` builds on top:
+- Visual report
+- DAG-by-DAG breakdown
+- Estimated migration effort
+- Best practices recommendations
+
+`apache-airflow-clients` — Python client generator from OpenAPI spec (3.x API).
+
+`pyupgrade-airflow` (experimental) — auto-modernize beyond ruff's coverage.
+
+---
+
+## Production gotchas
+
+**Ruff version matters**. AIR301/AIR302 added в ruff 0.4+. Use latest (0.6+) для most rules coverage. Pin в pyproject.toml.
+
+**`airflow upgrade-check` requires `airflow db init`**. Without DB initialized — errors. Set `AIRFLOW_HOME=/tmp/airflow` в CI, init SQLite DB.
+
+**Auto-fix может break tests**. Always run tests после `ruff --fix` batch. Imports renamed но import statement order may change — black/ruff format fixes.
+
+**Some `execution_date` usage in templates not auto-fixed**. Search manually: `grep -rn '{{ execution_date }}' dags/`. Replace на `{{ logical_date }}`.
+
+**Provider versions matter**. Some 2.10 providers already removed deprecated APIs, others не. Check provider release notes для migration tips per-provider.
+
+**`airflow.contrib` warnings — investigate aggressively**. If found, that DAG uses VERY old code paths — likely other issues too.
+
+**False positives possible**. Custom modules с similarly-named symbols (`my_module.task`) trigger false AIR301. Add per-file ignore:
+
+```toml
+[tool.ruff.lint.per-file-ignores]
+"dags/legacy/some_dag.py" = ["AIR301"]  # Legacy custom imports OK
+```
+
+---
+
+<KnowledgeCheck
+  question="Команда хочет add migration readiness tracking в CI/CD сейчас (на 2.10), но в production все ещё нужны pass-rate чистый build. Какой подход разумнее всего?"
+  answer="Phased approach к migration readiness — multi-stage strategy: (1) **Stage 1 — Discovery (week 1)**: запустить baseline scan. `airflow upgrade-check --to-version 3.0 > baseline.txt`, count violations. Это NOT blocking — just info gathering. Plus `ruff check --select AIR301,AIR302 dags/` для granular count. Document current state в README или migration dashboard. (2) **Stage 2 — Warning mode в CI (week 2-4)**: add ruff check к CI с `continue-on-error: true` (GitHub) или `allow_failure: true` (GitLab). Production builds pass даже если AIR301 violations exist. CI logs show count, posts к Slack daily/weekly stats. Не blocks PRs. (3) **Stage 3 — Block NEW violations (month 2)**: pre-commit hook blocks NEW deprecated usage в new code. Existing violations still allowed (whitelist через per-file-ignores). Count strictly decreasing — fix only when touching that file. (4) **Stage 4 — Auto-fix sweep (month 3)**: dedicated week — `ruff check --fix --select AIR301 dags/` для bulk auto-fix simple cases (imports). Manual review для AIR302 (some not auto-fixable). Run full test suite. Open PR с large diff (maybe 100+ files), thorough review. (5) **Stage 5 — Strict mode partial (month 4-6)**: ruff AIR301 enforcement (auto-fix easy). Still warning для AIR302 complex cases. Gradually fix manually. (6) **Stage 6 — Migration day ready (month 12)**: AIR301/AIR302 = 0 violations. upgrade-check criticals = 0. CRITICAL: at this stage actual migration к 3.x относительно safe и low-risk — codebase уже 3.x-compatible style. **Anti-pattern — avoid**: enforcing strict mode immediately (all 200 DAGs blocked merging — chaos). Production team needs to ship features ALONG with migration prep. **Bonus**: track count weekly как metric — `airflow_migration_readiness_violations` в Grafana. Visible progress → motivation. **Trade-offs**: phased approach takes 6-12 months, but production stays stable. Big-bang ('migrate today') possible но high risk, требует dedicated 2-3 month freeze on features. Phased — production-recommended path."
+/>

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/03-dag-factory",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-03" },
+  "questions": [
+    {
+      "id": "airflow-m17-03-q1",
+      "type": "multiple-choice",
+      "question": "Factory делает requests.get('https://config-api/...') в top-level — почему катастрофа?",
+      "options": [
+        { "id": "a", "text": "Slow" },
+        { "id": "b", "text": "Top-level код выполняется на каждом DAG parse (~30s). Network call → нагрузка на config API, замедление scheduler tick, API outage → import error → ALL generated DAGs пропадают. Fix: bake config в Git (committed YAML)" },
+        { "id": "c", "text": "Security" },
+        { "id": "d", "text": "Bug" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagFileProcessor parses files каждые ~30s. Top-level network call = 30+ calls per minute per file. Problems: (1) Load на config API; (2) Slow parse; (3) API outage = ALL DAGs пропадают (import error на каждом file). Fix: committed YAML в Git — version-controlled, fast parse, no runtime dependency. Sync DAG (separate) который exports external config в Git via periodic CI.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-03-q2",
+      "type": "multiple-choice",
+      "question": "В factory closure over cfg — почему проблема?",
+      "options": [
+        { "id": "a", "text": "Не проблема" },
+        { "id": "b", "text": "Closure references cfg dict. Если cfg mutate-ется where else (mutable shared state) — closure видит updated value. Subtle bugs. Fix: capture в local variables: `source = cfg['source']` перед @dag definition, use `source` в task bodies" },
+        { "id": "c", "text": "Slow" },
+        { "id": "d", "text": "Несовместимо с Python 3.11" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Python closures capture references на names в enclosing scope. Если cfg dict mutate-ется after make_dag(cfg) call — task code будет видеть mutated values. Race conditions, non-deterministic behavior. Fix: capture immutable values в local vars: `source = cfg['source']; target = cfg['target']` ДО @dag decorator. Tasks reference local vars — frozen at definition time. Same applies к loops generating DAGs (loop variable closure quirk).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-03-q3",
+      "type": "multiple-choice",
+      "question": "Factory generates 200 DAGs. Не появляются в UI после deploy. Что проверить?",
+      "options": [
+        { "id": "a", "text": "Helm chart version" },
+        { "id": "b", "text": "(1) generate_dags() результат assign в globals() — `for dag_id, dag in generate_dags().items(): globals()[dag_id] = dag` обязателен. Без этого DAGs invisible. (2) Import errors — `airflow dags list-import-errors`; (3) DagBag size — может быть DAG file timeout (default 30s parse limit)" },
+        { "id": "c", "text": "Restart scheduler" },
+        { "id": "d", "text": "Reduce DAGs до 50" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Airflow scans module's globals() для DAG instances. Если factory returns dict но не assign в globals — DAGs invisible. Common mistake: `dags = generate_dags()` (local) вместо `for id, dag in generate_dags().items(): globals()[id] = dag`. Other causes: parse timeout (200 DAGs × heavy import = >30s, нужен parsing_processes increase или lazy imports), import errors в один из DAGs (cascade), duplicates dag_id (silent overwrite).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-03-q4",
+      "type": "true-false",
+      "question": "1000+ generated DAGs from factory — приемлемое production использование pattern.",
+      "correctAnswer": false,
+      "explanation": "1000+ generated DAGs = anti-pattern. Problems: UI overload (DAG list endless), parse time >5 min (scheduler tick blocked), operational overhead (кто owns каждый?), alert noise, monitoring per-DAG metric explosion. Heuristic: 1-50 DAGs OK, 50-200 OK с discipline, 200-1000 questionable, 1000+ rethink design. Alternative: один DAG с Dynamic Task Mapping (модуль 07) — processes N items без N separate DAGs. Если really need 1000+ — separate Airflow instances by team/domain.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/03-openlineage-deep",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-03" },
+  "questions": [
+    {
+      "id": "airflow-m14-03-q1",
+      "type": "multiple-choice",
+      "question": "OpenLineage provider стабилизирован в Airflow начиная с какой версии?",
+      "options": [
+        { "id": "a", "text": "1.10" },
+        { "id": "b", "text": "2.6+ — `apache-airflow-providers-openlineage` provider package. До этого была experimental `openlineage-airflow` библиотека (separate install). С 2.6 — встроенный provider с automatic registration через entry_points" },
+        { "id": "c", "text": "Только 3.x" },
+        { "id": "d", "text": "2.0" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "До 2.6 lineage emission была через standalone `openlineage-airflow` lib, требовала manual setup macro в DAG. С 2.6 — official Apache provider package, auto-registers через Listener API (модуль 12). В Airflow 2.10/2.11 — production-ready. Это game changer для data governance — lineage из коробки, no DAG changes.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-03-q2",
+      "type": "multiple-choice",
+      "question": "Какие operators поддерживаются automatic emission OpenLineage (без custom extractor)?",
+      "options": [
+        { "id": "a", "text": "Все operators автоматически" },
+        { "id": "b", "text": "Standard SQL operators (Postgres, MySQL, Snowflake, BigQuery, SQLExecuteQuery), Transfer operators (S3ToGCS, GCSToBigQuery), Spark operators. **НЕ автоматически** для PythonOperator, BashOperator, custom operators — нужен custom extractor или inlets/outlets" },
+        { "id": "c", "text": "Только Postgres" },
+        { "id": "d", "text": "Только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Provider содержит built-in extractors для standard operators. Главная фишка — SQL parsing (openlineage-sql Rust lib) для PostgresOperator/SnowflakeOperator/etc — автоматически извлекает source/target tables, column lineage. PythonOperator не имеет 'know' inputs/outputs (произвольный Python код) — нужен custom extractor (урок 14/04) или manual inlets/outlets на task definition. BashOperator с CLI tools — same story.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-03-q3",
+      "type": "multiple-choice",
+      "question": "OpenLineage emit-ит SQL queries как facets. Что важно для security?",
+      "options": [
+        { "id": "a", "text": "Ничего особенного" },
+        { "id": "b", "text": "Sensitive data в SQL может leak: hardcoded secrets ('WHERE token = ...'), PII в literal values, schema names с customer info. Mitigation: SQL sanitization в custom extractor, disabled_for_operators для специфических, column-level filtering в OL Collector" },
+        { "id": "c", "text": "Marquez автоматически redacts secrets" },
+        { "id": "d", "text": "OL не emit SQL" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OL job_facets содержат полный SQL query как text. Если ваш SQL имеет hardcoded secrets ('AND password = sk-prod-...') или literal PII values — они в lineage events, потом в backend (Marquez logs/UI), доступны всем с access. Для compliance критично: (1) использовать parametrized queries (placeholders, not literals); (2) sanitize SQL в custom extractor (strip WHERE clauses); (3) network isolation backend; (4) audit log who reads lineage. PII в schema names — отдельная concern, может потребовать column-level filter.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-03-q4",
+      "type": "true-false",
+      "question": "OpenLineage namespace = logical grouping identifier. Best practice: один namespace per Airflow cluster ('airflow.prod-eu', 'airflow.staging'). Datasets имеют свой namespace на основе URL connection (postgres://host, s3://bucket).",
+      "correctAnswer": true,
+      "explanation": "Namespace организация — critical для cross-platform lineage. Job namespace = Airflow cluster identifier (job 'etl_orders.transform' в 'airflow.prod-eu'). Dataset namespace = system identifier (postgres://warehouse, s3://lake) + name (schema.table, /path/file). Это позволяет backend объединять lineage: Airflow job в namespace 'airflow.prod-eu' пишет в 'postgres://warehouse' + 'analytics.orders'. dbt job в namespace 'dbt.prod' тоже пишет в эту же таблицу → backend (Marquez) показывает unified граф: Airflow → table ← dbt. Это **главная сила** OL standardization.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/08-security-hardening",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-08" },
+  "questions": [
+    {
+      "id": "airflow-m15-08-q1",
+      "type": "multiple-choice",
+      "question": "Production: один DB user `airflow` с full privileges для всех components. Что плохо?",
+      "options": [
+        { "id": "a", "text": "Ничего" },
+        { "id": "b", "text": "Нарушает principle of least privilege. Production setup — 5 разных users: airflow_admin (migrations only), airflow_scheduler, airflow_webserver, airflow_worker, airflow_readonly. Defense in depth: если worker exploited через RCE, атакующий не может DROP TABLE" },
+        { "id": "c", "text": "Бывает медленно" },
+        { "id": "d", "text": "Несовместимо с PgBouncer" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default Helm создаёт один user с full access — простой, но небезопасно. Production split: airflow_admin (только для db migrate), airflow_scheduler (CRUD on all tables), airflow_webserver (READ + INSERT log/audit), airflow_worker (только TI/XCom/log — никакого access к ab_user/ab_role), airflow_readonly (для analytics). Сложнее в эксплуатации (5 users в Vault), но даёт real defense in depth — exploit одного компонента ограничен permissions того компонента.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-08-q2",
+      "type": "multiple-choice",
+      "question": "Worker pod NetworkPolicy в production должен запрещать какие egress?",
+      "options": [
+        { "id": "a", "text": "Все egress" },
+        { "id": "b", "text": "Access к EC2 metadata endpoint 169.254.169.254 (SSRF prevention), Kubernetes API (privilege escalation), other workloads. Allow: DNS, PgBouncer, Redis, S3/Snowflake (explicit allowlist), Vault" },
+        { "id": "c", "text": "Только DNS" },
+        { "id": "d", "text": "Никакие" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Worker выполняет user-provided code в DAGs — самый уязвимый компонент. NetworkPolicy egress: deny 169.254.169.254 (EC2 metadata SSRF — даёт IAM credentials), deny Kubernetes API server (privilege escalation), deny other namespaces. Allow whitelist: DNS, PgBouncer (port 6432), Redis (6379), S3 IP ranges, Snowflake VPC endpoint. Plus IRSA вместо EC2 instance role на EKS — каждый pod имеет own minimal IAM role. Без NetworkPolicy + IRSA worker compromise = full AWS account compromise.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-08-q3",
+      "type": "multiple-choice",
+      "question": "Зачем External Secrets Backend (Vault/AWS SM) когда Fernet encryption уже шифрует в DB?",
+      "options": [
+        { "id": "a", "text": "Не нужен — Fernet достаточно" },
+        { "id": "b", "text": "Defense in depth: (1) DB compromise + Fernet key compromise → ALL secrets leaked в DB-only setup; в Vault setup secrets не в DB; (2) Audit «кто получал access» — Vault детально логирует; (3) Per-secret rotation независимо от Airflow restart; (4) Separate lifecycle от Airflow" },
+        { "id": "c", "text": "Только для compliance" },
+        { "id": "d", "text": "Быстрее" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fernet в DB — minimum защита. External Secrets Backend дополнительный layer: secrets не в DB, audit per-access (кто, когда, какой secret), independent rotation (rotate secret в Vault без Airflow restart), separate lifecycle (можно revoke секрет немедленно). Performance с use_cache=True ~1μs. Production-grade требование — Secrets Backend mandatory. Vault recommended, AWS Secrets Manager / GCP Secret Manager — viable alternatives.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m15-08-q4",
+      "type": "true-false",
+      "question": "Default admin/admin user в Helm chart обязательно создаётся при каждой установке.",
+      "correctAnswer": false,
+      "explanation": "Helm chart имеет `webserver.defaultUser.enabled` — по default `true`. Создаёт admin/admin с предсказуемым паролем (admin). Production обязательно установить `defaultUser.enabled: false` плюс настроить OIDC через webserver_config.py. Также: `[core] load_examples=False`, `[webserver] expose_config=False`, `secure_cookie=True`. Эти настройки — bare minimum для production security baseline.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

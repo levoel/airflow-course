@@ -1,0 +1,89 @@
+{
+  "moduleId": "12-plugins-listeners",
+  "title": "Module 12 Exam — Plugins и Listeners",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m12-exam",
+    "description": "6-question integrated exam for Module 12"
+  },
+  "questions": [
+    {
+      "id": "airflow-m12-exam-q1",
+      "type": "multiple-choice",
+      "question": "Plugin discovery в Airflow 2.x — какие два механизма и в каком порядке?",
+      "options": [
+        { "id": "a", "text": "Только entry_points" },
+        { "id": "b", "text": "Phase 1: file-based — $AIRFLOW_HOME/plugins/ сканируется (pkgutil.iter_modules), AirflowPlugin классы instantiated. Phase 2: entry_points — pip packages с apache_airflow_provider entry_point load. При конфликте имён entry_points (последний) выигрывает. Production recommended — entry_points provider package" },
+        { "id": "c", "text": "Только file-based" },
+        { "id": "d", "text": "Через UI" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "File-based loaded first, providers loaded second. Plugin может зарегистрировать hooks, operators, sensors, macros, executors, timetables, listeners, Flask blueprints, FAB views. Production team — provider package с pip install в Airflow image. File-based — dev/quick fixes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-exam-q2",
+      "type": "multiple-choice",
+      "question": "Listener API (2.8+) — какой fundamental shift от старых mechanism (on_failure_callback)?",
+      "options": [
+        { "id": "a", "text": "Просто новый API без изменений" },
+        { "id": "b", "text": "Centralized system-wide event subscription через pluggy. Один listener видит ВСЕ task/dagrun/dataset events автоматически. Decoupling: Airflow code вызывает hook spec, listeners реализуют @hookimpl. Решает scalability проблему callbacks per-task которые не работают на 500+ DAG. OpenLineage provider — production example" },
+        { "id": "c", "text": "Listener async — не блокирует" },
+        { "id": "d", "text": "Listener только для logs" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Pluggy-based design (тот же что pytest). Decoupling Airflow от subscribers. Per-task callbacks — fragmented, require discipline. Listener — central, automatic coverage. Use cases: generic alerting (Slack, PagerDuty), audit logging, OpenLineage emission, Datadog/custom monitoring. Listener синхронный — обязателен fast (≤100ms).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m12-exam-q3",
+      "type": "multiple-choice",
+      "question": "Создать кастомный hook DataCorpHook(BaseHook) — что обязательно implement?",
+      "options": [
+        { "id": "a", "text": "Только __init__" },
+        { "id": "b", "text": "get_conn() — return raw client (requests.Session, psycopg2.Connection, etc). Pattern: lazy-init с self._session cache, использовать self.get_connection(conn_id) для lookup. Optionally: get_ui_field_behaviour для UI customization, get_connection_form_widgets для extra fields. conn_type class attribute для UI dropdown" },
+        { "id": "c", "text": "Все 30 methods BaseHook" },
+        { "id": "d", "text": "Только async methods" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Minimum: get_conn() returning typed client. Plus methods для your business logic (get_resource, list_resources). conn_type для UI registration in provider connection-types. Test через mocking get_connection + mocking client. Hook re-instantiated per task — cache в self._session OK for single task lifetime, не cross-task.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-exam-q4",
+      "type": "multiple-choice",
+      "question": "Macros и Jinja templates — основное различие между macros и user_defined_filters?",
+      "options": [
+        { "id": "a", "text": "Macros быстрее" },
+        { "id": "b", "text": "user_defined_macros — function-style calls в template: {{ fiscal_year(ds) }}. user_defined_filters — pipe syntax: {{ ds | hash_int(16) }}. Filters читаемее для chain transformations ({{ ds | hash_int(16) | format }}). Macros лучше для multi-arg complex expressions. Оба механизма OK, выбор стилистический" },
+        { "id": "c", "text": "Они эквивалентны" },
+        { "id": "d", "text": "Filters только для строк" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Jinja syntactic distinction. Macros: function call style. Filters: pipe operator like Unix shells. Combine both: macros для domain logic (fiscal_year, partition_path), filters для inline transformations (hash_int, sql_quote, format). Built-in macros (macros.ds_add) для general date arithmetic.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m12-exam-q5",
+      "type": "multiple-choice",
+      "question": "Webserver UI plugin в 2.x — что фундаментально нельзя модифицировать через plugin?",
+      "options": [
+        { "id": "a", "text": "Ничего нельзя" },
+        { "id": "b", "text": "Существующие pages (DAG list, graph view, gantt chart) — server-rendered hard-coded. Plugin может ТОЛЬКО добавить новые pages, REST endpoints, menu items, operator extra links — но не модифицировать existing. Это architectural limit Flask/FAB 2.x. В 3.1+ planned react_apps для micro-frontends inside existing pages" },
+        { "id": "c", "text": "REST endpoints" },
+        { "id": "d", "text": "Menu items" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "2.x architecture: Flask + FAB, server-rendered. Plugin extends, не modifies. Production pattern: для богатых dashboards — внешний tool (Grafana/Metabase) + link через appbuilder_menu_items. Listener API + Grafana — typical stack. 3.1+ React plugins — full SPA внутри Airflow UI possible.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-exam-q6",
+      "type": "true-false",
+      "question": "Изменили плагин в $AIRFLOW_HOME/plugins/ — нужен restart ВСЕХ Airflow процессов: scheduler, webserver, workers (Celery), triggerer, dag-processor. В 2.x нет hot reload plugins.",
+      "correctAnswer": true,
+      "explanation": "Plugins lazily loaded на boot, cached в process memory module-level. Если restartать только webserver — scheduler/workers продолжают использовать старый plugin. Inconsistent behavior. Production dev cycle: code → kill all processes → start → test. В 3.1+ planned hot reload plugins. Workaround: rolling restart с overlap, чтобы avoid full Airflow downtime.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

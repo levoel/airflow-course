@@ -1,0 +1,89 @@
+{
+  "moduleId": "09-triggerer-deferrable",
+  "title": "Module 09 Exam — Triggerer и Deferrable Operators",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m09-exam",
+    "description": "6-question integrated exam for Module 09: Triggerer architecture, BaseTrigger anatomy, deferrable conversion, sensor modes, TaskSuccessEvent + HA"
+  },
+  "questions": [
+    {
+      "id": "airflow-m09-exam-q1",
+      "type": "multiple-choice",
+      "question": "Lifecycle deferrable task — корректный порядок?",
+      "options": [
+        { "id": "a", "text": "Worker полностью держит task до завершения" },
+        { "id": "b", "text": "(1) Worker execute() → self.defer(); (2) TaskDeferred ловится: trigger.serialize() → INSERT trigger, TI=deferred, worker slot free; (3) Triggerer SELECT FOR UPDATE SKIP LOCKED → adopt; (4) trigger.run() async loop, yield TriggerEvent; (5) TI=scheduled, kwargs=event; (6) Worker resumes execute_complete(event)" },
+        { "id": "c", "text": "Scheduler выполняет triggers напрямую" },
+        { "id": "d", "text": "Triggerer запускает task code" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Полный flow: (1) Worker запускает operator.execute(), initial check, defer; (2) TaskDeferred (flow control exception) ловится — trigger serialize, INSERT в trigger table, TI state=deferred, worker slot free; (3) Triggerer на next tick делает SQL adoption через SKIP LOCKED, deserialize trigger; (4) trigger.run() в asyncio loop ждёт условие, yield TriggerEvent при satisfaction; (5) Triggerer записывает event: TI=scheduled, next_kwargs={event: payload}, DELETE trigger; (6) Scheduler видит scheduled, queues worker; worker resumes operator.execute_complete(context, event) — финальный return XCom. Это design separation: state в DB (durable), processing в memory across processes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-exam-q2",
+      "type": "multiple-choice",
+      "question": "Custom trigger требует HTTP polling external API с timeout 6 hours. Какие 3 mistakes ломают production?",
+      "options": [
+        { "id": "a", "text": "Использовать любой HTTP клиент" },
+        { "id": "b", "text": "(1) requests.get вместо aiohttp — blocking call замораживает event loop; (2) time.sleep(60) вместо await asyncio.sleep(60) — same problem; (3) self.retries_done counter без serialization — теряется при triggerer restart; (4) Bonus: requests не installed в triggerer Docker image" },
+        { "id": "c", "text": "JSON serialization ok" },
+        { "id": "d", "text": "Использовать threading" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Common async mistakes в triggers: (1) Sync HTTP (requests, urllib3) — blocking call в asyncio loop, замораживает ВСЕ другие triggers на duration request. Fix: aiohttp с async with session.get. (2) time.sleep — sync sleep, same blocking issue. Fix: await asyncio.sleep. (3) Counter в self.retries_done — in-memory, теряется при triggerer restart. Re-adopt создаёт fresh instance через cls(**serialized_kwargs), counter обнуляется. Fix: absolute deadline в __init__ (datetime + timedelta), serialize remaining timeout. (4) Image deps: aiohttp / asyncpg должны быть в triggerer Dockerfile (requirements.txt) — иначе deserialization fails. Все эти класс ошибок выявляются code review + production testing с stress (1000+ concurrent triggers + triggerer restart drill).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-exam-q3",
+      "type": "multiple-choice",
+      "question": "Three sensor modes (poke, reschedule, deferrable) на 1000 concurrent sensors. Production cost:",
+      "options": [
+        { "id": "a", "text": "Все одинаковые" },
+        { "id": "b", "text": "poke: 40+ worker pods, $$$$/hour — non-viable; reschedule: 4-6 workers + heavy DB (60k inserts/hour), $$/hour — borderline; deferrable: 1 triggerer + 0 workers waiting, $/hour — 20-30x cheaper than poke. Latency сравнима для deferrable" },
+        { "id": "c", "text": "poke всегда cheapest" },
+        { "id": "d", "text": "reschedule оптимальный" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cost analysis (1000 concurrent, timeout=4h, K8s executor): poke — каждый sensor блокирует worker slot full timeout. 1000 slots, ~40 worker pods, $2-3/hour just for waiting. Non-viable. reschedule — slots free между poke, но 60k task_reschedule INSERTs/hour, нужен db.r6g.xlarge+, scheduler latency растёт. $0.50/hour + DB upgrade cost. Borderline. deferrable — 0 worker slots, 1 triggerer pod handles all (5k+ capacity), 1000 rows в trigger table once. $0.10/hour. 20-30x cheaper than poke, 5x cheaper than reschedule. Latency 5-15s post-event для deferrable — same ballpark как другие. Clear winner. Migration: добавить deferrable=True per sensor + deploy triggerer (2 replicas HA).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m09-exam-q4",
+      "type": "multiple-choice",
+      "question": "Production gotcha: AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true в конфиге, но triggerer не deployed. Что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Tasks автоматически работают в poke mode" },
+        { "id": "b", "text": "Все deferrable operators делают self.defer() → TI state=deferred → но no triggerer adopt-ит — tasks зависают forever в state=deferred. UI показывает 'running', фактически zombie. Silent failure без obvious error" },
+        { "id": "c", "text": "Airflow fails при startup" },
+        { "id": "d", "text": "Workers переключаются в legacy mode" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Silent disaster: deferrable=true enables defer flow в operators. self.defer() raises TaskDeferred, worker handles: trigger.serialize() + INSERT trigger row + TI=deferred + worker slot free. До этого момента всё ok. Но triggerer не deployed → нет process делать SELECT FOR UPDATE SKIP LOCKED → trigger rows накапливаются с triggerer_id=NULL forever. TI stuck в state=deferred. UI отображает как running (state semantic), но реально zombie. No error logs, no alerts. Detection: query 'SELECT COUNT(*) FROM trigger WHERE triggerer_id IS NULL' растёт линейно. Fix: deploy triggerer ПЕРЕД enabling deferrable. Always: order matters в deployment.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-exam-q5",
+      "type": "multiple-choice",
+      "question": "Scheduler vs Triggerer concurrency patterns — главная архитектурная разница?",
+      "options": [
+        { "id": "a", "text": "Идентичные" },
+        { "id": "b", "text": "Scheduler: NOWAIT lock на slot_pool — mutex semantics (один critical section). Triggerer: SKIP LOCKED на trigger rows — work distribution (параллельный adoption). Reflects разные workloads: serialized decisions vs parallel waits" },
+        { "id": "c", "text": "Только tick interval" },
+        { "id": "d", "text": "Scheduler async, triggerer sync" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fundamental architectural distinction. Scheduler critical section (модуль 04): SELECT FOR UPDATE NOWAIT на slot_pool. Mutex — один scheduler внутри section, другие skip tick. Это для serialized decisions (pool limit allocation). Triggerer adoption: SELECT FOR UPDATE SKIP LOCKED на trigger rows. Work-stealing — каждый triggerer берёт available batch, пропускает locked другими. Это для parallel work distribution (тысячи independent waits). Workload-driven design: scheduler решает CPU-heavy decisions с shared resources → mutex; triggerer держит I/O-bound waits → parallel. PostgreSQL SQL feature usage отражает intent.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m09-exam-q6",
+      "type": "true-false",
+      "question": "TaskSuccessEvent (2.10+) подходит для CPU-heavy operators, где нужно делать transformation после ожидания.",
+      "correctAnswer": false,
+      "explanation": "TaskSuccessEvent — оптимизация для simple sensors с trivial execute_complete (validate + return). Triggerer завершает task directly: UPDATE TI=success + xcom=payload, skip worker resume. CPU-heavy work НЕ подходит — triggerer single-threaded asyncio loop, blocking CPU work замораживает все другие triggers. Нужен worker для heavy compute (CPU-intensive transformations, parsing large JSON, ML inference). Также не подходит когда execute_complete нужен access к Airflow context (Variables, Connections — обычно доступны на worker, partially на triggerer). Правильный use case TaskSuccessEvent: sensor который validates event status и returns XCom value — vast majority sensor cases. Heavy compute — keep standard TriggerEvent + worker resume pattern.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

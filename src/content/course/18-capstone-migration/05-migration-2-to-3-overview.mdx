@@ -1,0 +1,364 @@
+---
+title: "Migration 2 → 3 overview — что меняется и breaking changes"
+description: "Что меняется в Airflow 3.x: FastAPI server, Task SDK (AIP-72), DAG Versioning (AIP-63), DAG Bundles (AIP-66), Datasets→Assets, execution_date→logical_date, FAB removal, Edge Executor"
+order: 5
+difficulty: "advanced"
+estimatedTime: 28
+topics: ["Migration", "Airflow 3", "Breaking Changes", "AIP", "Roadmap"]
+---
+
+# Migration 2 → 3 overview — что меняется и breaking changes
+
+Airflow 3.0 — самый большой architectural shift в истории Airflow с 2.0 (2020). Это **не косметический upgrade** — это переработка core: Task SDK boundary, FastAPI server, FAB removed, Datasets renamed to Assets, standalone DAG Processor mandatory. Этот урок — comprehensive обзор breaking changes для preparation migration.
+
+Airflow 3.0 released ~Q1 2025, 3.1 (HITL, многоe др.) ~Q4 2025, 3.2 (Multi-Team AIP-67) ~Q2 2026. В 2026 большинство production deployments всё ещё на 2.10/2.11 (LTS) — migration recommended planned event в 2026-2027.
+
+---
+
+## Big picture — почему 3.x
+
+Airflow 2.x была foundation Airflow для 5+ лет (2020-2025). Накопились architectural debts:
+
+- **Worker direct DB access** — workers (user code) имеют direct SQLAlchemy session к metadata DB. Security risk: malicious DAG может query / modify ALL Airflow state.
+- **Flask + Flask-AppBuilder** — старый stack, медленный, hard для extending. UI не reactive, API v1 ограничен.
+- **DAG Processor в scheduler** — heavy parsing замедляет scheduling main loop.
+- **No DAG versioning** — UI shows только latest version, history lost.
+- **No Multi-Team isolation** — все DAGs share одну Airflow instance.
+
+3.x addresses этого через:
+
+| AIP | Change | Impact |
+|---|---|---|
+| AIP-72 Task SDK | Tasks communicate с Airflow через REST API, не direct DB | Security, future-proof |
+| AIP-44 Internal API | Components (scheduler, webserver) talk через API | Decoupled architecture |
+| AIP-63 DAG Versioning | History DAG kept в DB | UI shows old versions, audit |
+| AIP-66 DAG Bundles | Pluggable DAG source abstraction (Git/S3/HTTP) | Replaces gitSync |
+| AIP-74/75 Assets | Datasets renamed to Assets | Better semantic alignment |
+| AIP-83 logical_date | execution_date renamed | Clarity |
+| AIP-79 Auth providers | FAB removed, pluggable auth | Modern OIDC/OAuth |
+| AIP-69 Edge Executor | Run tasks на edge nodes | New use case |
+| AIP-67 Multi-Team | Team isolation в one Airflow | Enterprise feature |
+| AIP-90 HITL Operator | Human-in-the-loop dedicated | Replaces sensor pattern |
+
+---
+
+## Breaking changes summary table
+
+| # | What | 2.x | 3.x | Severity | Auto-fix? |
+|---|---|---|---|---|---|
+| 1 | Decorators import | `from airflow.decorators import dag, task` | `from airflow.sdk import dag, task` | High (every DAG) | Yes — ruff AIR301 |
+| 2 | Datasets → Assets | `from airflow import Dataset` | `from airflow.sdk import asset` | Medium | Partial |
+| 3 | execution_date deprecation | `{{ execution_date }}` | `{{ logical_date }}` | Medium | Yes — ruff AIR302 |
+| 4 | SubDAG operator | Available (deprecated) | **Removed** | High если used | Manual — replace на TaskGroup |
+| 5 | SmartSensor | Already removed в 2.x | Removed | None | N/A |
+| 6 | DAG Processor | Optional standalone | **Mandatory** | High infra | Helm config |
+| 7 | Worker DB access | Direct SQLAlchemy | **Task SDK через REST API** | Critical | Automatic в SDK |
+| 8 | Webserver | Flask + FAB | **FastAPI + React UI** | High infra | Helm config |
+| 9 | REST API | v1 (Flask-RESTful) | **v2 (FastAPI OpenAPI)** | Medium | Update API consumers |
+| 10 | FAB auth | Built-in | **Removed (AIP-79 pluggable)** | High если custom auth | Manual — auth provider config |
+| 11 | airflow.contrib | Already removed | Removed | None | N/A |
+| 12 | catchup default | `catchup=True` default | `catchup=False` default | Low (explicit recommended) | None — re-review |
+| 13 | XCom serialization | pickle by default | JSON by default | Medium | Set serialization config |
+| 14 | SLA | Native | **Removed (AIP-89)** | Medium | Manual — replace с custom DAG callbacks или Listener |
+| 15 | Helm chart | 1.x | 2.x | High | Helm upgrade |
+
+---
+
+## AIP-72 Task SDK — most fundamental change
+
+**Самое важное изменение** в 3.x.
+
+В 2.x:
+```python
+@task
+def my_task():
+    from airflow.models import Variable
+    val = Variable.get("foo")  # Direct DB query
+    from airflow.providers.postgres.hooks.postgres import PostgresHook
+    conn = PostgresHook.get_connection("my_db")  # Direct DB query
+```
+
+Workers имеют direct SQLAlchemy session к metadata DB. Implications:
+- Malicious DAG может `session.query(User).delete()` — drop users table
+- Heavy queries from many concurrent workers — DB bottleneck
+- Schema changes в metadata DB break worker code
+
+В 3.x — все через **Task SDK** REST API:
+
+```python
+from airflow.sdk import task, Variable, Connection
+
+@task
+def my_task():
+    val = Variable.get("foo")        # Calls Airflow API server
+    conn = Connection.get("my_db")   # Calls Airflow API server
+```
+
+Под капотом — Task SDK делает HTTP request к Airflow API server. Worker не имеет direct DB access.
+
+**Benefits**:
+- Security — workers cannot query/modify arbitrary tables
+- Future-proof — metadata DB schema can change without breaking workers
+- Multi-team isolation — different teams могут use different API endpoints
+
+**Migration**: `from airflow.decorators` → `from airflow.sdk`. Ruff AIR301 auto-fix. Plus replace `from airflow.models import Variable` → `from airflow.sdk import Variable`.
+
+---
+
+## DAG Versioning (AIP-63)
+
+В 2.x — UI shows only latest DAG version. Если изменил DAG и старый run failed — debugging тяжёлый, UI shows new structure.
+
+В 3.x — каждое DAG modification creates new version в DB. UI lets you:
+- View old run против old DAG version
+- Compare versions
+- Rollback к previous version
+
+Migration: nothing нужно в DAG code. But operationally — больше DB storage для versioned DAGs.
+
+---
+
+## DAG Bundles (AIP-66) — replaces gitSync
+
+В 2.x — gitSync sidecar в каждом pod синхронизирует Git repo (модуль 15.03).
+
+В 3.x — **DAG Bundles**: pluggable abstraction для DAG sources:
+
+```yaml
+# Airflow 3.x config
+[dag_processor]
+bundles = [
+  {
+    "name": "production-dags",
+    "classpath": "airflow.dag_bundles.git.GitDagBundle",
+    "kwargs": {
+      "repo_url": "https://github.com/org/airflow-dags",
+      "branch": "main",
+      "subdir": "dags"
+    }
+  },
+  {
+    "name": "experimental-dags",
+    "classpath": "airflow.dag_bundles.s3.S3DagBundle",
+    "kwargs": {"bucket": "airflow-experimental-dags"}
+  }
+]
+```
+
+Multi-source — production DAGs из Git, experimental из S3, dev из local. Each bundle has own version, refresh interval.
+
+Migration: rewrite gitSync setup в DAG Bundles config. Helm chart 2.x abstracts это.
+
+---
+
+## Datasets → Assets (AIP-74/75)
+
+Rename для better semantic alignment с industry (data products, data assets).
+
+2.x:
+```python
+from airflow import Dataset
+my_dataset = Dataset("s3://lake/orders/")
+```
+
+3.x:
+```python
+from airflow.sdk import asset
+my_asset = asset("s3://lake/orders/")
+```
+
+API also evolves:
+- Asset events — first-class в 3.x с metadata facets
+- Multi-asset triggers — `schedule=AssetAny(asset1, asset2)` syntax
+- Asset lineage — auto-OL integration
+
+Migration: rename via ruff AIR301 в большинстве cases. Some advanced use cases требуют manual review.
+
+---
+
+## execution_date → logical_date (AIP-83)
+
+В 2.x `execution_date` deprecated alias к `logical_date` начиная с 2.6.
+
+В 3.x — `execution_date` **fully removed**. Use `logical_date`:
+
+```python
+# 2.x
+@task
+def my_task(execution_date):  # works но deprecated
+    ...
+
+# 3.x
+@task
+def my_task(logical_date):  # only this works
+    ...
+```
+
+Templates:
+- `{{ execution_date }}` → `{{ logical_date }}`
+- `{{ ds }}` — still works (was always alias)
+
+Migration: ruff AIR302 auto-fix для most cases.
+
+---
+
+## FastAPI server + React UI
+
+В 2.x — Flask + Flask-AppBuilder.
+
+В 3.x — **FastAPI API server** + **React UI** separate. Бenefits:
+- Faster (FastAPI async)
+- OpenAPI specs (auto-generated client libraries)
+- Modern reactive UI (no full page reloads)
+- Better for embedding в other tools
+
+Implications:
+- Custom Flask plugins **broken** — нужно reimplement в FastAPI
+- Custom UI templates broken — reimplement в React
+- Auth changes — see FAB removal below
+
+Migration: если использовали `webserver_config.py` с FAB hooks или custom Flask views — major rewrite. Most production deployments не имеют этого, миграция smooth.
+
+---
+
+## FAB removed (AIP-79) — pluggable auth
+
+В 2.x — Flask-AppBuilder bundled, auth через `webserver_config.py`:
+
+```python
+# 2.x webserver_config.py
+from airflow.www.fab_security.manager import AUTH_OAUTH
+AUTH_TYPE = AUTH_OAUTH
+OAUTH_PROVIDERS = [...]
+```
+
+В 3.x — FAB removed. Auth через **pluggable providers**:
+
+```yaml
+# 3.x — config
+[fab]
+# removed
+
+[api]
+auth_backends = "airflow.providers.fab.auth_manager.FabAuthManager"
+# Or:
+# auth_backends = "airflow.providers.amazon.auth_managers.aws_iam_auth_manager.AwsIamAuthManager"
+# Or custom auth provider
+```
+
+Auth providers package:
+- `apache-airflow-providers-fab` — legacy FAB compatibility (drop-in для most cases)
+- `apache-airflow-providers-amazon` — AWS IAM auth
+- Custom auth providers (Okta, Auth0, custom JWT) — implement AuthManager interface
+
+Migration: install `apache-airflow-providers-fab` для backward compat. Custom auth requires rewriting через AuthManager API.
+
+---
+
+## REST API v1 → v2
+
+В 2.x — REST API v1 (Flask-RESTful). Endpoints `/api/v1/dags`, `/api/v1/dagRuns`.
+
+В 3.x — REST API v2 (FastAPI + OpenAPI). Endpoints `/api/v2/...`. Backward-incompatible:
+- Response format differences (camelCase vs snake_case в places)
+- Auth headers changed
+- Some endpoints renamed
+
+Migration: update API consumers. Auto-generate Python client via OpenAPI spec.
+
+---
+
+## SLA removed (AIP-89)
+
+В 2.x — `@task(sla=timedelta(...))` + `sla_miss_callback`. В 3.x — **removed**.
+
+Replacement: custom monitoring через Listener API + scheduler events:
+
+```python
+# 3.x equivalent
+from airflow.listeners import hookimpl
+
+@hookimpl
+def on_task_instance_completed(task_instance):
+    duration = task_instance.end_date - task_instance.start_date
+    sla = timedelta(hours=1)
+    if duration > sla:
+        alert_sla_miss(task_instance)
+```
+
+Migration: review всех `sla=` usage, переписать через Listener events или callbacks.
+
+---
+
+## Edge Executor (AIP-69)
+
+Новая feature в 3.x. Edge Executor — execute tasks на edge nodes (вне K8s cluster), управляемых Airflow centrally. Use cases:
+- IoT pipelines с edge compute
+- On-premise hybrid (some tasks on-prem, others в cloud)
+- Geo-distributed processing
+
+Not breaking change — additive. Можно ignore если не нужен.
+
+---
+
+## Multi-Team (AIP-67)
+
+В 3.2+ — Team-level resource isolation. One Airflow instance, multiple teams, separate:
+- Pools per team
+- DAGs visibility per team
+- Quotas per team
+
+В 2.x требует separate Airflow deployments per team. В 3.x — built-in. Major feature для enterprise multi-team setups.
+
+---
+
+## Migration sizing — какой effort
+
+Type of migration зависит от вашего usage:
+
+| Usage profile | Effort | Timeline |
+|---|---|---|
+| Standard TaskFlow DAGs, no SubDAGs, basic auth | **Low** (1-2 weeks) | Apply ruff autofixes + Helm upgrade |
+| Custom plugins, custom Flask views, FAB hooks | **High** (2-3 months) | Rewrite plugins, auth, UI |
+| Heavy use of execution_date templating | **Medium** (2-4 weeks) | Ruff + manual review |
+| Custom XCom backend, custom secrets backend | **Low** (1 week) | API stable, minor adjustments |
+| Custom operators inheriting BaseOperator | **Medium** (2-3 weeks) | Test all operators, possibly Task SDK adjustments |
+
+Capstone (этот курс) — Low effort migration. Designed что way intentionally.
+
+---
+
+## Should you migrate в 2026?
+
+**Reasons TO migrate**:
+- Need new 3.x features (Multi-Team, DAG Versioning, HITL operator)
+- Security requirements — Task SDK boundary (regulated industries)
+- 2.11 LTS support ends ~Q3 2027 — must migrate before
+- Want to be on latest stack (talent attraction, ecosystem)
+
+**Reasons NOT to migrate yet**:
+- 2.10/2.11 LTS works fine for your use case
+- Heavy custom plugins / FAB hooks (massive rewrite)
+- Production stability priority над new features
+- Wait для 3.x to mature (3.0 released Q1 2025, 3.2 Q2 2026 — still maturing)
+
+**Sweet spot для migration**: late 2026 / early 2027. By then 3.2+ stable, ecosystem caught up, but still time before 2.11 LTS EOL.
+
+---
+
+## What's next в этом модуле
+
+Next lessons drill in migration mechanics:
+
+- **06 — Migration tools** — `airflow upgrade-check`, ruff AIR301/AIR302
+- **07 — DAG code changes** — imports, decorators rename
+- **08 — Infrastructure changes** — standalone DAG Processor, FastAPI server, FAB removal в Helm
+- **09 — Step-by-step playbook** — exact procedure with rollback
+- **10 — What's next** — resources, alternatives
+
+---
+
+<KnowledgeCheck
+  question="Production team в 2026 имеет Airflow 2.10 deployment с 200 DAGs (mostly TaskFlow), simple OIDC auth через FAB, no custom plugins. Они задумываются о migration на 3.x. Когда mig and какой timeline realistic?"
+  answer="Reasonable migration plan: NOT in 2026 unless specific 3.x feature needed. **Recommended sequence**: (1) **Now (mid-2026)** — upgrade с 2.10 на 2.11 LTS. Same architecture, but includes migration helpers (`airflow upgrade-check --to-version 3.0` warnings active), AIR301/AIR302 ruff rules ready, 2.11 supports newer providers. Low risk, 1-2 weeks. (2) **Continuous preparation** — enable ruff AIR301/AIR302 в CI с warning mode. Slowly fix warnings as they appear. By migration time — warnings = 0. (3) **Monitor 3.x maturity** — release notes для 3.0, 3.1, 3.2 (Multi-Team). Major bugs reports на community Slack. Wait для 3.x в production at Astronomer/Composer — vendor migration validates real-world. (4) **Q1-Q2 2027 — actual migration к 3.x**. By then: 3.2 stable, ecosystem libraries support 3.x (providers, operators), staging environment can run 3.x for 2-3 weeks. **Why not migrate в 2026**: (a) 3.x still maturing — 3.0 (early 2025) had bugs, 3.1 (late 2025) added HITL but some issues, 3.2 (mid 2026) stable; (b) Production team's profile (TaskFlow, OIDC через FAB, no plugins) means LOW migration effort — could быть done in 2 weeks once started; (c) 2.11 LTS support до Q3 2027 — no rush; (d) Cost of migration (engineering time, testing, possible downtime) — better spent в 2027 когда benefits clearer. **Migration timeline** для эта команда: prep work (continuous) 6-12 months, actual migration 2-4 weeks. Steps в actual migration (модуль 18.09): (1) upgrade-check warnings все fixed → 0; (2) install apache-airflow-providers-fab для compat; (3) staging 3.x deployment for 2-3 weeks soak testing; (4) Production migration на weekend через Helm upgrade + db migrate. **Total effort за 2 years**: ~50-80 engineering hours. **Reasons to accelerate**: Multi-Team AIP-67 critical (enterprise consolidation), HITL workflow business-critical, security audit requires Task SDK boundary. Без these — leisurely pace recommended. **Lesson**: major version upgrades — strategic planning, not reactive. Plan 6-12 months ahead, execute when ready, не когда новая version released."
+/>

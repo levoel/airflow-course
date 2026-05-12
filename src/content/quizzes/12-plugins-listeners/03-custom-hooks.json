@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "12-plugins-listeners/03-custom-hooks",
+  "moduleId": "12-plugins-listeners",
+  "_meta": { "idPrefix": "airflow-m12-03" },
+  "questions": [
+    {
+      "id": "airflow-m12-03-q1",
+      "type": "multiple-choice",
+      "question": "BaseHook.get_connection(conn_id) — где Airflow ищет connection и в каком порядке?",
+      "options": [
+        { "id": "a", "text": "Только metadata DB" },
+        { "id": "b", "text": "Chain: (1) Secrets Backend если настроен — Vault/AWS Secrets Manager/GCP Secret Manager; (2) Environment variable AIRFLOW_CONN_<UPPER_NAME>; (3) Metadata DB таблица connection. First match wins" },
+        { "id": "c", "text": "Только env vars" },
+        { "id": "d", "text": "Случайным образом" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lookup chain critical для production: Secrets backend > env vars > DB. Если в Vault и DB есть та же conn_id — Vault выигрывает. Это позволяет post-deploy override через Secrets без меняния DB. Включить cache `[secrets] use_cache=True` (2.7+) для performance.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m12-03-q2",
+      "type": "multiple-choice",
+      "question": "В Hook get_conn() обычно реализуется через lazy-init с self._session cache. Почему?",
+      "options": [
+        { "id": "a", "text": "Не имеет значения" },
+        { "id": "b", "text": "Hook re-instantiated на каждый task run. Внутри одного task hook может вызываться несколько раз (несколько methods). Cache в self._session — переиспользование одной аутентифицированной session между методами одного task instance. Cross-task / class-level cache работать не будет (worker isolation)" },
+        { "id": "c", "text": "Это performance optimization для производственной нагрузки" },
+        { "id": "d", "text": "Из-за thread safety" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Hook lifecycle: instantiated per task run. self._session = None → first get_conn() авторизует session → cached → второй get_conn() returns cache. Между task runs hook re-init (новый process / новый task). Cross-task cache невозможен — workers могут быть на разных машинах.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-03-q3",
+      "type": "multiple-choice",
+      "question": "Custom hook с `get_ui_field_behaviour` — что это даёт?",
+      "options": [
+        { "id": "a", "text": "Защита от XSS" },
+        { "id": "b", "text": "Customization UI Connection form: hide unused fields (port, schema), relabel ('host' → 'API Base URL'), add placeholders. Делает UI более user-friendly для DevOps team создающих connections" },
+        { "id": "c", "text": "Защита от CSRF" },
+        { "id": "d", "text": "Speed up form rendering" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "get_ui_field_behaviour returns dict с hidden_fields, relabeling, placeholders. UX win: DevOps создавая 'DataCorp' connection видит 'API Base URL' (не 'host') и 'Bearer Token' (не 'password'). Plus get_connection_form_widgets для extra fields (e.g., API version). Hide irrelevant fields (port если scheme только HTTPS, schema если не DB).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-03-q4",
+      "type": "true-false",
+      "question": "При создании Hook instance `hook = DataCorpHook(conn_id='prod')` Connection lookup происходит в __init__ — то есть Connection должна существовать.",
+      "correctAnswer": false,
+      "explanation": "Lookup происходит при первом get_connection() / get_conn() вызове, не в __init__. Это performance optimization — DAG parse создаёт hooks dry-run, не дёргая DB. Connection нужна только при actual execute. Это значит ошибка 'connection not found' появится в logs task runtime, не при DAG parse. Конкретный side effect — broken Connection не breaks DAG parsing, только task execution.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

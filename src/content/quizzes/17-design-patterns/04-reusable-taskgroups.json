@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/04-reusable-taskgroups",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-04" },
+  "questions": [
+    {
+      "id": "airflow-m17-04-q1",
+      "type": "multiple-choice",
+      "question": "TaskGroup factory function (make_validation_group(table)) returning TaskGroup — что даёт?",
+      "options": [
+        { "id": "a", "text": "Только UI namespace" },
+        { "id": "b", "text": "Parametrized reuse — один TaskGroup factory вызывается 5+ раз с разными tables, каждый создаёт separate TaskGroup в DAG. Каждый TaskGroup имеет identical structure но разные targets — DRY principle для DAGs" },
+        { "id": "c", "text": "Замена для SubDAG" },
+        { "id": "d", "text": "Performance optimization" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "TaskGroup factory pattern: function returns TaskGroup от parameters. В DAG can call multiple times — each creates separate group с unique group_id и customized tasks. DRY: validation logic (row count, schema check, freshness) определена однажды, applied 5+ раз для разных tables. Контраст: copy-paste тех же 3 validation tasks для каждой table = unmaintainable. Production-стандарт для DAG с multiple identical sub-flows.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-04-q2",
+      "type": "multiple-choice",
+      "question": "Setup/Teardown vs trigger_rule='all_done' для cluster lifecycle — почему Setup/Teardown лучше?",
+      "options": [
+        { "id": "a", "text": "Identical" },
+        { "id": "b", "text": "Setup/Teardown semantic explicit (as_setup/as_teardown). Teardown failure делает DagRun failed → cost-control alert. Если setup skipped — teardown skipped автоматически (не пытается terminate nothing). trigger_rule='all_done' — magic, DagRun success даже если teardown failed → silent cluster leak ($$$)" },
+        { "id": "c", "text": "Только для UI" },
+        { "id": "d", "text": "trigger_rule deprecated" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Setup/Teardown (2.7+, stable 2.10.5+) — first-class abstraction для lifecycle resources. Critical advantage: on_failure_fail_dagrun=True (default) — teardown failure → DagRun failed → alert. С trigger_rule='all_done' teardown silently fail (e.g., AWS API error), DagRun success, cluster продолжает гореть deньги. Real production scenarios — $5000 за unterminated EMR cluster за дни. Setup/Teardown design specifically addresses это.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-04-q3",
+      "type": "multiple-choice",
+      "question": "Nested TaskGroup в DAG — depth recommendation?",
+      "options": [
+        { "id": "a", "text": "Без ограничения" },
+        { "id": "b", "text": "Max 4-5 уровней nesting. Beyond — UI rendering становится slow, debugging difficult, collapsible UI breaks. Если нужно глубже — отдельный DAG. Best practice — 2-3 уровня для clean visual hierarchy" },
+        { "id": "c", "text": "Только 1 уровень" },
+        { "id": "d", "text": "10+ уровней OK" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Nested TaskGroup useful для hierarchical pipelines — ingestion → transformation → quality. Common pattern 2-3 уровней (ingestion.postgres_sources.ingest_orders). Beyond 4-5 уровней — UI degrades, hard для read, possible performance issues с graph rendering. Если really нужен deeper structure — split в multiple DAGs с dataset-triggering (модуль 08). 2-3 levels — sweet spot для production.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-04-q4",
+      "type": "true-false",
+      "question": "Tasks внутри TaskGroup используют parent DAG's executor и pool — TaskGroup не изолирует execution.",
+      "correctAnswer": true,
+      "explanation": "TaskGroup — UI grouping + namespace для task_ids. НЕ создаёт isolated execution context. Tasks внутри group используют parent DAG's executor (Celery/K8s), pools, resources. Если нужна real isolation (different pool, different executor через Multiple Executors AIP-61) — set per-task explicitly. SubDAG (deprecated, removed в 3.x) изолировал — но имел много problems. TaskGroup — modern replacement без isolation overhead.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

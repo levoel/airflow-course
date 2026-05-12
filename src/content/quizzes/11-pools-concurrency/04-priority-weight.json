@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "11-pools-concurrency/04-priority-weight",
+  "moduleId": "11-pools-concurrency",
+  "_meta": { "idPrefix": "airflow-m11-04" },
+  "questions": [
+    {
+      "id": "airflow-m11-04-q1",
+      "type": "multiple-choice",
+      "question": "weight_rule='downstream' (default) для task X = own_priority + sum(downstream_priorities) recursive. Если граф extract → transform → load, все priority=1, какое effective priority для extract?",
+      "options": [
+        { "id": "a", "text": "1 — только own" },
+        { "id": "b", "text": "3 — own(1) + transform(1+load.effective=1+1=2) = 1+2 = 3" },
+        { "id": "c", "text": "2 — own + immediate downstream" },
+        { "id": "d", "text": "0 — корни не имеют priority" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Recursive: load=1 (no downstream), transform = own(1) + load.eff(1) = 2, extract = own(1) + transform.eff(2) = 3. Логика: корни графа имеют highest effective priority — без них DAG не двинется. Это разумный default для большинства production cases.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m11-04-q2",
+      "type": "multiple-choice",
+      "question": "DAG A — короткий (3 tasks default priority=1), DAG B — fan-out 30 mapped tasks default priority=1. Оба пишут в pool 'warehouse'. Какой DAG корневая task имеет higher effective priority с weight_rule=downstream?",
+      "options": [
+        { "id": "a", "text": "DAG A — короткие критичнее" },
+        { "id": "b", "text": "DAG B — корень имеет effective ~32 (1 + 30*1 + 1), DAG A корень ~3. DAG B всегда выигрывает первым в pool — это часто counter-intuitive когда DAG A SLA-критичнее" },
+        { "id": "c", "text": "Они равны" },
+        { "id": "d", "text": "DAG B — это bug" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Downstream bias — корень DAG с большим хвостом выигрывает. Это не bug, это design. Mitigation: либо explicit поднять priority_weight на DAG A корень (override default), либо переключить weight_rule='absolute' где own value — финальный ranking без учёта структуры графа.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-04-q3",
+      "type": "multiple-choice",
+      "question": "Изменили priority_weight на task. Действует ли это на уже scheduled TI?",
+      "options": [
+        { "id": "a", "text": "Да, мгновенно" },
+        { "id": "b", "text": "Нет — effective priority precomputed при DAG serialization. Старые scheduled TI имеют старое значение. Только новые DagRun-ы (после re-parse) получат новые числа. Можно forces: airflow dags reserialize <dag_id>" },
+        { "id": "c", "text": "Да, после scheduler restart" },
+        { "id": "d", "text": "Да, через 5 минут" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "task_instance.priority_weight = effective (precomputed). Меняется при serialize. Если меняете priority_weight — старые TI не пересчитываются. Force re-serialize: `airflow dags reserialize <dag_id>` (2.7+) или подождать min_file_process_interval cycle.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-04-q4",
+      "type": "true-false",
+      "question": "Priority weight применяется глобально — task с priority=100 в pool 'warehouse' имеет приоритет над task с priority=1 в pool 'api_calls'.",
+      "correctAnswer": false,
+      "explanation": "Priority — это local сортировка внутри одного pool, не глобальная очередь. Pool 'warehouse' и 'api_calls' — разные queue, scheduler выбирает кандидатов per-pool. Cross-pool приоритизация невозможна через priority_weight — нужна разделение pools и иные mechanisms (например, разные [core] parallelism слайсы — но Airflow этого не поддерживает).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

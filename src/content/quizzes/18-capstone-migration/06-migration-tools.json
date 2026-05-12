@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/06-migration-tools",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-06" },
+  "questions": [
+    {
+      "id": "airflow-m18-06-q1",
+      "type": "multiple-choice",
+      "question": "airflow upgrade-check --to-version 3.0 — что делает?",
+      "options": [
+        { "id": "a", "text": "Performs the upgrade" },
+        { "id": "b", "text": "Built-in CLI command. Scans DAGs + config + plugins для deprecation issues. Output: WARNING (works но deprecated), CRITICAL (breaks в 3.x), INFO. Categories: imports renames, deprecated APIs (execution_date), removed operators (SubDAG), FAB usage, airflow.contrib. Не fixes — только reports" },
+        { "id": "c", "text": "Replaces ruff" },
+        { "id": "d", "text": "Builds Helm chart" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "airflow upgrade-check — built-in (2.7+) Python CLI. Scans codebase, lists deprecation issues с severity. Run в CI weekly — track count over time. Manual fix CRITICAL items first (SubDAG removal, FAB hooks). Auto-fix WARNINGS через ruff AIR301/AIR302. Built-in не fixes — just reports. Strategy: warning mode в CI initially, fix gradually, strict mode перед migration day.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m18-06-q2",
+      "type": "multiple-choice",
+      "question": "Ruff AIR301 vs AIR302 — отличия?",
+      "options": [
+        { "id": "a", "text": "Identical" },
+        { "id": "b", "text": "AIR301 — deprecated IMPORTS (from airflow.decorators → from airflow.sdk, from airflow import Dataset → from airflow.sdk import asset). Auto-fix через `ruff check --fix`. AIR302 — deprecated APIs (execution_date → logical_date, schedule_interval → schedule, sla parameter removed). Partial auto-fix" },
+        { "id": "c", "text": "Только performance" },
+        { "id": "d", "text": "AIR302 для 2.x, AIR301 для 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Ruff AIR rules — Airflow-specific lint rules. AIR301 — imports rename: `from airflow.decorators import dag, task` → `from airflow.sdk import dag, task`. Most cases simple regex match, auto-fix safe. AIR302 — deprecated API usage: parameter renames (schedule_interval → schedule), function parameter changes (execution_date → logical_date). Partial auto-fix — some cases need manual review (e.g., sla parameter removal requires Listener API rewrite).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-06-q3",
+      "type": "multiple-choice",
+      "question": "Production team enables ruff AIR301 в CI на 2.x. Sledствies?",
+      "options": [
+        { "id": "a", "text": "Production breaks" },
+        { "id": "b", "text": "Initially — block PRs если новый code имеет deprecated imports (но existing OK через per-file-ignores). Над time — auto-fix sweep всего codebase (ruff --fix). К migration day — 0 violations, codebase 3.x-compatible style. Risk: zero — auto-fix safe для AIR301, just rename imports" },
+        { "id": "c", "text": "Production starts using 3.x APIs" },
+        { "id": "d", "text": "Performance hit" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Phased rollout: warning mode (CI logs only) → block new violations (pre-commit + CI) → bulk auto-fix sweep → strict mode. AIR301 auto-fix safe (just import rename, identical semantic в 2.x). Per-file-ignores для legacy code. Result: к migration day — 0 violations, codebase ready для 3.x. Process duration: 3-6 months gradual fix без production impact. Critical: ruff AIR rules доступны на 2.x — start using сейчас.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-06-q4",
+      "type": "true-false",
+      "question": "ruff AIR301 auto-fix может safely run на production codebase без testing.",
+      "correctAnswer": false,
+      "explanation": "ruff --fix safe для AIR301 (imports identical semantic), but ALWAYS run full test suite после bulk auto-fix. Reasons: (1) import order может change — некоторые linters care; (2) Imports renamed но usage может break если custom plugins have hardcoded references; (3) Some edge cases (custom modules с similarly-named symbols) — false positives. Production process: (a) ruff --fix в branch; (b) Run unit + integration tests; (c) Review diff в PR; (d) Merge after green CI. Never blindly merge auto-fix results — review like any other code change.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

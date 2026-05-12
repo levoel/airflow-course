@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "07-dynamic-task-mapping/04-mapped-tasks-runtime",
+  "moduleId": "07-dynamic-task-mapping",
+  "_meta": { "idPrefix": "airflow-m07-04" },
+  "questions": [
+    {
+      "id": "airflow-m07-04-q1",
+      "type": "multiple-choice",
+      "question": "Опиши state DB сразу после DagRun creation, но ДО запуска upstream get_files() для DAG с `process.expand(file=get_files())`",
+      "options": [
+        { "id": "a", "text": "5 mapped TI с map_index 0..4" },
+        { "id": "b", "text": "В task_instance: 2 rows. get_files с map_index=-1, state=scheduled (готов к запуску). process с map_index=-1, state=scheduled (placeholder unmapped). Length unknown — expand happens только после get_files complete" },
+        { "id": "c", "text": "Ничего — TI создаются на runtime" },
+        { "id": "d", "text": "1 row только для get_files" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "При DagRun creation Airflow создаёт TI rows для всех tasks в DAG, включая mapped. Для mapped task — placeholder с map_index=-1 (length не известна). После upstream complete scheduler в Phase 2 вызывает expand_mapped_task: удаляет placeholder, создаёт N TI rows с map_index 0..N-1. State машина mapped TI: scheduled (placeholder) → удаляется → N×scheduled (после expand) → queued → running → success.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m07-04-q2",
+      "type": "multiple-choice",
+      "question": "Когда worker запускает mapped TI process с map_index=2, как он получает свой filename для обработки?",
+      "options": [
+        { "id": "a", "text": "Worker получает filename напрямую через scheduler RPC" },
+        { "id": "b", "text": "В execute() resolve_mapped_kwargs делает xcom_pull от upstream task (full list), берёт element [map_index=2] из этого list. Merge с partial_kwargs (constants). Каждая mapped TI независимо делает свой xcom_pull — N round-trips для N TI" },
+        { "id": "c", "text": "Параметр в env variable" },
+        { "id": "d", "text": "Через configMap K8s" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "На execute() _PythonDecoratedOperator делает: (1) resolve каждый expand_input kwarg — это XComArg → xcom_pull upstream task, получает full list/iterable; (2) picks element по self.map_index; (3) merges с partial_kwargs (constants); (4) calls python_callable с resolved kwargs. Это значит N mapped TI делают N independent xcom_pull на одну upstream — N round-trips. Каждая worker independently читает full list, picks свой index. Нет coordination между mapped TI на runtime.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-04-q3",
+      "type": "multiple-choice",
+      "question": "`airflow tasks clear -t process my_dag --execution-date 2026-05-12` на mapped task — что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Только удалятся mapped TI rows" },
+        { "id": "b", "text": "(1) Удаляются N mapped TI rows; (2) Создаётся placeholder map_index=-1; (3) На след scheduler tick — re-expand: scheduler reads upstream XCom (still there), вызывает expand_mapped_task снова, создаёт новые N mapped TI. Если upstream был cleared и re-ran с другим length — N может change" },
+        { "id": "c", "text": "Только текущая running TI cancel" },
+        { "id": "d", "text": "Error: cannot clear mapped" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Clear на mapped task — нетривиальная операция. Airflow: (1) DELETE N mapped TI rows; (2) Re-create placeholder с map_index=-1; (3) Scheduler в next Phase 2 видит placeholder + upstream done → re-expand. Если upstream XCom remains the same — same N TI. Если upstream был cleared (или другой run) — может быть разный N. Это subtle surprise: после clear N=100, после re-run upstream N=95 (некоторые items пропали).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-04-q4",
+      "type": "true-false",
+      "question": "Mapped tasks выполняются независимо без cross-element ordering — `process[i]` не может тривиально получить XCom от `process[i-1]`. Если нужна cross-element logic (running totals, prev/next dependencies) — нужна aggregation в non-mapped task сначала или batch processing внутри одного task с sequential loop.",
+      "correctAnswer": true,
+      "explanation": "Да, это фундаментальное ограничение dynamic mapping. Каждая mapped TI выполняется independently — может на разных workers, в любом порядке. Нет встроенного механизма cross-element coordination. process[5] не знает что process[4] вообще существует, не говоря о его результате. Workarounds: (1) Aggregate сначала в non-mapped task (получает все results, выполняет cross-element logic, returns); (2) Batch processing внутри одного task — sequential loop где у вас есть access к prev result; (3) External state store (Redis, DB) для cross-mapped coordination — но это против Airflow idempotency model.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

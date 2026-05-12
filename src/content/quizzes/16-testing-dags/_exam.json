@@ -1,0 +1,89 @@
+{
+  "moduleId": "16-testing-dags",
+  "title": "Module 16 Exam — Testing DAGs",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m16-exam",
+    "description": "6-question integrated exam for Module 16"
+  },
+  "questions": [
+    {
+      "id": "airflow-m16-exam-q1",
+      "type": "multiple-choice",
+      "question": "Минимальный CI testing pipeline для Airflow project — что в каком stage?",
+      "options": [
+        { "id": "a", "text": "Только pytest" },
+        { "id": "b", "text": "Только integration tests" },
+        { "id": "c", "text": "Stage 1 (PR-blocking, <30s): ruff + DAG validity (test_no_import_errors via DagBag). Stage 2 (PR-blocking, <5min): unit tests с mocked Hooks. Stage 3 (post-merge или nightly, <30min): integration tests через airflow dags test + Postgres testcontainers + moto для external services" },
+        { "id": "d", "text": "Только pre-commit hooks" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Layered approach: cheap fast tests на каждый PR (block merge если fail), expensive comprehensive tests на main merge. Stage 1 — ruff lint + DagBag import check ловит 70% багов за <30s. Stage 2 — operator logic с mocked dependencies. Stage 3 — integration через airflow dags test + Postgres + moto, slow но comprehensive. ROI: каждый bug catch до production = days saved on incident response.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-exam-q2",
+      "type": "multiple-choice",
+      "question": "Pyt test patches S3Hook не работает — реальный S3Hook все равно вызывается. Корректный fix?",
+      "options": [
+        { "id": "a", "text": "Bug в pytest-mock, обновить" },
+        { "id": "b", "text": "Использовать unittest.mock instead" },
+        { "id": "c", "text": "Правило: patch там, где symbol used (import path в operator's module), а не где определён. Если operator делает `from airflow.providers...s3 import S3Hook`, patch `plugins.my_op.S3Hook`, не `airflow.providers...s3.S3Hook`. Альтернатива — dependency injection через operator __init__" },
+        { "id": "d", "text": "Не возможно патчить classes" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Classic Python mocking gotcha. `from X import Y` создаёт local reference на Y в current module — patching X.Y не affects это reference. Solution: patch на module где symbol used. Лучшее долгосрочное — dependency injection (pass hook as op parameter, pass MagicMock в test) — eliminates need для patching полностью. Cleanest design.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m16-exam-q3",
+      "type": "multiple-choice",
+      "question": "Production DAG factory генерирует 30 DAGs из YAML. Через 2 дня в UI рандомно пропадают 5-7 DAGs после DAG processor restart. Что наиболее вероятно?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow scheduler" },
+        { "id": "b", "text": "Top-level network call в factory (config-api/etl-configs) — inconsistent results, race conditions, API outages. Или mutable default args, duplicate dag_ids (silent overwrite). Tests для catch: assert deterministic output, mock network → assert no calls, assert unique dag_ids" },
+        { "id": "c", "text": "Helm chart bug" },
+        { "id": "d", "text": "PgBouncer issue" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Factory patterns с runtime dependencies = chaos. Top-level network calls = non-deterministic parsing (config API caching, network blips, race conditions). Duplicate dag_ids = silent overwrite (last wins). Mutable default args = shared state между generations. Fix: bake config в Git (committed YAML), explicit dag_id uniqueness check (raise on duplicate), local var captures вместо closures, hypothesis property tests для deterministic output. Top-level network call в factory — production anti-pattern.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m16-exam-q4",
+      "type": "multiple-choice",
+      "question": "Custom operator с template_fields=('source_table',). Production видит S3 keys с literal '{{ ds }}' — template не rendered. Корректный test для catch?",
+      "options": [
+        { "id": "a", "text": "Pytest без mocks" },
+        { "id": "b", "text": "Explicit rendering test: dag = DAG(...); op = MyOp(source_table='data_{{ ds }}', dag=dag); op.render_template_fields({'ds': '2026-05-12', 'dag': dag, 'task': op}); assert op.source_table == 'data_2026-05-12'. Plus structural test: 'source_table' in template_fields tuple" },
+        { "id": "c", "text": "Только integration test" },
+        { "id": "d", "text": "Невозможно ловить unit test" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Template rendering — silent failure если field не в template_fields tuple. Explicit unit test: создать DAG context, op.render_template_fields(context_dict), assert field stage = expected value. Это catches: typo в template ('{{ds_nodash}}' vs '{{ ds_nodash }}'), missing field в template_fields, wrong variable name. Plus structural: `assert 'source_table' in MyOp.template_fields` ловит regressions если кто-то удалит field. Production: literal '{{ ds }}' в S3 keys/SQL — data quality disaster, один день дебага.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-exam-q5",
+      "type": "multiple-choice",
+      "question": "Constraints файл при install Airflow в CI — почему mandatory?",
+      "options": [
+        { "id": "a", "text": "Required by license" },
+        { "id": "b", "text": "Делает install быстрее" },
+        { "id": "c", "text": "Pin all transitive dependencies на known-working versions. Без него pip может pick incompatible (SQLAlchemy 2.x vs Airflow требует 1.4.x). Tests pass локально, fail в CI или production. URL: https://raw.githubusercontent.com/apache/airflow/constraints-{ver}/constraints-{py}.txt" },
+        { "id": "d", "text": "Только в production" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Apache Airflow publishes constraints для каждой версии. Без них pip resolver picks latest available — может быть incompatible (новая SQLAlchemy/pydantic/flask). Production gotcha: develop работает (cached old deps), CI fresh install ломается. Always: `pip install apache-airflow==2.10.5 --constraint <url>`. Это первая строка любого Airflow CI workflow. На production deploy через Helm — constraints automatically applied через official image.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-exam-q6",
+      "type": "true-false",
+      "question": "Команда готовящаяся к 3.x migration в течение года должна включить в CI ruff проверки AIR301 и AIR302 (initially warning, потом strict) плюс `airflow upgrade-check`.",
+      "correctAnswer": true,
+      "explanation": "Preparation к 3.x migration — это not one-time event, а continuous process. AIR301 detect deprecated imports, AIR302 — deprecated APIs. ruff с --fix может auto-rename simple cases. airflow upgrade-check показывает remaining issues. Strategy: (1) Initially baseline текущие warnings + warning в CI; (2) Постепенно убирать существующие; (3) Strict mode когда warnings = 0; (4) Staging на 2.11 LTS (включает все 3.x compat helpers) — production может оставаться 2.10 пока ready; (5) Quarterly upgrade drill на staging. К moment real migration codebase уже 3.x-compatible — week-long planned event вместо months-long pain.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

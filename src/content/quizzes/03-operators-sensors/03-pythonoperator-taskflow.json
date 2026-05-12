@@ -1,0 +1,60 @@
+{
+  "lessonSlug": "03-operators-sensors/03-pythonoperator-taskflow",
+  "moduleId": "03-operators-sensors",
+  "_meta": { "idPrefix": "airflow-m03-03" },
+  "questions": [
+    {
+      "id": "airflow-m03-03-q1",
+      "type": "multiple-choice",
+      "question": "Команда хочет запускать ML training task каждый час с deps `pandas==1.5.3` и `scikit-learn==1.2.0`, которые конфликтуют с worker image. Требование — overhead старта < 2s. Какой operator выбрать?",
+      "options": [
+        { "id": "a", "text": "PythonOperator с conditional imports" },
+        { "id": "b", "text": "PythonVirtualenvOperator — он создаёт venv с нужными deps" },
+        { "id": "c", "text": "ExternalPythonOperator с pre-built venv в Docker image (/opt/airflow/venvs/ml-py310). Overhead = subprocess.Popen к готовому интерпретатору, ~100-500ms. PythonVirtualenvOperator делает pip install каждый раз → 30-60s, не уложимся в 2s" },
+        { "id": "d", "text": "KubernetesPodOperator" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "ExternalPythonOperator идеален для случая 'нужны изолированные deps + быстрый старт + регулярный запуск'. В Dockerfile worker: `RUN python3.10 -m venv /opt/airflow/venvs/ml && /opt/airflow/venvs/ml/bin/pip install pandas==1.5.3`. В task: `@task.external_python(python='/opt/airflow/venvs/ml/bin/python', expect_airflow=False)`. PythonVirtualenvOperator (b) делает pip install на КАЖДОМ execute — 30-60s, не подходит. KubernetesPodOperator (d) — overkill, startup pod 10-30s. PythonOperator (a) не решает конфликт deps.",
+      "studyHint": "Повторите урок 03 — раздел 'ExternalPythonOperator — pre-built venv'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-03-q2",
+      "type": "multiple-choice",
+      "question": "В чём принципиальная разница между PythonOperator и _PythonDecoratedOperator (за @task)?",
+      "options": [
+        { "id": "a", "text": "Никакой — синонимы" },
+        { "id": "b", "text": "_PythonDecoratedOperator наследник PythonOperator с дополнительной логикой: автоматический XComArg resolution (если в op_kwargs передан результат другого @task), multiple_outputs (разделение dict result на отдельные XCom keys), и task_id из __name__ функции" },
+        { "id": "c", "text": "_PythonDecoratedOperator быстрее" },
+        { "id": "d", "text": "_PythonDecoratedOperator работает только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "_PythonDecoratedOperator (через миксин DecoratedOperator) добавляет три ключевые feature к PythonOperator: (1) XComArg resolution — `process(extract())` означает 'extract это XComArg-плейсхолдер, на runtime xcom_pull автоматически'; (2) multiple_outputs — если return dict + multiple_outputs=True (или TypedDict return type), каждый ключ становится отдельным XCom вместо одного 'return_value'; (3) function metadata propagation — task_id из __name__, doc из docstring. Performance ~95% от PythonOperator (тонкая обёртка).",
+      "studyHint": "Повторите урок 03 — раздел '@task — обёртка _PythonDecoratedOperator'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-03-q3",
+      "type": "multiple-choice",
+      "question": "PythonOperator с op_kwargs={'date': '{{ ds }}', 'config': some_xcom_arg}. На execute() что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Оба значения передаются как есть, без модификации" },
+        { "id": "b", "text": "'date' — Jinja-рендеринг в реальную дату ('2026-05-12'), потому что op_kwargs в template_fields. 'config' — НЕ resolves автоматически (PythonOperator не делает XComArg resolution для nested структур); для resolution нужен либо TaskFlow @task (DecoratedOperator), либо явный xcom_pull в callable" },
+        { "id": "c", "text": "Оба сразу резолвятся" },
+        { "id": "d", "text": "Падает с ошибкой" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "PythonOperator template_fields включает 'op_kwargs' — Jinja идёт по словарю и рендерит строки. '{{ ds }}' → '2026-05-12'. Но XComArg resolution (типа 'это результат другого task, сделай xcom_pull') — это особенность DecoratedOperator (@task), не базового PythonOperator. Если в op_kwargs передать XComArg, PythonOperator передаст его в callable как есть (как объект), что приведёт к ошибке. Для XComArg resolution используйте @task или явный ti.xcom_pull(task_ids='...') внутри callable.",
+      "studyHint": "Повторите урок 03 — раздел 'op_args vs op_kwargs vs context resolution'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-03-q4",
+      "type": "true-false",
+      "question": "KubernetesPodOperator и KubernetesExecutor — это одно и то же; нельзя использовать KubernetesPodOperator если ваш Airflow работает на LocalExecutor.",
+      "correctAnswer": false,
+      "explanation": "Это две **независимые** вещи. KubernetesExecutor определяет где **сами Airflow tasks** запускаются (каждая task → отдельный pod). KubernetesPodOperator — это operator, который запускает **custom pods** независимо от executor. Можно использовать KubernetesPodOperator на LocalExecutor — worker через kubernetes Python client отправит pod в кластер, дождётся completion, прочитает logs. Это полезный pattern для команд, которые не хотят переходить на KubernetesExecutor (со всеми его tuning сложностями), но хотят запускать тяжёлые tasks (Spark driver, GPU jobs) в отдельных K8s pods. Обратное тоже верно — на KubernetesExecutor можно НЕ использовать KubernetesPodOperator (все tasks и так в pods).",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

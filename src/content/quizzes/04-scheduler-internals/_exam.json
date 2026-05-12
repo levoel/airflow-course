@@ -1,0 +1,89 @@
+{
+  "moduleId": "04-scheduler-internals",
+  "title": "Module 04 Exam — Scheduler internals",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m04-exam",
+    "description": "6-question integrated exam for Module 04"
+  },
+  "questions": [
+    {
+      "id": "airflow-m04-exam-q1",
+      "type": "multiple-choice",
+      "question": "Production scheduler tick длится 12-15 секунд (default scheduler_heartbeat_sec=5s). Какая фаза скорее всего bottleneck и почему?",
+      "options": [
+        { "id": "a", "text": "Фаза 1 — Create DagRuns" },
+        { "id": "b", "text": "Чаще всего фаза 2 (Schedule TI) — O(N) по всем tasks в active DagRuns. Для DAGs с тысячами mapped tasks через expand() это становится slow. Или фаза 3 (critical section) — если max_tis_per_query слишком большой и держит lock долго" },
+        { "id": "c", "text": "Фаза 4 — Housekeeping" },
+        { "id": "d", "text": "Sleep между тиками" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Фаза 2 — самый частый bottleneck. Она O(N) по числу TIs в active DagRuns. Mapped tasks через expand() могут создать 10k+ TIs на DAG. Profile через metrics scheduler.scheduler_loop_duration. Фикс: (1) reduce max_dagruns_per_loop_to_schedule. (2) Decompose DAGs — много мелких > один большой. (3) Add scheduler replicas (но critical section serialized — diminishing returns). (4) DB tuning — indexes на task_instance(state, dag_id), VACUUM, PgBouncer. Фаза 3 bottleneck реже — она tuned max_tis_per_query=16, lock держится миллисекунды.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-exam-q2",
+      "type": "multiple-choice",
+      "question": "Используете PostgreSQL 14 для metadata DB. Запустили 5 scheduler-ов для HA. Throughput не увеличивается линейно — почему?",
+      "options": [
+        { "id": "a", "text": "PostgreSQL не поддерживает столько подключений" },
+        { "id": "b", "text": "Critical section (фаза 3) serialized через SELECT * FROM slot_pool FOR UPDATE NOWAIT — только один scheduler одновременно делает enqueue decisions. Остальные phases параллелятся, но обычно не bottleneck. Sweet spot 2-4 scheduler-а. Дальше DB bottleneck" },
+        { "id": "c", "text": "Нужна MySQL для multi-scheduler" },
+        { "id": "d", "text": "Bug в Airflow 2.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical section serialized by design — это distributed mutex через row lock на slot_pool. Только один scheduler в section, другие получают lock_not_available и пропускают tick. Phases 1, 2, 4 могут параллелиться (DAG parsing distributed по DagFileProcessors), но обычно не bottleneck. Sweet spot 2-4 для medium-large. После — diminishing returns, DB становится bottleneck. Production action: profile сначала Postgres (slow queries, lock waits, autovacuum), только потом add schedulers. Часто 3 scheduler-а + хорошо tuned Postgres (PgBouncer, indexes, VACUUM) outperform 10 scheduler-ов с дефолт DB.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-exam-q3",
+      "type": "multiple-choice",
+      "question": "DagRun застрял в state=running, в UI 'ничего не происходит'. Все task icons grey. Какой первый SQL запрос для диагностики?",
+      "options": [
+        { "id": "a", "text": "SELECT * FROM dag_run WHERE state='running'" },
+        { "id": "b", "text": "SELECT task_id, state, latest_heartbeat, now() - latest_heartbeat AS gap FROM task_instance WHERE dag_id='X' AND run_id='Y' — посмотреть state distribution и heartbeat gaps. Если есть running с прокисшим heartbeat — zombie; если все none — deps issue; если queued forever — executor problem" },
+        { "id": "c", "text": "SELECT * FROM job" },
+        { "id": "d", "text": "SELECT count(*) FROM xcom" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Diagnose flow: (1) State distribution TIs — что они делают. (2) Heartbeat gap для running — > 300s = zombie. (3) Если все none — check upstream deps, depends_on_past, sensor conditions. (4) Если queued — executor problem (Celery worker died, K8s pod can't create). (5) Если deferred — check triggerer health. (6) Если sensor up_for_reschedule — check task_reschedule.reschedule_date. DagRun.update_state() финализирует только когда все TI terminal — один stuck TI блокирует весь DagRun. Это часто missed — пользователи смотрят на DagRun state, а нужно на TI distribution.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m04-exam-q4",
+      "type": "multiple-choice",
+      "question": "TI deferred → triggerer crashed → не adopted другим triggerer-ом → scheduler reset state=scheduled. Что happens when worker re-execute task?",
+      "options": [
+        { "id": "a", "text": "Task продолжается с того же места" },
+        { "id": "b", "text": "Operator.execute() вызывается с НАЧАЛА (не resume_from_deferred), потому что next_method обнулён. State в local variables до defer потерян. Operator может снова defer или завершить. Critical для production: design deferrable operators idempotent — сохранять progress в XCom/external store" },
+        { "id": "c", "text": "Task fails автоматически" },
+        { "id": "d", "text": "Task marks success без execution" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Reset deferred path: state=scheduled, next_method=None. Worker увидит scheduled TI, запустит LocalTaskJob, который вызовет operator.execute() с context. Resume_from_deferred НЕ срабатывает (next_method обнулён). Это значит execute() начинает заново — все local variables, in-memory state, partial progress потеряны. Operator может снова raise TaskDeferred (повторный defer), или завершить execution. Production patterns: (1) Сохраняйте progress в XCom или external store. (2) Min 2 triggerer replicas — adoption через Trigger.assign_unassigned работает без reset. (3) Idempotent design деферных operators.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m04-exam-q5",
+      "type": "multiple-choice",
+      "question": "Запустили backfill за год daily DAG в default_pool. Production scheduling 'останавливается' через 10 минут. Root cause и fix?",
+      "options": [
+        { "id": "a", "text": "Backfill убил Postgres" },
+        { "id": "b", "text": "Backfill использует default_pool (тот же, что production). Backfill enqueued сотни TIs → pool slots exhausted → production scheduler не может enqueue свои TIs. Fix: kill backfill, create dedicated backfill_pool с 5-10 slots, restart с --pool backfill_pool" },
+        { "id": "c", "text": "max_active_runs collision" },
+        { "id": "d", "text": "DagFileProcessor crashed" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Pool exhaustion — самый частый backfill incident. default_pool shared между production и backfill. Backfill upfront создал 365 DagRuns × N tasks → большой backlog в default_pool. Production tasks queue, не получают slots. Mitigation pattern: (1) ВСЕГДА --pool backfill_pool с dedicated 5-10 slots. (2) airflow pools set backfill_pool 5 — изоляция. (3) Run backfill в off-hours. (4) Smaller batches (1 month) вместо massive. (5) Долгосрочно: upgrade к 3.x AIP-78 scheduler-managed backfill — streaming batches, не upfront create, native priority control.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m04-exam-q6",
+      "type": "true-false",
+      "question": "В Airflow 2.x scheduler сам исполняет task code и записывает результат в DB. Worker нужен только для distributed execution.",
+      "correctAnswer": false,
+      "explanation": "Нет, кардинально неверно. Scheduler никогда не исполняет task code. Архитектура: (1) Scheduler — делает scheduling decisions (state transitions, queue commands), пишет в DB. (2) Executor — управляет infrastructure (Celery broker, K8s API, local subprocess). (3) Worker (LocalTaskJob) — actually runs user task code, записывает state changes. Это separation of concerns. Даже с LocalExecutor scheduler не исполняет task — он fork-ит subprocess LocalTaskJob. Это важно для diagnostics: scheduler errors ≠ task errors. Scheduler logs ≠ task logs. Производительность scheduler-а зависит от scheduling logic, не от user task duration.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

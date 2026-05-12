@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/05-backfill-safety",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-05" },
+  "questions": [
+    {
+      "id": "airflow-m17-05-q1",
+      "type": "multiple-choice",
+      "question": "Task использует `datetime.now()` для определения date range. Какая проблема при backfill?",
+      "options": [
+        { "id": "a", "text": "Ничего особенного" },
+        { "id": "b", "text": "Backfill за 2024-06-15 — task запускается в 2027-05-12 (wall-clock). datetime.now() возвращает 2027-05-12, не 2024-06-15. Fetch CURRENT data вместо historical → wrong result. Fix: использовать data_interval_start / data_interval_end из context" },
+        { "id": "c", "text": "Slow" },
+        { "id": "d", "text": "Memory leak" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Classic non-backfill-safe pattern. datetime.now() — wall-clock, не data_interval. Backfill историческую дату — task fetches данные today, INSERT с historical execution_date metadata → corrupt historical data. Fix: get_current_context()['data_interval_start'] или signature `def task(data_interval_start, data_interval_end)`. Test: airflow tasks test my_dag my_task 2024-06-15 — task должен query data для 2024-06-15, не для now().",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-05-q2",
+      "type": "multiple-choice",
+      "question": "Новый DAG со start_date=datetime(2020, 1, 1), schedule='@daily', catchup=True. Что произойдёт при deploy?",
+      "options": [
+        { "id": "a", "text": "Запустится за сегодня" },
+        { "id": "b", "text": "Airflow попытается create DagRuns за КАЖДЫЙ день с 2020-01-01 — ~2200 DagRuns одновременно. Scheduler overload, resource exhaustion, cascading failures. ALWAYS catchup=False для новых DAGs — backfill explicit через CLI" },
+        { "id": "c", "text": "Ничего" },
+        { "id": "d", "text": "Только за прошлую неделю" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "catchup=True значит Airflow auto-creates DagRuns за все missing intervals от start_date до current. 6 лет × 365 дней = ~2200 DagRuns одновременно создаются. Catastrophe: scheduler overload (cannot process), pool exhaustion (workers blocked), resource exhaustion (DB/Redis), cascading failures. Rule: новые DAGs всегда catchup=False. Если нужен backfill — explicit `airflow dags backfill my_dag --start-date X --end-date Y` с max_active_runs limit.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-05-q3",
+      "type": "multiple-choice",
+      "question": "DAG имеет cumulative_total task с depends_on_past=True. Что это даёт?",
+      "options": [
+        { "id": "a", "text": "Только performance" },
+        { "id": "b", "text": "Task не запустится пока same task за prior data_interval не достиг success. Backfill становится sequential (один-за-другим), не parallel. Useful для cumulative state, но slower. Caveat: backfill может deadlock если old runs missing/failed" },
+        { "id": "c", "text": "Random ordering" },
+        { "id": "d", "text": "Skip past runs" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "depends_on_past=True — task X в run T waits для task X в run T-1 to succeed. Использование: cumulative aggregations где today's value depends на yesterday's (cumulative_total). Backfill sequential — каждый run waits предыдущий. Slow для large backfill (12 months = 365 sequential runs). Caveat: если 2024-03-15 run never created (был paused), 2024-03-16 stuck forever. Лучше — design tasks recompute-able from scratch когда возможно, чтобы не нужен dependency on past.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-05-q4",
+      "type": "true-false",
+      "question": "Backfill 365 runs без max_active_runs limit запускает все 365 DagRuns параллельно — обычно это OK.",
+      "correctAnswer": false,
+      "explanation": "Без limit Airflow создаёт DagRuns быстрее чем executor может handle — все 365 DagRuns в parallel = scheduler overload + pool exhaustion + downstream resource exhaustion (e.g., 365 concurrent Spark submits will kill EMR). Production rule: ALWAYS set max_active_runs=3-10 для DAG. Backfill становится controlled — 3-10 одновременно, остальные queued. Не пытайтесь max-parallel — Airflow scheduler не infinitely scalable, и downstream систем тоже.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

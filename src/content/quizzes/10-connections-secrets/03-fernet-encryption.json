@@ -1,0 +1,63 @@
+{
+  "lessonSlug": "10-connections-secrets/03-fernet-encryption",
+  "moduleId": "10-connections-secrets",
+  "_meta": { "idPrefix": "airflow-m10-03" },
+  "questions": [
+    {
+      "id": "airflow-m10-03-q1",
+      "type": "multiple-choice",
+      "question": "Что внутри Fernet token (формат)?",
+      "options": [
+        { "id": "a", "text": "Только AES-encrypted ciphertext" },
+        { "id": "b", "text": "Version (1B) || Timestamp (8B) || IV (16B) || Ciphertext (N*16B) || HMAC-SHA256 (32B), всё base64-url-encoded. Encrypt-then-MAC pattern" },
+        { "id": "c", "text": "RSA encrypted blob" },
+        { "id": "d", "text": "Plain JSON" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fernet token: 1 byte version (0x80) + 8 bytes big-endian timestamp + 16 bytes IV + N*16 bytes AES-128-CBC ciphertext + 32 bytes HMAC-SHA256 — всё base64-url-encoded. HMAC вычисляется after encryption (Encrypt-then-MAC — best practice). При decrypt: сначала verify HMAC (fail-fast если tampered), потом decrypt AES. Это даёт guarantee detection любой tampering — изменение одного byte ломает HMAC verification.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m10-03-q2",
+      "type": "multiple-choice",
+      "question": "Fernet key 32 bytes — как используется?",
+      "options": [
+        { "id": "a", "text": "Один ключ для всего" },
+        { "id": "b", "text": "key[0:16] (16B) = AES-128 signing key, key[16:32] (16B) = HMAC-SHA256 key. Простой split, не KDF" },
+        { "id": "c", "text": "RSA key pair" },
+        { "id": "d", "text": "Hashed через bcrypt" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fernet key 32 bytes = 256 bits. Делится на 2 independent 128-bit keys: key[0:16] для AES-128-CBC, key[16:32] для HMAC-SHA256. Это classic 'derive multiple keys' pattern, реализованный простым split. Безопасно потому, что 256 bits entropy >>=128+128. Generate key: cryptography.fernet.Fernet.generate_key() — возвращает urlsafe base64-encoded 32 random bytes (длина 44 символа).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m10-03-q3",
+      "type": "multiple-choice",
+      "question": "AIRFLOW__CORE__FERNET_KEY='new_key,old_key' — что происходит?",
+      "options": [
+        { "id": "a", "text": "Используется только первый" },
+        { "id": "b", "text": "MultiFernet([new, old]): encrypt всегда с ПЕРВЫМ (new), decrypt пробует каждый по порядку до valid. Позволяет rolling key rotation без downtime" },
+        { "id": "c", "text": "Ошибка config" },
+        { "id": "d", "text": "Оба ключа суммируются" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Comma-separated keys → MultiFernet. Encrypt: использует ПЕРВЫЙ key (new_key). Decrypt: try each key in order, first успешный return. Это позволяет gracefully ротировать key: (1) Deploy new,old config — старые tokens still decryptable, новые шифруются new. (2) airflow rotate-fernet-key — re-encrypt все DB rows. (3) Deploy только new key — старый можно безопасно destroy. Окно multi-key должно быть minimized (минуты, не дни) — если кто-то получает leaked old key, он может decrypt новые tokens пока он в active list.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m10-03-q4",
+      "type": "multiple-choice",
+      "question": "Lost Fernet key + 50 connections в DB — что делать?",
+      "options": [
+        { "id": "a", "text": "Brute-force AES" },
+        { "id": "b", "text": "Restore key из external vault/KMS backup. Если ключ потерян безвозвратно — UPDATE connection SET password=NULL, extra=NULL; re-create через UI/CLI с credentials из external sources (password managers, IAM re-issue, DBA-provided)" },
+        { "id": "c", "text": "Удалить Airflow и пересоздать" },
+        { "id": "d", "text": "Airflow recovery tool" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lost Fernet key = irrecoverable encryption. Brute-force AES-128 computationally infeasible. Options: (1) Restore key из external backup (KMS versioning, Vault disaster recovery, 1Password / dedicated key vault). Это правильный workflow — Fernet key должен always быть в external vault с DR procedure. (2) Если key truly lost: UPDATE connection SET password=NULL, extra=NULL; затем re-create connections руками. Credentials берёте из source-of-truth: cloud IAM re-issue, DBA provides new DB password, third-party API tokens re-generate через provider portal. Это painful но recoverable. Long-term: KMS-managed key с deletion protection + multi-region replication + scheduled deletion alerts.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

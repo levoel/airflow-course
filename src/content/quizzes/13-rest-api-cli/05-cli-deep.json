@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "13-rest-api-cli/05-cli-deep",
+  "moduleId": "13-rest-api-cli",
+  "_meta": { "idPrefix": "airflow-m13-05" },
+  "questions": [
+    {
+      "id": "airflow-m13-05-q1",
+      "type": "multiple-choice",
+      "question": "Когда использовать `airflow dags test` vs `airflow dags trigger`?",
+      "options": [
+        { "id": "a", "text": "Они одинаковые" },
+        { "id": "b", "text": "`dags test` — изолированный in-process run без metadata DB persistence, для local development / smoke test. `dags trigger` — создаёт DagRun в metadata DB, scheduler/executor его подберут как обычный run. test НЕ требует scheduler" },
+        { "id": "c", "text": "test для unit tests, trigger для integration" },
+        { "id": "d", "text": "test только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`dags test` (2.4+) запускает весь DAG в текущем процессе CLI, без scheduler/executor/DB writes. Идеально для local dev цикла 'измени .py → запусти → посмотри'. Реальные Connection/Variable lookups идут — поэтому работает с production secrets. `dags trigger` — обычный production run, scheduler управляет. Test для разработки, trigger для production. `--post-mortem` (2.7+) дропает в pdb при exception — invaluable для debug.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-05-q2",
+      "type": "multiple-choice",
+      "question": "Production cron daily делает `airflow db clean`. Какие флаги обязательны?",
+      "options": [
+        { "id": "a", "text": "Никакие" },
+        { "id": "b", "text": "`--clean-before-timestamp <date>` (что удалять), `--yes` (без интерактивного confirm), опционально `--skip-archive` (не создавать backup tables). Первый раз — без --skip-archive, посмотреть архив. Дальше с --skip-archive для экономии места" },
+        { "id": "c", "text": "Только --yes" },
+        { "id": "d", "text": "--force --everything" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`db clean` по default создаёт `_airflow_deleted__*` archive tables перед удалением — это удваивает место. `--skip-archive` — pure delete. **Production pattern:** `airflow db clean --clean-before-timestamp $(date -u -d '30 days ago' +%Y-%m-%d) --yes --skip-archive`. Без db clean metadata DB растёт до 100s GB (особенно log table). Cleanup ежедневно — критично для performance scheduler.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-05-q3",
+      "type": "multiple-choice",
+      "question": "Liveness probe для Airflow scheduler в Kubernetes. Что использовать?",
+      "options": [
+        { "id": "a", "text": "TCP check на port 8793" },
+        { "id": "b", "text": "`airflow jobs check --job-type SchedulerJob --hostname $(hostname) --limit 1 --allow-multiple` — exit 0 если SchedulerJob с этим hostname имеет fresh heartbeat. Если scheduler завис — exit 1 → pod restart" },
+        { "id": "c", "text": "HTTP /health endpoint" },
+        { "id": "d", "text": "Scheduler не нужен liveness" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`airflow jobs check` смотрит metadata DB: SELECT FROM job WHERE job_type='SchedulerJob' AND hostname=X AND latest_heartbeat > now() - scheduler_health_check_threshold (default 30s). Если scheduler завис (deadlock, OOM не убил, GIL stuck) — heartbeat прокис → exit 1 → kubelet restart pod. **Не подходит:** /health (это webserver endpoint, scheduler не имеет HTTP server). `--allow-multiple` нужен для HA setups (2+ scheduler-а).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-05-q4",
+      "type": "true-false",
+      "question": "`airflow dags delete my_dag` удаляет всю metadata (DagRuns, TI, XCom, logs), но НЕ удаляет .py файл. Если файл остаётся в dags folder, DAG появится снова при следующем parse.",
+      "correctAnswer": true,
+      "explanation": "Это часто missed gotcha. CLI delete только cleanup DB. Если файл `.py` остаётся в `dags_folder` — DagFileProcessor его перепарсит и DAG появится снова (с пустой историей). **Production pattern для permanent delete:** (1) Remove `.py` из git → CI deploy → scheduler видит файл удалённым; (2) `is_active` в `dag` table становится false (через `update_dags_to_be_paused`); (3) `airflow dags delete my_dag` — cleanup historical data. Без шага 1 cleanup бесполезен.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

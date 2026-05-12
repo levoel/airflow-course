@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "12-plugins-listeners/04-listener-api",
+  "moduleId": "12-plugins-listeners",
+  "_meta": { "idPrefix": "airflow-m12-04" },
+  "questions": [
+    {
+      "id": "airflow-m12-04-q1",
+      "type": "multiple-choice",
+      "question": "Listener API в Airflow доступен с какой версии и на каком framework построен?",
+      "options": [
+        { "id": "a", "text": "С 2.0, built-in Airflow code" },
+        { "id": "b", "text": "С 2.8 (Q4 2023), построен на pluggy (тот же hook framework, что у pytest). Decoupling: Airflow code вызывает hook spec, listeners реализуют @hookimpl. Multiple subscribers возможны, exception в одном не breaks others" },
+        { "id": "c", "text": "С 3.0 only" },
+        { "id": "d", "text": "С 1.10" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Listener API — это significant feature 2.8. Pluggy provides: spec/impl decoupling, multiple subscribers per event, isolation exceptions. Используется OpenLineage provider для lineage emission. До 2.8 был только sporadic events (`on_failure_callback` per task, `sla_miss_callback`) — fragmented vs full system view.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m12-04-q2",
+      "type": "multiple-choice",
+      "question": "Listener vs on_failure_callback per task — почему Listener лучше для production system-wide alerting?",
+      "options": [
+        { "id": "a", "text": "Listener быстрее" },
+        { "id": "b", "text": "Centralization (один module vs callback в каждом DAG), Coverage guarantee (видит ВСЕ tasks автоматически, callback можно забыть), Maintenance (одна правка кода + restart vs обход 500 DAG-ов), Event types (task + dagrun + dataset + scheduler lifecycle, callback покрывает только task), DevOps visibility (alerting код рядом с monitoring infra)" },
+        { "id": "c", "text": "Listener работает только в 3.x" },
+        { "id": "d", "text": "Они эквивалентны" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production scale 500+ DAGs: callback требует discipline (default_args, code review). Listener — central, no opt-in needed. OpenLineage, Datadog integration, Astronomer lineage — все используют Listener. Combine: Listener для generic (alerting, lineage, metrics) + per-task callback для DAG-specific cleanup.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m12-04-q3",
+      "type": "multiple-choice",
+      "question": "Listener синхронный — что это значит для production?",
+      "options": [
+        { "id": "a", "text": "Можно делать DB writes без оглядки" },
+        { "id": "b", "text": "Listener код блокирует scheduler/worker main loop. Slow listener (2s HTTP request) = 2s scheduler block. Обязательные правила: timeout на requests (≤5s), fast-fail, не делать DB writes напрямую — async queue. Plus exception в listener logged но не breaks Airflow (pluggy isolation)" },
+        { "id": "c", "text": "Не имеет значения" },
+        { "id": "d", "text": "Только в worker, scheduler не блокирует" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Listener вызывается synchronously в scheduler/worker context. Slow listener — реальный production risk. Best practice: fast (≤100ms), async queue для heavy work (push в Kafka/Redis/SQS, отдельный consumer обрабатывает). Slack webhook 5s timeout OK. DB writes — нет (это меняет state Airflow).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m12-04-q4",
+      "type": "true-false",
+      "question": "OpenLineage provider использует именно Listener API для emit lineage events — это иллюстрирует правильный production use case Listener API.",
+      "correctAnswer": true,
+      "explanation": "apache-airflow-providers-openlineage внутри implementation: @hookimpl on_task_instance_running → emit START event, on_task_instance_success → COMPLETE, on_task_instance_failed → FAIL. Декларативное, system-wide, без opt-in per DAG. Это killer use case Listener API. Также Datadog Airflow integration, Astronomer's lineage, custom enterprise monitoring — все паттерн.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

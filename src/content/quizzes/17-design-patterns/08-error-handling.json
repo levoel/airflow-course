@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/08-error-handling",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-08" },
+  "questions": [
+    {
+      "id": "airflow-m17-08-q1",
+      "type": "multiple-choice",
+      "question": "Exponential backoff retries с 5 attempts, retry_delay=1min, max_retry_delay=1h. Какое максимальное total wait?",
+      "options": [
+        { "id": "a", "text": "5 минут" },
+        { "id": "b", "text": "~31 min: attempt 2 после 1 min, attempt 3 после 2 min (2× delay), attempt 4 после 4 min, attempt 5 после 8 min, attempt 6 после 16 min. Formula: delay_n = min(retry_delay × 2^(n-1), max_retry_delay)" },
+        { "id": "c", "text": "1 час" },
+        { "id": "d", "text": "5 часов" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Exponential backoff: delay doubles each retry. С retry_delay=60s, max=3600s: 60, 120, 240, 480, 960 — total ~31 min для 5 retries. max_retry_delay caps это — без cap 6th retry would be 1920s, 7th 3840s, etc. Balance: enough time для transient issues resolve (network blips, DB failover), не infinite wait. Production tuning: short retry_delay (30s) для transient, longer (5-10 min) для rate-limited APIs.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-08-q2",
+      "type": "multiple-choice",
+      "question": "Task should retry on transient errors но НЕ retry на authentication failure. Как реализовать?",
+      "options": [
+        { "id": "a", "text": "retries=0 для всего" },
+        { "id": "b", "text": "try/except + raise AirflowFailException для terminal errors (fails task immediately, no retries). Standard Exception triggers retry. AirflowSkipException — для data quality issues (skip rather than retry)" },
+        { "id": "c", "text": "Custom retry handler" },
+        { "id": "d", "text": "Невозможно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AirflowFailException — explicit fail-fast. raise когда retry не поможет: auth failure, invalid input, schema mismatch. Без retries даже если retries=5. Standard Exception → retry если retries > 0 left. AirflowSkipException → marks task SKIPPED (downstream trigger_rule matters). Pattern: try/except, classify exception type, raise appropriate Airflow exception. Smart error handling vs blanket retries.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-08-q3",
+      "type": "multiple-choice",
+      "question": "on_failure_callback vs Listener API — main difference?",
+      "options": [
+        { "id": "a", "text": "Identical" },
+        { "id": "b", "text": "Callbacks — per-DAG/task. Listener API — global (все DAGs). Callbacks declared в DAG code. Listeners — plugin (single source of truth). Listener API лучше для cross-cutting concerns (alerting, audit). Callbacks для DAG-specific business logic" },
+        { "id": "c", "text": "Listeners deprecated" },
+        { "id": "d", "text": "Callbacks deprecated" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Callbacks (on_failure_callback, on_success_callback) — declarative per-DAG. Good для DAG-specific cleanup. Listener API (модуль 12) — global hooks через AirflowPlugin. Single listener handles ALL DAGs' failure events. Production: alerting через Listener API (one place, consistent), DAG-specific logic через callbacks (resource cleanup, custom notification per business unit). Listener — newer (2.5+), more powerful, recommended для cross-cutting concerns.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-08-q4",
+      "type": "true-false",
+      "question": "on_failure_callback runs синхронно в scheduler process — slow callback (5+ seconds) замедляет scheduler tick.",
+      "correctAnswer": true,
+      "explanation": "Callbacks execute synchronously в scheduler process. Slow callback (slow HTTP к Slack, syscall, etc) блокирует scheduler loop — scheduler.scheduler_loop_duration spike, всех tasks scheduling замедляется. Production rule: callbacks fast (< 1 second), fire-and-forget где возможно. Wrap external HTTP в try/except + low timeout (2s). Для slow alerting work — use Listener API с asyncio capability, or pub/sub event к external alerting service вместо direct HTTP в callback.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

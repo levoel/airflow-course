@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "09-triggerer-deferrable/03-basetrigger-anatomy",
+  "moduleId": "09-triggerer-deferrable",
+  "_meta": { "idPrefix": "airflow-m09-03" },
+  "questions": [
+    {
+      "id": "airflow-m09-03-q1",
+      "type": "multiple-choice",
+      "question": "Что возвращает BaseTrigger.serialize()?",
+      "options": [
+        { "id": "a", "text": "JSON string полного state" },
+        { "id": "b", "text": "tuple (classpath_string, kwargs_dict). Classpath используется для importlib.import_module + getattr, kwargs JSON-serializable передаются в __init__ при deserialization" },
+        { "id": "c", "text": "Pickle bytes" },
+        { "id": "d", "text": "SQL row dict" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "serialize() возвращает tuple (classpath, kwargs): classpath — full Python import path как string ('my_package.triggers.MyTrigger'), kwargs — dict с JSON-serializable values. Triggerer при adopt делает: module = import_module(package); cls = getattr(module, class_name); instance = cls(**kwargs). __init__ должен accept те же kwargs обратно. Datetime → isoformat string, Decimal → str, set → list. Pickle deprecated по security соображениям, JSON only.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m09-03-q2",
+      "type": "multiple-choice",
+      "question": "Trigger с counter self.retries_done увеличивается в run() loop. Что произойдёт при triggerer restart?",
+      "options": [
+        { "id": "a", "text": "Counter сохранится через DB checkpoint" },
+        { "id": "b", "text": "Counter сбросится в 0: re-adopt создаёт новый instance через serialize() kwargs, __init__ инициализирует counter заново. In-memory state теряется. Fix: использовать absolute deadlines (computed в __init__) вместо relative counters" },
+        { "id": "c", "text": "Trigger fails" },
+        { "id": "d", "text": "Counter сохранится автоматически" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Resumability gotcha: in-memory state (self.retries_done) НЕ persisted. При triggerer restart: stale triggerer_id → scheduler re-orphans → live triggerer adopts через SKIP LOCKED → создаёт новый instance через cls(**kwargs_from_serialize). __init__ runs заново, counters сбрасываются. Fix: stateless design — absolute deadline (datetime + timedelta вычислено в первом __init__, serialize-ится, при re-adopt получает корректный remaining time). Это fundamentally влияет на API design custom triggers.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-03-q3",
+      "type": "multiple-choice",
+      "question": "Что значит async def run() с yield внутри?",
+      "options": [
+        { "id": "a", "text": "Синтаксическая ошибка — async и yield несовместимы" },
+        { "id": "b", "text": "Async generator: async def + yield. Может await внутри yield's. Triggerer iterate через `async for event in trigger.run()`. Yield TriggerEvent сигнализирует triggerer о готовности" },
+        { "id": "c", "text": "Generator + asyncio task wrapper" },
+        { "id": "d", "text": "Coroutine с return values" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Async generator (Python 3.6+): async def + yield = AsyncIterator. Можно await asyncio.sleep между yields. Triggerer вызывает: async for event in trigger.run(): await self.emit_event(event). Стандартный coroutine (async def + return) не подходит — coroutine завершается сразу, нет streaming events. Generator (def + yield) — sync, не async-aware. Async generator — правильная abstraction для async waiting + event emission.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m09-03-q4",
+      "type": "true-false",
+      "question": "Все kwargs custom trigger __init__ должны быть JSON-serializable, потому что они сохраняются в trigger.kwargs (JSONB column) и desserializing на каждом triggerer restart.",
+      "correctAnswer": true,
+      "explanation": "Critical constraint: serialize() возвращает dict, который JSON.dumps записывается в trigger.kwargs JSONB column. Non-serializable объекты (raw datetime, Decimal, sets, custom classes) ломаются на dumps. Стандартный pattern: __init__ принимает both raw type and serialized form (Union[datetime, str]), детектирует через isinstance, нормализует к raw type. Serialize() возвращает serialized form (isoformat). Это round-trip safe. Объекты с complex graph (e.g. Airflow Connection) — serialize только conn_id, в run() resolve Connection через id.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

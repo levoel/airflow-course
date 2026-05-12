@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/02-ha-reference-architecture",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-02" },
+  "questions": [
+    {
+      "id": "airflow-m15-02-q1",
+      "type": "multiple-choice",
+      "question": "В Airflow 2.x HA для scheduler реализован через:",
+      "options": [
+        { "id": "a", "text": "Raft consensus protocol" },
+        { "id": "b", "text": "ZooKeeper coordination" },
+        { "id": "c", "text": "PostgreSQL row-level locks (SELECT FOR UPDATE NOWAIT) на slot_pool — модуль 04" },
+        { "id": "d", "text": "etcd cluster" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Airflow сознательно отказался от dedicated consensus (Raft/ZK/etcd) — выбрал operational simplicity. Critical section защищена через row-level lock на slot_pool (SELECT ... FOR UPDATE NOWAIT). Без NOWAIT scheduler блокировался бы; с NOWAIT — получает lock_not_available error и просто skip tick. Это делает HA scheduler работающим на любом PostgreSQL 9.6+ без дополнительной инфраструктуры.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m15-02-q2",
+      "type": "multiple-choice",
+      "question": "Команда добавляет 5-й scheduler к существующим 4. Throughput не растёт. Почему?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow 2.10" },
+        { "id": "b", "text": "Phase 3 (critical section — enqueue TI) serialized через row-level lock. После 3-4 scheduler-ов diminishing returns, bottleneck становится PostgreSQL. Решение — Postgres tuning, не больше scheduler-ов" },
+        { "id": "c", "text": "Нужен Redis cluster" },
+        { "id": "d", "text": "Лимит в config" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical section serialized: только один scheduler одновременно делает enqueue (модуль 04). Phases 1-2 (создание DagRun, scheduling) могут параллелиться, но обычно не bottleneck. Sweet spot — 2-4 scheduler-а. После этого нужно тюнить PostgreSQL: PgBouncer transaction mode, autovacuum для task_instance/log/xcom, pg_partman, work_mem, composite indexes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m15-02-q3",
+      "type": "multiple-choice",
+      "question": "Какой компонент Airflow stateless и масштабируется горизонтально без HA-специфической логики?",
+      "options": [
+        { "id": "a", "text": "Scheduler" },
+        { "id": "b", "text": "Triggerer" },
+        { "id": "c", "text": "Webserver (Flask + gunicorn). Все state в DB. LB sticky sessions не нужны — можно scale linearly" },
+        { "id": "d", "text": "DAG Processor" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Webserver полностью stateless в 2.x. Запросы маршрутизируются на любой replica — состояние в DB. LB sticky sessions не нужны (state в DB + cookies). Scaling — добавить replicas, нет HA-специфической координации. Scheduler/Triggerer/DAG Processor — все имеют HA-специфическую логику через DB locks / assignment.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m15-02-q4",
+      "type": "true-false",
+      "question": "В medium deployment (200 DAGs) можно держать PostgreSQL и Redis внутри Kubernetes cluster через built-in subcharts официального Airflow Helm chart.",
+      "correctAnswer": false,
+      "explanation": "Built-in Helm subcharts для Postgres/Redis (`postgresql.enabled: true`, `redis.enabled: true`) — single-node без HA, без persistence, без backup. Потеря Redis broker = потеря всех queued tasks. Потеря Postgres = потеря всего state. В production обязательно managed services: RDS PostgreSQL Multi-AZ (или CloudSQL/Azure Database), ElastiCache Redis cluster (или Memorystore). Built-in subcharts — только для dev/test.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

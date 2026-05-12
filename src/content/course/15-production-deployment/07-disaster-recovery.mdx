@@ -1,0 +1,367 @@
+---
+title: "Disaster recovery — backup, Fernet key rotation, RTO/RPO, chaos testing"
+description: "Backup metadata DB (pg_dump, RDS snapshots, WAL archiving), Fernet key rotation procedure, RTO/RPO targets, multi-region considerations, quarterly chaos testing"
+order: 7
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["Disaster Recovery", "Backup", "Fernet Key", "RTO", "RPO", "Chaos Engineering"]
+---
+
+# Disaster recovery — backup, Fernet key rotation, RTO/RPO, chaos testing
+
+Disaster recovery (DR) — план действий когда **всё пропало**: AZ потерял питание, разработчик случайно `DROP TABLE`, ransomware зашифровал metadata DB. У зрелого Airflow deployment есть три категории DR: backup и restore, Fernet key management, multi-region failover. И всё это проверяется **chaos testing** — не теорией, а реальными failure injection раз в квартал.
+
+Этот урок — production-grade DR playbook с конкретными RTO/RPO targets и процедурами восстановления, отработанными в реальных incident postmortems.
+
+---
+
+## RTO/RPO targets — что обещаем бизнесу
+
+**RTO (Recovery Time Objective)** — максимальное время простоя после disaster.
+**RPO (Recovery Point Objective)** — максимум данных, которые можем потерять.
+
+Реалистичные targets для Airflow:
+
+| Tier | RTO | RPO | Cost | Когда |
+|---|---|---|---|---|
+| **Bronze** | 24h | 24h | $ | Dev, non-critical |
+| **Silver** | 4h | 1h | $$ | Standard production |
+| **Gold** | 1h | 5min | $$$ | Critical (financial pipelines) |
+| **Platinum** | <15min | 0 (synchronous) | $$$$ | Mission-critical (regulated) |
+
+**RPO 0 невозможен для metadata DB** без synchronous multi-region replication, что добавляет ~5ms latency на каждый scheduler tick. Большинство production deployments — **Silver tier**: RTO 4h, RPO 1h.
+
+---
+
+## Backup strategy
+
+### Metadata DB backup
+
+Три уровня backup:
+
+```
+1. Continuous WAL archiving       → RPO 1-5 min, RTO 1-2h
+2. Daily snapshot (RDS automated) → RPO 24h, RTO 30 min
+3. Weekly full backup (pg_dump)   → RPO 7 days, RTO 2h (для compliance)
+```
+
+**RDS automated backups** включаются по умолчанию:
+
+```bash
+aws rds modify-db-instance \
+  --db-instance-identifier airflow-prod \
+  --backup-retention-period 35 \
+  --preferred-backup-window "03:00-04:00" \
+  --enable-cloudwatch-logs-exports '["postgresql"]'
+```
+
+PostgreSQL WAL archiving (для PITR — point-in-time recovery):
+
+```sql
+-- На non-RDS Postgres
+ALTER SYSTEM SET archive_mode = 'on';
+ALTER SYSTEM SET archive_command = 'aws s3 cp %p s3://airflow-wal-archive/%f';
+ALTER SYSTEM SET wal_level = 'replica';
+SELECT pg_reload_conf();
+```
+
+На RDS PITR работает out of the box до retention period.
+
+**`pg_dump` weekly** для compliance:
+
+```bash
+#!/bin/bash
+# weekly_backup.sh — запускается из CronJob в K8s
+BACKUP_FILE="airflow_$(date +%Y%m%d_%H%M%S).dump"
+pg_dump \
+  -h pgbouncer.airflow.svc \
+  -U airflow_backup \
+  -d airflow \
+  -F custom \
+  --no-owner --no-acl \
+  --jobs=4 \
+  -f /tmp/$BACKUP_FILE
+
+# Encrypt and upload to S3
+openssl enc -aes-256-cbc -salt -in /tmp/$BACKUP_FILE \
+  -out /tmp/$BACKUP_FILE.enc -pass file:/etc/airflow/backup-key
+aws s3 cp /tmp/$BACKUP_FILE.enc \
+  s3://airflow-backups/$(date +%Y/%m)/$BACKUP_FILE.enc \
+  --storage-class STANDARD_IA
+
+# Cleanup
+rm /tmp/$BACKUP_FILE /tmp/$BACKUP_FILE.enc
+```
+
+### Что НЕ нужно бэкапить
+
+| Не бэкапить | Почему |
+|---|---|
+| DAG files | Они в Git — это и есть backup |
+| Logs (S3/GCS) | Уже на cloud storage с redundancy |
+| Worker pod logs | Эфемерные — потеря приемлема |
+| Webserver session DB | После restart всё равно новые sessions |
+
+### Что бэкапить кроме metadata DB
+
+```yaml
+# Critical assets для DR
+- metadata_db: RDS PostgreSQL (см. выше)
+- fernet_key: Vault / AWS Secrets Manager (replicated)
+- connection_secrets: Vault paths backed up
+- variables: Vault paths backed up
+- dag_files: Git repo (GitHub Enterprise / GitLab self-managed)
+- custom_plugins: Git repo
+- helm_values: Git repo (IaC)
+- ssl_certificates: cert-manager + DNS (regenerate-able)
+```
+
+---
+
+## Fernet key — самая критичная секрет
+
+Fernet key — симметричный ключ AES-128, используемый для шифрования **connections и variables** в metadata DB. **Потеря Fernet key = полная потеря всех connections и variables** (encrypted columns nullified, нужно восстанавливать вручную).
+
+```bash
+# Сгенерировать новый Fernet key (один раз!)
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Пример: pBcGddF1xqYP9hqOFq4PqMD8bH-Vc2_KjMNn4Z3W3qY=
+```
+
+### Хранение Fernet key
+
+**ОБЯЗАТЕЛЬНО**:
+- Vault path `secret/airflow/fernet` (or AWS Secrets Manager `airflow/fernet`)
+- Replicated в backup region
+- Cold copy в encrypted offline storage (1Password Business, etc) — для самого worst case
+- НЕ в Git, НЕ в Helm values plain text
+
+**НЕ ХРАНИТЕ**:
+- В values.yaml даже если private repo
+- В environment variables CI/CD
+- В Slack/Teams/email
+
+### Fernet key rotation procedure
+
+Rotation требуется при:
+- Подозрение на compromise
+- Compliance requirement (например, ежегодно)
+- Сотрудник с access ушёл
+
+Процедура (без downtime):
+
+```bash
+# 1. Сгенерировать новый key
+NEW_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+OLD_KEY=$(kubectl get secret airflow-fernet-key -o jsonpath='{.data.fernet-key}' | base64 -d)
+
+# 2. Установить multi-key — Airflow поддерживает comma-separated keys
+# Старый key для DECRYPT, новый key для NEW ENCRYPTIONS
+kubectl patch secret airflow-fernet-key \
+  -p "{\"data\":{\"fernet-key\":\"$(echo -n "$NEW_KEY,$OLD_KEY" | base64)\"}}"
+
+# 3. Restart все airflow компоненты (rolling)
+kubectl rollout restart deployment -n airflow
+
+# 4. Запустить re-encrypt всех connections/variables на NEW key
+kubectl exec airflow-scheduler-0 -- airflow rotate-fernet-key
+
+# 5. Проверить — все connections decrypt-абельны
+kubectl exec airflow-scheduler-0 -- airflow connections list
+
+# 6. Убрать старый key
+kubectl patch secret airflow-fernet-key \
+  -p "{\"data\":{\"fernet-key\":\"$(echo -n "$NEW_KEY" | base64)\"}}"
+kubectl rollout restart deployment -n airflow
+```
+
+`airflow rotate-fernet-key` — встроенная команда (2.4+), которая делает SELECT всех encrypted columns, decrypt старым key, encrypt новым, UPDATE.
+
+<Callout type="warning">
+Никогда не выполняйте step 6 (удаление старого key) **до** завершения step 4 (rotate). Если scheduler рестартанулся между этими шагами с только новым key — connections созданные старым key недоступны. Always test rotation в staging.
+</Callout>
+
+---
+
+## Multi-region considerations
+
+Single-region Airflow умирает вместе с регионом. Для critical workloads нужен multi-region.
+
+### Подход 1: Active-passive (recommended для tier Gold)
+
+```
+Primary region (us-east-1):
+  - Full Airflow stack
+  - RDS primary
+  - Active traffic
+
+DR region (us-west-2):
+  - Cold standby Helm release (не запущен)
+  - RDS cross-region read replica (continuous)
+  - Helm values + image в region's ECR
+  - Vault replication
+
+При disaster:
+  1. Promote read replica → primary в us-west-2
+  2. helm install airflow в us-west-2
+  3. Update DNS → us-west-2 endpoint
+  4. RTO ~1h, RPO ~1-5min (lag replica)
+```
+
+### Подход 2: Active-active (только для Platinum tier)
+
+Очень сложно: два независимых Airflow deployments в разных regions, **разные** metadata DBs, синхронизация state через external workflow router. На практике почти никто так не делает — overhead больше выгоды.
+
+Альтернатива: разделение workloads по regions (us DAGs только в us-east, eu DAGs только в eu-west) — каждый region полностью self-contained.
+
+### DAG codebase synchronization
+
+Если DAG repo тоже single-region (GitHub.com) — это потенциальная single point of failure. Mitigate:
+- GitHub mirror в self-hosted GitLab (or vice versa)
+- Periodic clone в S3 bucket в DR region
+- Helm chart использует mirror в DR scenario
+
+---
+
+## Chaos testing — quarterly
+
+DR plan который не тестировался — это **wishful thinking**. Production DR должен проходить **quarterly chaos drills**.
+
+### Chaos test 1: Kill scheduler
+
+```bash
+# В рабочее время на staging, потом в low-traffic window на prod
+kubectl delete pod airflow-scheduler-0 -n airflow
+
+# Ожидаемое поведение:
+# - Через 30s (scheduler_health_check_threshold) другой scheduler adopt-ит orphan TI
+# - Новый pod respawned через 60s (HPA или Deployment)
+# - Никаких потерянных TI
+# - DagRuns продолжаются
+
+# Verify:
+kubectl logs -n airflow airflow-scheduler-1 | grep "adopt_or_reset"
+SELECT count(*) FROM task_instance WHERE state IN ('queued', 'scheduled') AND queued_dttm < now() - interval '5 min';
+# Должно быть 0
+```
+
+### Chaos test 2: PostgreSQL failover
+
+```bash
+# Trigger Multi-AZ failover
+aws rds reboot-db-instance \
+  --db-instance-identifier airflow-prod \
+  --force-failover
+
+# Ожидаемое поведение:
+# - ~60-120s downtime (failover)
+# - PgBouncer reconnect автоматически
+# - Все scheduler/webserver/worker — SQLAlchemy connection retry
+# - In-flight tasks могут fail, retry схватит
+
+# Verify:
+SELECT pg_is_in_recovery();  # должно вернуть false (we're on new primary)
+```
+
+### Chaos test 3: Network partition
+
+```bash
+# Используем chaos-mesh / litmus
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: partition-scheduler-from-db
+spec:
+  action: partition
+  mode: one
+  selector:
+    namespaces: [airflow]
+    labelSelectors:
+      "component": "scheduler"
+  direction: to
+  target:
+    selector:
+      namespaces: [database]
+  duration: "5m"
+
+# Ожидаемое поведение:
+# - Scheduler перестаёт делать heartbeat
+# - Через 30s heartbeat threshold scheduler-2 adopt-ит
+# - После 5min partition resolved → scheduler-1 рестартует с clean state
+```
+
+### Chaos test 4: Full DR drill
+
+Раз в год:
+1. Pause production
+2. Restore from snapshot в DR region (us-west-2)
+3. Запустить green Helm release в DR
+4. Verify все critical DAGs работают
+5. Switch DNS на DR
+6. Run staging DAGs 1 час
+7. Switch обратно на primary, document timings
+
+Цель: измерить **реальный** RTO. Если оказывается 8h вместо обещанных 4h — улучшать backup automation.
+
+---
+
+## Production gotchas
+
+**`pg_dump` блокирует other queries при low memory**. На больших DB (>100 GB) `pg_dump` может занимать часы и нагружать I/O. Используйте `--jobs` для parallel dump, или snapshot-based backup (RDS native).
+
+**Fernet key в Kubernetes Secret — не настоящий secret**. K8s Secrets stored в etcd plain (base64-encoded, не encrypted). Используйте External Secrets Operator + Vault/AWS Secrets Manager + envelope encryption etcd.
+
+**Restore из pg_dump теряет CONCURRENTLY indexes**. `pg_dump` создаёт indexes как обычные (блокирующие). На больших DB restore может занять часы пока строятся indexes. Используйте RDS snapshot restore — он копирует физические файлы.
+
+**Восстановление с Fernet key, но без variables**. После restore проверьте `airflow connections list` и `airflow variables list` — values readable? Если "?" — Fernet key mismatch (другой key чем при создании connection).
+
+**Cross-region replication lag spikes**. Лагающая replica может быть behind на 30+ минут при high write load. Monitoring: `aws rds describe-db-instances --query ".[].StatusInfos"`. При spike — alert и пауза critical DAGs до catch up.
+
+**Backup retention costs**. 35-day RDS retention + WAL archiving в S3 + weekly pg_dumps = $100-500/mo для medium DB. Это OK, но не забудьте mention в TCO.
+
+---
+
+## DR playbook template
+
+Production-ready playbook для tier Silver:
+
+```markdown
+# Airflow DR Playbook
+
+## Triggering events
+- AZ outage
+- DB corruption / data loss
+- Ransomware / unauthorized access
+- Region-wide cloud incident
+
+## RTO: 4 hours / RPO: 1 hour
+
+## Severity levels
+- SEV1: full Airflow down >15 min → activate DR
+- SEV2: scheduler down but UI up → wait for auto-recovery
+- SEV3: single DAG failures → standard troubleshooting
+
+## DR activation (SEV1)
+1. **[0:00]** Page on-call SRE
+2. **[0:05]** Communicate to stakeholders (Slack #incidents)
+3. **[0:10]** Assess scope: AZ или regional? DB или K8s?
+4. **[0:15]** If DB lost: initiate RDS PITR to new instance
+5. **[0:30]** If region lost: promote DR replica + Helm install in us-west-2
+6. **[1:00]** Update DNS to DR endpoint
+7. **[1:30]** Verify critical DAGs via airflow CLI
+8. **[2:00]** Unpause DAGs gradually
+9. **[3:00]** Full functionality
+10. **[4:00]** Post-incident review scheduled
+
+## Decision tree
+[detailed decision tree...]
+```
+
+Каждая команда должна иметь свой playbook, проверенный quarterly.
+
+---
+
+<KnowledgeCheck
+  question="В 03:00 utc выходит ошибка из CloudWatch: RDS Multi-AZ failover triggered, DB unavailable. К 03:02 webserver/scheduler логи показывают connection errors. К 03:10 RDS снова up на новой primary, но scheduler не recovery — все TI остаются stuck в queued. Что произошло и как fix?"
+  answer="Сценарий — classic Airflow gotcha с RDS failover. Проблема в том, что **scheduler не делает graceful reconnect** к PgBouncer. Что произошло: (1) RDS Multi-AZ failover ~60-120s downtime; (2) PgBouncer держал stale connections к старой primary — они dead; (3) После RDS up PgBouncer reconnect, но scheduler через свою SQLAlchemy session pool держит references на stale connections; (4) Scheduler пытается query — получает 'connection terminated', но не сразу invalidate pool — продолжает hitting dead connections. Result: TI stuck queued, executor не получает enqueue signals. Fix immediate (manual): (1) `kubectl rollout restart deployment/airflow-scheduler` — forces SQLAlchemy pool refresh; (2) Verify queued tasks process: `SELECT count(*) FROM task_instance WHERE state='queued' AND queued_dttm < now() - interval '5 min';` — должно упасть до 0; (3) Если worker не process tasks — restart их тоже. Fix долгосрочный — настроить SQLAlchemy pool: в airflow.cfg `[database] sql_alchemy_pool_recycle = 1800` (recycle connections каждые 30 min), `sql_alchemy_pool_pre_ping = True` (ping перед использованием connection — invalidate если dead). Также: PgBouncer `server_check_query = 'SELECT 1'` и `server_check_delay = 30` — он сам проверяет server health. Дополнительно: monitoring alert на 'queued TI > 50 для >5 min' с auto-recovery action restart scheduler. Quarterly chaos drill должен включать RDS failover — это правильный момент это поймать (test 2 в этом уроке)."
+/>

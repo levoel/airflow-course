@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "04-scheduler-internals/02-critical-section-ha",
+  "moduleId": "04-scheduler-internals",
+  "_meta": { "idPrefix": "airflow-m04-02" },
+  "questions": [
+    {
+      "id": "airflow-m04-02-q1",
+      "type": "multiple-choice",
+      "question": "Почему Airflow выбрал row-level locks в RDBMS вместо Raft/ZooKeeper для multi-scheduler HA?",
+      "options": [
+        { "id": "a", "text": "RDBMS быстрее consensus systems" },
+        { "id": "b", "text": "Operational simplicity — оператору не нужно поднимать отдельный consensus cluster, у него уже есть metadata PostgreSQL, и он переиспользуется для distributed coordination" },
+        { "id": "c", "text": "RDBMS более надёжна" },
+        { "id": "d", "text": "Это legacy решение, которое не успели переписать" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Из официальных docs Airflow 2.0 scheduler design: ключевое decision — operational simplicity. Оператор уже использует PostgreSQL для metadata, и переиспользование DB locks убирает необходимость в отдельном Raft (etcd) / Paxos (Cassandra) / ZK (HBase) кластере. Trade-off: throughput меньше чем у dedicated consensus, но deployment проще. Это сознательный выбор — Airflow targets ops teams без heavy distributed systems expertise.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-02-q2",
+      "type": "multiple-choice",
+      "question": "Что именно делает SELECT * FROM slot_pool FOR UPDATE NOWAIT?",
+      "options": [
+        { "id": "a", "text": "Просто читает данные без locking" },
+        { "id": "b", "text": "Acquires ROW EXCLUSIVE lock на каждую строку slot_pool в текущей транзакции. NOWAIT — если lock уже held другой транзакцией, сразу возвращает ошибку lock_not_available, не ждёт. Lock освобождается на COMMIT/ROLLBACK" },
+        { "id": "c", "text": "Table-level lock на всю таблицу" },
+        { "id": "d", "text": "Просто snapshot data, не реальный lock" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "FOR UPDATE — request ROW EXCLUSIVE lock на каждую row в результате. NOWAIT — критический modifier: вместо блокирующего wait сразу error. Это позволяет scheduler не блокироваться — если второй scheduler не может в critical section, он пропускает tick и пробует через 5s. PostgreSQL автоматически освобождает row locks по завершении транзакции (COMMIT/ROLLBACK). MariaDB <10.6 не поддерживает NOWAIT/SKIP LOCKED — поэтому multi-scheduler HA не работает.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m04-02-q3",
+      "type": "multiple-choice",
+      "question": "Sweet spot количества scheduler-ов для medium-large Airflow deployment (500-5k DAGs)?",
+      "options": [
+        { "id": "a", "text": "1 — больше не нужно" },
+        { "id": "b", "text": "3-4 scheduler-а — после этого diminishing returns из-за serialized critical section, DB становится bottleneck. Лучше тюнить Postgres (PgBouncer, indexes, VACUUM) чем добавлять schedulers" },
+        { "id": "c", "text": "10+ scheduler-ов для максимального throughput" },
+        { "id": "d", "text": "1 scheduler на каждые 10 DAGs" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical section serialized — только один scheduler одновременно делает enqueue в phase 3. Остальные phases (create DagRuns, schedule TI, housekeeping) могут параллелиться, но обычно не bottleneck. Sweet spot: 1 для dev, 2 для small (<500 DAGs), 3-4 для medium-large (500-5k), 5+ — diminishing returns. После 5 scheduler-ов prefer Postgres tuning (PgBouncer connection pooling, индексы на dag_run/task_instance, VACUUM/autovacuum tuning, partitioning логов) над добавлением scheduler.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-02-q4",
+      "type": "true-false",
+      "question": "MariaDB 10.5 поддерживает multi-scheduler HA в Airflow.",
+      "correctAnswer": false,
+      "explanation": "Нет. Multi-scheduler HA требует SKIP LOCKED и NOWAIT для row-level locks. PostgreSQL поддерживает их давно. MariaDB добавила SKIP LOCKED только в 10.6. MariaDB 10.5 и ниже не работает в multi-scheduler setup. MySQL 8.0+ работает. Из Airflow docs: 'It is highly recommended to use Postgres for production deployments. MySQL is supported but for Multi-Scheduler setups, MySQL 8.0+ is required.' Production golden path — PostgreSQL.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "lessonSlug": "03-operators-sensors/05-branching-patterns",
+  "moduleId": "03-operators-sensors",
+  "_meta": { "idPrefix": "airflow-m03-05" },
+  "questions": [
+    {
+      "id": "airflow-m03-05-q1",
+      "type": "multiple-choice",
+      "question": "DAG: `branch_env >> [prod_load, dev_load] >> notify`. branch_env возвращает 'prod_load' или 'dev_load'. На проде заметили: notify всегда state='skipped', хотя один из ветвей success. Что неправильно?",
+      "options": [
+        { "id": "a", "text": "notify не зарегистрирована" },
+        { "id": "b", "text": "Default trigger_rule=all_success. После branching один из upstream notify всегда skipped, что транзитивно делает notify skipped тоже. Fix: trigger_rule='none_failed_min_one_success' на notify" },
+        { "id": "c", "text": "branch_env неправильно возвращает значение" },
+        { "id": "d", "text": "Проблема в scheduler" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Классический pitfall branching. После @task.branch один из upstream merge-task всегда skipped (по определению branch — он скипает не выбранные ветки). Default trigger_rule='all_success' требует ВСЕ upstream = success, skipped считается не-success. Результат: notify silently skipped. UI показывает successful DagRun (skip не failed), но notification не уходит. Fix: trigger_rule='none_failed_min_one_success' (хотя бы один success + ни один failed) — правильный default для merge-точек после branching. Альтернативы: 'one_success', 'none_failed'.",
+      "studyHint": "Повторите урок 05 — раздел 'Trigger_rule — поведение task при разных upstream states'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-05-q2",
+      "type": "multiple-choice",
+      "question": "В чём принципиальная разница между @task.branch и @task.short_circuit?",
+      "options": [
+        { "id": "a", "text": "Никакой разницы" },
+        { "id": "b", "text": "@task.branch возвращает task_id или list[task_id] — выбирает какие ветки запустить, остальные ветки получают skip (для routing между вариантами). @task.short_circuit возвращает bool — True пропускает pipeline, False скипает ВСЕ downstream (для gating: holiday check, env check). Default ignore_downstream_trigger_rules=True у short_circuit" },
+        { "id": "c", "text": "@task.branch только в 3.x" },
+        { "id": "d", "text": "@task.short_circuit быстрее" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Они для разных задач. branch — routing: 'выбери одну из веток, остальные пропусти' (env routing, A/B test). short_circuit — gating: 'если условие False, пропусти весь pipeline' (holiday skip, feature flag). short_circuit с default ignore_downstream_trigger_rules=True пропагирует skip через ВСЕ downstream, обходя их trigger_rule. Это намеренно — gating должен надёжно отменить pipeline. С False downstream c trigger_rule='all_done' могут неожиданно запуститься.",
+      "studyHint": "Повторите урок 05 — раздел 'ShortCircuit vs Branch'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-05-q3",
+      "type": "multiple-choice",
+      "question": "В @task.branch return должен быть:",
+      "options": [
+        { "id": "a", "text": "Объект task (не строка)" },
+        { "id": "b", "text": "Строка task_id или list[task_id] существующих downstream tasks. Если возвращаете callable вместо строки (`return weekday_load` без вызова), scheduler ищет task с task_id '<function ...>' — не находит, branch failed, downstream upstream_failed" },
+        { "id": "c", "text": "bool" },
+        { "id": "d", "text": "dict с метаданными" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Branch возвращает task_id как строку — Airflow ищет downstream tasks с этим id и пропускает остальных. `return 'weekday_load'` или `return ['task_a', 'task_b']` для нескольких. Возврат callable (`return weekday_load`) — типичная ошибка: scheduler ищет task с literal name '<function weekday_load>' и фейлится. Опечатка тоже опасна: 'weekday_loa' (без d) — не находит → branch failed. CI с `airflow dags test` поможет найти такие баги до production.",
+      "studyHint": "Повторите урок 05 — раздел 'Production gotchas'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-05-q4",
+      "type": "true-false",
+      "question": "AirflowSkipException, raised внутри обычного @task (не branch и не short_circuit), переводит task в state='skipped' — это легитимный pattern для conditional skip без отдельной branching task.",
+      "correctAnswer": true,
+      "explanation": "Да, AirflowSkipException — first-class механизм. Поднимается внутри execute() — task получает state='skipped', не 'failed'. Удобно когда условие skip зависит от runtime data (например, проверка размера batch перед load: `if len(batch) == 0: raise AirflowSkipException`). Преимущество над short_circuit: не нужна отдельная gating task, логика рядом с проверкой. Downstream tasks будут вести себя по их trigger_rule: default all_success → downstream skipped (тот же эффект, что short_circuit но локально). Если хотите чтобы downstream запустился несмотря на skip — поставьте trigger_rule='none_failed' или 'all_done' на downstream.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

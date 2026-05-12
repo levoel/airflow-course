@@ -1,0 +1,89 @@
+{
+  "moduleId": "05-executors",
+  "title": "Module 05 Exam — Executors deep dive",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m05-exam",
+    "description": "6-question integrated exam for Module 05 (Executors)"
+  },
+  "questions": [
+    {
+      "id": "airflow-m05-exam-q1",
+      "type": "multiple-choice",
+      "question": "LocalExecutor footprint на ноде с parallelism=32 — сколько Python процессов?",
+      "options": [
+        { "id": "a", "text": "32 — по одному per task" },
+        { "id": "b", "text": "~65: scheduler(1) + N worker процессов (32 forked, ~200 MB each) + N subprocess `airflow tasks run` (до 32, ~250 MB each). Plus DAG parser. Footprint ~14-16 GB RAM, плюс DB connections. Нужен PgBouncer на parallelism > 16" },
+        { "id": "c", "text": "Только 1 — все в одном процессе" },
+        { "id": "d", "text": "64 — потому что N×2" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Архитектура LocalExecutor: scheduler-процесс держит N forked worker-процессов (по parallelism). Каждый worker запускает subprocess.check_call(['airflow', 'tasks', 'run', ...]) — это второй уровень процессов. Total на parallelism=32: scheduler(1) + workers(32) + subprocesses(до 32) = ~65 процессов. RAM ~450 MB на пару worker+subprocess × 32 = ~14 GB чисто на LocalExecutor footprint. Поэтому на 16 GB ноде parallelism > 24-32 — рискованно.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-exam-q2",
+      "type": "multiple-choice",
+      "question": "Production Celery: 90% short + 10% long tasks. На single worker pool stuck queued копятся, другие workers idle. Главный fix?",
+      "options": [
+        { "id": "a", "text": "Add more workers" },
+        { "id": "b", "text": "`worker_prefetch_multiplier = 1` (default 4) — worker prefetched 64 messages (concurrency×4) недоступны другим workers; long task в slot блокирует prefetched batch. С =1 другие workers сразу подбирают tasks из broker" },
+        { "id": "c", "text": "Disable Celery" },
+        { "id": "d", "text": "Restart Postgres" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это classic prefetch starvation. Worker reserves `concurrency × prefetch_multiplier` messages у broker (unacked, помечены за этим worker-ом). Эти messages невидимы другим workers. Если long task занимает slot — prefetched short tasks ждут локально, broker имеет messages но они уже распределены. `worker_prefetch_multiplier=1` — worker берёт только concurrency-сколько, остальные available другим workers. Также — separate queues для long tasks или Multiple Executors (long → K8s).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-exam-q3",
+      "type": "multiple-choice",
+      "question": "KubernetesExecutor watcher thread — что это и где живёт?",
+      "options": [
+        { "id": "a", "text": "Sidecar container в каждом worker pod" },
+        { "id": "b", "text": "multiprocessing.Process внутри scheduler-процесса; subscribed на K8s API events (watch=true&labelSelector=airflow-worker=<job_id>); парсит pod phase events (Pending/Running/Succeeded/Failed) и обновляет TI state в metadata DB через result_queue" },
+        { "id": "c", "text": "Отдельный K8s Job" },
+        { "id": "d", "text": "Celery task" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "KubernetesJobWatcher — multiprocessing.Process (для isolation), subscribed на /api/v1/namespaces/{ns}/pods?watch=true с label selector airflow-worker=<scheduler_job_id>. Получает streaming JSON events (ADDED, MODIFIED, DELETED) с pod status. Парсит phase, кладёт (ti_key, state) в Queue, scheduler читает и UPDATE task_instance. resource_version для consistent watch (re-subscribe на disconnect). Если watcher умер — TI стук running, safety net — scheduler_zombie_task_threshold (5min) reset.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-exam-q4",
+      "type": "multiple-choice",
+      "question": "K8s cold start 25s, task 5s. Лучший подход на 2.10+?",
+      "options": [
+        { "id": "a", "text": "Pre-pull image и smaller pods" },
+        { "id": "b", "text": "Multiple Executors (AIP-61): `executor=CeleryExecutor,KubernetesExecutor`, default Celery. Short tasks через Celery (1.5s startup, low overhead). Heavy/GPU — `@task(executor='KubernetesExecutor')`. Гораздо эффективнее cold start optimization для коротких tasks" },
+        { "id": "c", "text": "Использовать только LocalExecutor" },
+        { "id": "d", "text": "Не использовать airflow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cold start 25s + work 5s = 83% overhead. Оптимизация cold start (DaemonSet pre-pull, slim image, IfNotPresent) сводит до 5-10s — всё равно 50%+ overhead на короткие tasks. На 2.10+ — AIP-61 cleanest решение: short→Celery (1.5s startup), heavy/GPU/isolation→K8s. На 2.3-2.9 — CeleryKubernetesExecutor (hybrid) с `queue='kubernetes'` routing. Не использовать K8s для всего — wasteful на коротких.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m05-exam-q5",
+      "type": "multiple-choice",
+      "question": "`executor_config={\"pod_override\": V1Pod(...)}` — что делает scheduler с этим параметром?",
+      "options": [
+        { "id": "a", "text": "Игнорирует — это для documentation" },
+        { "id": "b", "text": "Берёт pod_template_file как base, делает deep merge с pod_override (resources, image, node_selector, env, tolerations override base), POST resulting manifest в K8s API. Per-task customization без separate template files" },
+        { "id": "c", "text": "Создаёт отдельный K8s Job" },
+        { "id": "d", "text": "Только для logging" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "scheduler reads executor_config из serialized DAG. pod_override — kubernetes.client.V1Pod object с partial spec. Deep merge: pod_template_file (base) overlaid by pod_override (specific fields). Common overrides: resources (GPU, memory), image (custom for ML/dbt), node_selector + tolerations (target специфичные nodes), env (per-task secrets), volumes. POST merged manifest в K8s API. Это позволяет одной task запуститься с 32GB memory + GPU, другой — с default 1GB, в одном DAG.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-exam-q6",
+      "type": "true-false",
+      "question": "В Airflow 2.10 (AIP-61) можно использовать executor aliases, например `executor = CeleryExecutor:fast,CeleryExecutor:slow,KubernetesExecutor` — два инстанса Celery с разными configs.",
+      "correctAnswer": true,
+      "explanation": "AIP-61 поддерживает aliases через `Class:alias` syntax в [core] executor. Два экземпляра одного class с разными configs (через env vars или separate sections). Use cases: (1) два Celery с разными brokers — fast_celery (Redis, lossy OK) и critical_celery (RabbitMQ, durable); (2) два K8s с разными namespaces (team isolation, separate RBAC, separate pod_template); (3) migration — старый Celery cluster + новый Celery cluster одновременно. В DAG: `@task(executor='fast_celery')`. Greater flexibility чем hybrid CeleryKubernetes (фикс 2 executors).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

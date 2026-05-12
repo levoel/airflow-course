@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "06-xcom-data-passing/02-xcom-default-backend",
+  "moduleId": "06-xcom-data-passing",
+  "_meta": { "idPrefix": "airflow-m06-02" },
+  "questions": [
+    {
+      "id": "airflow-m06-02-q1",
+      "type": "multiple-choice",
+      "question": "Где физически хранится XCom value в Airflow 2.x с default backend?",
+      "options": [
+        { "id": "a", "text": "В Redis кэше" },
+        { "id": "b", "text": "В таблице `xcom` metadata DB, колонка `value` типа bytea/mediumblob, по PK (dag_run_id, task_id, map_index, key)" },
+        { "id": "c", "text": "В файловой системе worker-а" },
+        { "id": "d", "text": "В executor queue" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "XCom хранится в metadata DB в таблице `xcom` с PK (dag_run_id, task_id, map_index, key) — означает один XCom per (TI, key). Колонка `value` — bytea в PostgreSQL (до 1GB technically), mediumblob в MySQL (до 16MB). Worker делает INSERT при push, downstream worker — SELECT при pull. Это создаёт DB load proportional XCom count и size, поэтому есть soft limit ~48KB на value.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m06-02-q2",
+      "type": "multiple-choice",
+      "question": "Почему рекомендуется лимит ~48KB на XCom value, если PostgreSQL bytea допускает до 1GB?",
+      "options": [
+        { "id": "a", "text": "Hard limit в schema" },
+        { "id": "b", "text": "Soft practical threshold: MySQL row size ~64KB, DB performance на больших bytea (ORM hydration, replication lag), UI rendering, logging — всё деградирует при > 48KB" },
+        { "id": "c", "text": "Bug Airflow" },
+        { "id": "d", "text": "Лимит RabbitMQ" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "48KB — soft threshold из нескольких факторов: (1) MySQL row size ~64KB — XCom 48KB + metadata fits, иначе TOAST/overflow; (2) DB perf: SELECT с большими bytea медленно через ORM, scheduler делает много XCom queries; (3) Network: worker hydrates row в memory при pull; (4) UI: webserver показывает blob в task details — большие ломают rendering; (5) Logging: Airflow логирует XCom value (truncated). Production rule: < 1KB OK, > 1MB обязательно Custom Backend.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-02-q3",
+      "type": "multiple-choice",
+      "question": "Какой serializer используется по default в Airflow 2.x для XCom? Какой security risk у альтернативы?",
+      "options": [
+        { "id": "a", "text": "Pickle (default), без рисков" },
+        { "id": "b", "text": "JSON через XComEncoder из airflow.serialization.serde — безопасный, но ограниченный поддерживаемыми типами. Pickle (legacy, через enable_xcom_pickling=True) — RCE через deserialization attack, нельзя в multi-tenant" },
+        { "id": "c", "text": "Protocol Buffers" },
+        { "id": "d", "text": "MessagePack" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default — JSON через XComEncoder. Поддерживает primitives + dict/list + datetime/Decimal/UUID + классы с __serialize__. НЕ поддерживает: pandas, numpy, arbitrary objects. Pickle alternative через `enable_xcom_pickling=True` — поддерживает всё, но (1) deserialization attack (pickle.loads на untrusted bytes → RCE через __reduce__), (2) version coupling (Python upgrade ломает blobs). Никогда не включайте pickle в production с user DAG-ами. Для custom типов — Custom XCom Backend с явным контрактом.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-02-q4",
+      "type": "true-false",
+      "question": "По default все PythonOperator-ы (и @task) пушат return value как XCom 'return_value', что часто приводит к раздутой xcom table — это можно отключить через `do_xcom_push=False` для tasks где return не используется downstream.",
+      "correctAnswer": true,
+      "explanation": "Да, `do_xcom_push=True` — default для PythonOperator и _PythonDecoratedOperator. Каждый return автоматически идёт в XCom. Для 10k DAG-ов с 10 tasks по 1KB return это 100MB в xcom table per run, через год >1TB. Mitigation: `do_xcom_push=False` для tasks без data flow, `[core] xcom_cleanup_on_dagrun_delete=True` (default — XCom удаляется при cleanup DagRun), периодический `DELETE FROM xcom WHERE timestamp < now() - interval '90 days'`. Раздутая xcom table — самая частая причина медленных XCom queries в production.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

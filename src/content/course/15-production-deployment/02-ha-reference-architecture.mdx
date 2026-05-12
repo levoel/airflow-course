@@ -1,0 +1,264 @@
+---
+title: "HA reference architecture для Airflow 2.10/2.11 LTS"
+description: "Полная reference-схема HA-deployment: LB, webserver pool, multi-scheduler, standalone DAG processor, triggerer, PgBouncer, RDS Multi-AZ, Redis cluster"
+order: 2
+difficulty: "advanced"
+estimatedTime: 30
+topics: ["HA", "Reference Architecture", "Production", "Multi-Scheduler", "PgBouncer", "Triggerer"]
+---
+
+# HA reference architecture для Airflow 2.10/2.11 LTS
+
+Production-grade Airflow 2.10/2.11 — это не один контейнер, а ~12-15 рабочих процессов, распределённых по 5-7 уровням инфраструктуры. Этот урок — полная reference-архитектура, которую вы можете взять как чертёж и адаптировать под свой scale: от **small** (50 DAGs) до **large** (5000+ DAGs).
+
+В Airflow 2.x четыре главных компонента имеют HA-семантику: scheduler (HA через row-level locks в slot_pool — модуль 04), triggerer (HA через task_instance.next_method assignment), webserver (stateless — масштабируется горизонтально), DAG processor (опционально standalone в 2.x, mandatory в 3.x — AIP-66). Метаданные живут в **одной** PostgreSQL — она и есть основная точка отказа, потому её защищаем через Multi-AZ и read-only replica.
+
+---
+
+## Полная reference-схема
+
+<DiagramContainer title="Airflow 2.10/2.11 HA — production reference" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="External clients"
+        tooltip="Браузеры пользователей, REST-API клиенты, OpenLineage emitters, ChatOps боты. Идут через корпоративный VPN или Cloudflare Access (zero-trust). HTTPS обязателен."
+      >
+        users / API / OL emitters
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="HTTPS 443 (TLS 1.3)" />
+    <FlowRow>
+      <DataBox
+        label="Load Balancer"
+        tooltip="ALB (AWS) / NLB / GCP HTTPS LB / ingress-nginx. Sticky sessions НЕ нужны для Airflow 2.x — webserver stateless (state в DB). Health check: GET /health → 200 OK. Idle timeout ≥ 600s для long-polling REST API."
+      >
+        ALB / nginx-ingress (LB + TLS termination)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="HTTP 8080 (internal mTLS)" />
+    <FlowRow>
+      <DataBox
+        label="Webserver pool"
+        tooltip="Flask + gunicorn (4 sync workers по умолчанию). 2-3 replicas в production. Каждый webserver: 1-2 vCPU, 2 GB RAM. Читает serialized_dag из DB — НЕ требует доступа к dags/ папке. Auth: FAB (Flask-AppBuilder) + LDAP/OIDC."
+      >
+        Webserver-1 / Webserver-2 / Webserver-3
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="SQL queries (heavy reads)" />
+    <FlowRow>
+      <DataBox
+        label="PgBouncer pool (transaction mode)"
+        tooltip="Mandatory для production. Без него каждый scheduler tick открывает 5-10 connections × N schedulers × N webservers — RDS быстро exhausted. Transaction mode (НЕ session) — connection возвращается в pool после COMMIT. pool_mode=transaction, default_pool_size=50, max_client_conn=500."
+      >
+        PgBouncer (pool 50, max_client 500)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="real PG connections" />
+    <FlowRow>
+      <DataBox
+        label="RDS PostgreSQL Multi-AZ"
+        tooltip="Primary в AZ-1, standby в AZ-2 с synchronous replication. Автоматический failover ~60-120s. PostgreSQL 14+ (для performance), 15/16 рекомендуется. Instance class: db.m6i.xlarge для medium, db.r6i.2xlarge для large. gp3 storage с baseline 12000 IOPS."
+      >
+        RDS PostgreSQL 15 (Multi-AZ, gp3)
+      </DataBox>
+      <DataBox
+        label="Read replica"
+        tooltip="Опциональная read-only replica для metabase/superset dashboards, analytics, backup. Использовать через отдельный read-only pool в PgBouncer. НЕ направлять scheduler/webserver сюда — они требуют read-after-write consistency."
+      >
+        RDS read replica (analytics)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="up" label="critical-section locks" />
+    <FlowRow>
+      <DataBox
+        label="Scheduler-1"
+        tooltip="Первый scheduler: 2-4 vCPU, 4-8 GB RAM. Делает scheduling phase 1-3 (модуль 04). В critical section конкурирует со Scheduler-2 через SELECT FOR UPDATE NOWAIT на slot_pool. Latest_heartbeat в job table — каждые 5s."
+      >
+        Scheduler-1 (HA via row-locks)
+      </DataBox>
+      <DataBox
+        label="Scheduler-2"
+        tooltip="Второй scheduler в другой AZ. Identical config. При смерти Scheduler-1 через 30s (scheduler_health_check_threshold) делает adopt_or_reset_orphaned_tasks — забирает осиротевшие TI."
+      >
+        Scheduler-2
+      </DataBox>
+      <DataBox
+        label="Scheduler-3 (optional)"
+        tooltip="Третий scheduler для large deployments (>500 DAGs). Помогает только в phases 1-2 (создание DagRun, scheduling TI), phase 3 (critical section) serialized. После 3-4 schedulers diminishing returns — bottleneck в DB."
+      >
+        Scheduler-3 (medium-large)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG parsing (offload)" />
+    <FlowRow>
+      <DataBox
+        label="DAG Processor"
+        tooltip="Standalone DAG Processor (опционально в 2.x, mandatory в 3.x). Парсит .py-файлы из dags/, пишет serialized_dag в DB. Отделение от scheduler улучшает latency main loop. CLI: airflow dag-processor. Set [scheduler] standalone_dag_processor=True."
+      >
+        DAG Processor-1 (standalone)
+      </DataBox>
+      <DataBox
+        label="DAG Processor-2"
+        tooltip="Второй DAG processor для large fleet (>1000 DAG-файлов). parsing_processes=4 каждый. Делит работу между process-ами через file_path_to_parsing claim в DB. Heavy imports (tensorflow, pandas) изолированы здесь — scheduler чище."
+      >
+        DAG Processor-2 (large fleet)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="async triggers" />
+    <FlowRow>
+      <DataBox
+        label="Triggerer-1"
+        tooltip="asyncio event loop для deferrable operators (модуль 09). 1 triggerer обслуживает 100-1000 deferrable tasks одновременно — больше чем worker pool за счёт async. HA: trigger.triggerer_id assignment, при смерти reassigned через scheduler."
+      >
+        Triggerer-1 (asyncio)
+      </DataBox>
+      <DataBox
+        label="Triggerer-2"
+        tooltip="Второй triggerer для HA. Если runs >1000 deferrable concurrent — нужен horizontal scale. Каждый triggerer: 1 vCPU, 2 GB RAM. CLI: airflow triggerer. Heartbeat каждые 5s."
+      >
+        Triggerer-2 (HA)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="task enqueue (Redis or K8s API)" />
+    <FlowRow>
+      <DataBox
+        label="Workers (Celery)"
+        tooltip="CeleryExecutor: pool из N worker-ов (статичный или autoscaled через KEDA). Каждый worker: airflow celery worker, concurrency=16. Слушает Redis queues. Подходит для small-medium tasks (<10 min)."
+      >
+        Celery workers (N replicas, KEDA autoscale)
+      </DataBox>
+      <DataBox
+        label="K8s pods (KubernetesExecutor)"
+        tooltip="KubernetesExecutor: каждый task запускается в отдельном pod. Подходит для heavy/long-running tasks (Spark submit, ML training). С Multiple Executors (AIP-61, 2.10+) можно использовать ОБА в одном DAG: light tasks на Celery, heavy на K8s."
+      >
+        K8s pods (per-task isolation)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="messaging" />
+    <FlowRow>
+      <DataBox
+        label="Redis (Celery broker)"
+        tooltip="Redis 7+ для CeleryExecutor. ElastiCache Redis cluster (3 nodes) с automatic failover. Tasks queue: default, k8s, gpu, etc. Visibility timeout = max task duration + buffer. Persistence: AOF every-second."
+      >
+        Redis cluster (Celery broker)
+      </DataBox>
+      <DataBox
+        label="Redis (Celery result backend)"
+        tooltip="Опционально отдельный Redis для result backend (или тот же). Хранит task results на ~1-7 days. Большинство production deployments НЕ используют result backend — read results напрямую из task_instance.state в DB."
+      >
+        Redis result backend (optional)
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Sizing per deployment scale
+
+Конкретные числа для трёх типичных scale categories. Эти значения проверены на реальных deployments и могут служить starting point.
+
+| Параметр | Small (≤50 DAGs) | Medium (50-500) | Large (500-5000) |
+|---|---|---|---|
+| Webservers | 2 | 2-3 | 3-4 |
+| Schedulers | 1 | 2 | 3-4 |
+| DAG processors | 0 (in-scheduler) | 1 standalone | 2 standalone |
+| Triggerers | 1 | 2 | 2-3 |
+| Celery workers | 2-4 | 4-12 (autoscale) | 16-64 (autoscale) |
+| K8s executor concurrency | 16 | 64 | 256 |
+| PostgreSQL instance | db.t3.large | db.m6i.xlarge | db.r6i.2xlarge |
+| PgBouncer pool size | 25 | 50 | 100 |
+| Redis nodes | 1 | 3 (cluster) | 6 (cluster) |
+| Daily TI throughput | ~5k | ~50k | ~200k+ |
+
+<Callout type="warning">
+Самая частая ошибка sizing — масштабировать schedulers вверх до 10+ в надежде увеличить throughput. После 3-4 scheduler-ов critical section становится bottleneck (модуль 04). Если throughput низкий — сначала тюнинг PostgreSQL (PgBouncer, autovacuum, partitioning), потом scheduler-ов.
+</Callout>
+
+---
+
+## Multi-AZ deployment topology
+
+Распределение компонентов по zones для отказоустойчивости:
+
+```
+AZ-1 (us-east-1a)              AZ-2 (us-east-1b)              AZ-3 (us-east-1c)
+├── Webserver-1                 ├── Webserver-2                 ├── Webserver-3 (optional)
+├── Scheduler-1                 ├── Scheduler-2                 ├── DAG Processor-2 (optional)
+├── DAG Processor-1             ├── Triggerer-2                 ├── Celery worker pool C
+├── Triggerer-1                 ├── Celery worker pool B
+├── Celery worker pool A        ├── Redis replica 2
+├── PgBouncer-1                 ├── PgBouncer-2
+├── Redis primary               ├── RDS Postgres standby (sync)
+└── RDS Postgres primary        └── Redis replica 1
+```
+
+**Rule of thumb**: каждый critical component (scheduler, triggerer, webserver) должен иметь хотя бы одну replica в другой AZ. DAG processor можно держать в одной AZ — при его краткой недоступности DAGs продолжают работать на уже serialized state.
+
+---
+
+## Что именно даёт HA каждый компонент
+
+| Компонент | Тип HA | Failover time | Поведение при отказе |
+|---|---|---|---|
+| Scheduler | Active-Active (row locks) | ~30s (heartbeat threshold) | Второй scheduler adopt-ит orphan TI, новые TI ставятся другим scheduler |
+| Webserver | Stateless N+1 | <5s (LB health check) | Запросы маршрутизируются на живые replicas |
+| Triggerer | Active-Active (assignment) | ~30s | Trigger reassigned через `airflow triggerer recheck-triggers` |
+| DAG Processor | Single-active или Active-Active (file claim) | До 5 min | DAGs не reparsed, но scheduler работает на старом serialized_dag |
+| PostgreSQL | Primary + standby (Multi-AZ) | 60-120s | Кратковременное окно — все компоненты retry connection |
+| Redis | Cluster (primary + replicas) | ~10-30s | Celery tasks retry, в visibility_timeout не теряются |
+
+<Callout type="note">
+Webserver полностью stateless в 2.x — даже UI state (last selected DAG, theme) хранится в cookies или DB. Поэтому LB sticky sessions не нужны. Это упрощает rolling restart до простого `kubectl rollout restart deployment/airflow-webserver` без потери пользовательских сессий.
+</Callout>
+
+---
+
+## Network policies и subnet segmentation
+
+Production setup разделяет компоненты по subnets:
+
+| Subnet | Что внутри | Доступ |
+|---|---|---|
+| **public-subnet** | Load Balancer | Inbound 443 from 0.0.0.0/0 |
+| **app-subnet (private)** | Webservers, schedulers, DAG processor, triggerer | Outbound to db-subnet, redis-subnet, secrets backend |
+| **worker-subnet (private)** | Celery workers, K8s pods | Outbound to db-subnet, external data sources (S3, Snowflake) |
+| **db-subnet (private)** | RDS PostgreSQL, PgBouncer | Inbound only from app/worker subnets, port 5432 |
+| **redis-subnet (private)** | ElastiCache | Inbound only from app/worker subnets, port 6379 |
+
+Worker-subnet отделён, потому что workers выполняют user code — это самый уязвимый компонент. Если worker compromise — у него нет direct access к DB, только через app-subnet или через REST API.
+
+---
+
+## Production gotchas
+
+**Сloudflare/CDN перед webserver — анти-паттерн.** Airflow Web UI делает heavy WebSocket polling для realtime graph view. CDN добавляет latency и проявляется в зависании UI. Используйте plain ALB/NLB с TLS termination.
+
+**Не запускайте scheduler и webserver в одном Pod.** Они конкурируют за CPU и память. При spike нагрузки на UI webserver-у нужны ресурсы, но scheduler важнее — он определяет throughput всего кластера.
+
+**PgBouncer transaction mode ломает `SET LOCAL` и prepared statements.** Airflow поддерживает это с 2.7+ (SQLAlchemy hint), но если используете custom plugins с raw psycopg2 — проверьте. Альтернатива: session mode pool (но эффективность ниже).
+
+**Health check для scheduler — не просто process alive.** Используйте `airflow jobs check --job-type SchedulerJob --hostname $HOSTNAME --limit 5` — он смотрит на latest_heartbeat в job table. Просто `kill -0` показывает живой процесс, но не работающий scheduler.
+
+**Triggerer всегда нужен, даже если deferrable не используются.** В 2.6+ некоторые built-in sensors переписаны deferrable (DateTimeSensorAsync, TimeDeltaSensorAsync) — без triggerer они падают. Min 1 triggerer mandatory.
+
+---
+
+## Что мы рассмотрим дальше
+
+| Урок | О чём |
+|---|---|
+| 03 — Helm chart | Как описать всю эту топологию в values.yaml |
+| 04 — PostgreSQL tuning | Конкретные параметры shared_buffers, autovacuum, partitioning |
+| 05 — Managed offerings | Когда брать MWAA/Composer вместо self-hosted |
+| 06 — Upgrade procedure | Blue/green deploy без downtime |
+| 07 — Disaster recovery | Backup, Fernet key rotation, RTO/RPO |
+| 08 — Security hardening | Network policies, audit logs, TLS everywhere |
+
+---
+
+<KnowledgeCheck
+  question="В medium deployment (200 DAGs, 30k TI/day) команда добавляет 5-й scheduler в надежде ускорить scheduling. Throughput не растёт, латентность scheduling даже немного выросла. Что произошло и куда смотреть?"
+  answer="После 3-4 scheduler-ов добавление новых не помогает: phase 3 (enqueue TI) serialized через row-level lock на slot_pool (SELECT FOR UPDATE NOWAIT — модуль 04). Лишние scheduler-ы только конкурируют за lock и добавляют DB load на phases 1-2 (создание DagRun, scheduling). Латентность могла вырасти из-за увеличения contention на PostgreSQL: больше connections через PgBouncer, больше housekeeping queries (adopt_or_reset_orphaned_tasks каждые 5s × N scheduler), больше нагрузки на autovacuum task_instance. Куда смотреть: (1) pg_stat_statements — найти top queries по total_time; (2) pg_locks — есть ли scheduler-ы, ждущие на NOWAIT? (3) scheduler.scheduler_loop_duration metric — если растёт после добавления, точно contention; (4) PgBouncer stats — pool wait_time. Правильное решение: вернуться к 3 scheduler-ам, инвестировать в Postgres tuning (модуль 15.04) — work_mem, autovacuum_vacuum_scale_factor=0.05 на task_instance, pg_partman для log/xcom, composite index idx_ti_dag_run_task_map_index (2.7+), shared_buffers=25% RAM. После tuning один scheduler может обслужить throughput, который раньше требовал 3."
+/>

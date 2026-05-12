@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "08-datasets-assets/04-dataset-internals",
+  "moduleId": "08-datasets-assets",
+  "_meta": { "idPrefix": "airflow-m08-04" },
+  "questions": [
+    {
+      "id": "airflow-m08-04-q1",
+      "type": "multiple-choice",
+      "question": "Producer эмитил dataset_event 50 раз за 2 часа, consumer max_active_runs=1. Что в dataset_dag_run_queue?",
+      "options": [
+        { "id": "a", "text": "50 rows для consumer — по одной на каждый event" },
+        { "id": "b", "text": "1 row максимум — PRIMARY KEY (dataset_id, target_dag_id) делает таблицу idempotent: повторные events для одной пары не дублируются" },
+        { "id": "c", "text": "Зависит от order events" },
+        { "id": "d", "text": "0 — таблица очищается после каждого event" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "dataset_dag_run_queue имеет PRIMARY KEY (dataset_id, target_dag_id). INSERT с ON CONFLICT DO NOTHING — повторные events на одну пару dataset/consumer не дублируются. Это значит: 50 events для одного dataset создают максимум 1 row для consumer. Когда DagRun создан — DELETE FROM dataset_dag_run_queue WHERE target_dag_id=consumer. Следующее накопление начинает с нуля. Design decision: dataset-triggered runs НЕ множатся пропорционально event count.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-04-q2",
+      "type": "multiple-choice",
+      "question": "В production видишь миллионы rows в dataset_event table. Какая стратегия cleanup?",
+      "options": [
+        { "id": "a", "text": "TRUNCATE dataset_event regularly" },
+        { "id": "b", "text": "airflow db clean --table dataset_event --clean-before-timestamp '30 days ago' + autovacuum tuning; для very-large opportunities: partition by timestamp с DROP PARTITION" },
+        { "id": "c", "text": "DROP TABLE и пересоздать" },
+        { "id": "d", "text": "Никак — Airflow auto-cleans" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "dataset_event append-only, никаких auto-cleanup. Production retention: airflow db clean CLI с retention period (e.g. 30 days). Для high-emission instances: (1) Tune autovacuum (scale_factor=0.05 vs default 0.2); (2) PostgreSQL native partitioning by timestamp range, DROP PARTITION для cleanup быстрее DELETE; (3) Архивирование в S3 перед удалением для compliance. TRUNCATE / DROP сломает FK references и lineage history.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-04-q3",
+      "type": "multiple-choice",
+      "question": "Какая роль dag_schedule_dataset_reference vs task_outlet_dataset_reference?",
+      "options": [
+        { "id": "a", "text": "Дубликат друг друга для backwards compat" },
+        { "id": "b", "text": "dag_schedule_* — subscriptions (consumers): какие DAG ждут какие datasets; task_outlet_* — declarations (producers): какие tasks эмитят какие datasets. Вместе строят lineage graph между DAG-ами" },
+        { "id": "c", "text": "Первая для 2.4, вторая для 2.9+" },
+        { "id": "d", "text": "Разделены по типу storage (S3 vs Postgres)" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Две роли в lineage graph: dag_schedule_dataset_reference — consumer-side subscription (DAG depends on dataset for trigger). task_outlet_dataset_reference — producer-side declaration (task emits dataset). JOIN-ing эти таблицы через dataset_id даёт полный lineage: какой DAG/task пишет в dataset, какие DAG читают. UI Datasets view использует именно этот JOIN. Это симметричная декомпозиция producer/consumer model.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-04-q4",
+      "type": "true-false",
+      "question": "Consumer DAG paused (is_paused=TRUE). Producer продолжает эмитить dataset events. dataset_dag_run_queue для этого consumer-а будет расти неограниченно пока DAG paused.",
+      "correctAnswer": false,
+      "explanation": "Queue НЕ растёт неограниченно — PRIMARY KEY (dataset_id, target_dag_id) делает таблицу idempotent. Один row на пару, дальнейшие emissions ON CONFLICT DO NOTHING. Если consumer paused и producer эмитит 1000 раз — queue имеет максимум 1 row на каждый отдельный dataset, на который подписан consumer. После unpause scheduler создаст один DagRun (не 1000). Это design protection от 'volcano effect' при long-paused consumers. Implications для backfill: размышляйте о semantics — pending events не collapsуются в multiple historical runs.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

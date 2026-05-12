@@ -1,0 +1,514 @@
+---
+title: "Grafana dashboards: top 12 production charts + alerting"
+description: "Production Grafana templates для Airflow OTel metrics, alerting playbook, SLO definitions"
+order: 7
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Grafana", "Dashboards", "Alerting", "SLO", "PromQL", "Production"]
+---
+
+# Grafana dashboards: top 12 production charts + alerting
+
+Метрики без дашбордов — это data в vault. Дашборды без alerting — данные, которые никто не смотрит. Этот завершающий урок модуля собирает observability stack в **production-ready Grafana** для Airflow: топ 12 essential charts, alerting playbook, SLO definitions.
+
+Ниже — концентрированный production manual. Используйте его как baseline для собственных dashboards. Все queries проверены на Airflow 2.10+ с OTel exporter в Prometheus naming convention.
+
+---
+
+## Архитектура dashboard
+
+<DiagramContainer title="Grafana stack для Airflow" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Airflow components"
+        tooltip="Scheduler, Triggerer, Workers, Webserver. Каждый эмитит OTel metrics. Resource attributes: cluster, env, version."
+      >
+        scheduler, triggerer, workers
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="OTLP" />
+    <FlowRow>
+      <DataBox
+        label="OTel Collector + Prometheus exporter"
+        tooltip="Collector exposes /metrics endpoint на :8889. Prometheus scrape каждые 15s. Метрики сохранены как airflow_<name> с labels."
+      >
+        Collector → Prometheus
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Grafana"
+        tooltip="Datasources: Prometheus (metrics), Tempo (traces — drill-down), Loki (logs). Dashboards с per-cluster variable."
+      >
+        4 dashboards
+      </DataBox>
+      <DataBox
+        label="Alertmanager"
+        tooltip="Routes alerts: critical → PagerDuty (on-call), warning → Slack #data-platform-alerts. Inhibition rules для cascading failures."
+      >
+        PagerDuty / Slack
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Рекомендуемая структура: 4 dashboards
+
+1. **Airflow Overview** — health checkpoints, ключевые SLO (для CTO / management view)
+2. **Scheduler Internals** — deep dive в scheduler health
+3. **DAG Performance** — per-DAG runtime, success rate, SLA
+4. **Infrastructure** — DB, workers, broker (Celery/k8s)
+
+В каждом — variable `$cluster` для multi-cluster setups.
+
+---
+
+## Top 12 charts
+
+### Chart 1: Scheduler Loop Duration p95
+
+```promql
+histogram_quantile(0.95,
+  sum(rate(airflow_scheduler_scheduler_loop_duration_bucket{cluster="$cluster"}[5m]))
+  by (le, hostname)
+)
+```
+
+Тип: time series, per hostname (для HA scheduler).
+Threshold: warning > 10s, critical > 30s.
+Что показывает: главный показатель scheduler health. Норма 1-5s. Spike означает DB/parsing bottleneck.
+
+### Chart 2: Active DagRuns by State
+
+```promql
+sum(airflow_dagrun_running{cluster="$cluster"}) by (state)
+```
+
+Тип: stacked area chart.
+Что показывает: live count DagRuns в queued, running, success_today, failed_today.
+
+### Chart 3: TaskInstance Throughput
+
+```promql
+# Started rate
+sum(rate(airflow_ti_start_total{cluster="$cluster"}[5m]))
+
+# Finished by state
+sum(rate(airflow_ti_finish_total{cluster="$cluster"}[5m])) by (state)
+```
+
+Тип: time series, two queries overlay.
+Что показывает: throughput системы. Если started >> finished — растущий backlog. Если finished{state=failed} спайк — alert.
+
+### Chart 4: Executor Open Slots
+
+```promql
+sum(airflow_executor_open_slots{cluster="$cluster"}) by (executor)
+```
+
+Тип: time series.
+Что показывает: свободные slots executor. Если 0 длительно — bottleneck, нужны больше workers / увеличить parallelism.
+
+### Chart 5: Queued Tasks Backlog
+
+```promql
+sum(airflow_executor_queued_tasks{cluster="$cluster"})
+```
+
+Тип: time series with threshold lines (yellow 50, red 200).
+Что показывает: TI ждут executor. Spike при больших backfills, или signal что workers slow.
+
+### Chart 6: DAG Parse Time
+
+```promql
+airflow_dag_processing_total_parse_time{cluster="$cluster"}
+```
+
+Тип: gauge.
+Что показывает: время на парсинг всех DAG файлов. Если растёт unbounded — большой DAG count или heavy imports в top-level.
+
+### Chart 7: Triggerer Running Triggers
+
+```promql
+sum(airflow_triggerer_running_triggers{cluster="$cluster"})
+```
+
+Тип: gauge.
+Что показывает: число активных deferred triggers. Capacity planning — если близко к `default_capacity` (1000), нужны больше triggerer pods.
+
+### Chart 8: Pool Occupancy
+
+```promql
+sum(airflow_pool_used_slots{cluster="$cluster"}) by (pool) /
+sum(airflow_pool_total_slots{cluster="$cluster"}) by (pool)
+```
+
+Тип: heatmap or bar gauge.
+Что показывает: % использования pools. Pool на 100% = starvation для других tasks.
+
+### Chart 9: DagRun Duration p95 (per DAG)
+
+```promql
+histogram_quantile(0.95,
+  sum(rate(airflow_dagrun_duration_success_bucket{cluster="$cluster"}[1h]))
+  by (le, dag_id)
+)
+```
+
+Тип: time series with top N dag_id.
+Что показывает: какие DAGs стали медленнее. Trend up — performance regression.
+
+### Chart 10: Failed DAGs Heatmap
+
+```promql
+sum(increase(airflow_dagrun_failed_total{cluster="$cluster"}[24h])) by (dag_id)
+```
+
+Тип: heatmap (dag_id × hour of day).
+Что показывает: pattern failures. Если все 3 AM — pipeline cron timing issue.
+
+### Chart 11: DB Connection Pool
+
+```promql
+airflow_db_pool_size{cluster="$cluster"}
+- airflow_db_pool_checked_out{cluster="$cluster"}
+```
+
+Тип: time series.
+Что показывает: свободные DB connections. Если 0 длительно — sql_alchemy_pool_size слишком мал, scheduler/webserver задыхаются.
+
+### Chart 12: OL Events Emitted vs Failed
+
+```promql
+rate(airflow_openlineage_events_emitted_total{cluster="$cluster"}[5m])
+rate(airflow_openlineage_events_failed_total{cluster="$cluster"}[5m])
+```
+
+Тип: time series.
+Что показывает: health OpenLineage pipeline. Если failed > 1% — Marquez problems → lineage data loss.
+
+---
+
+## Полный JSON template (фрагмент)
+
+```json
+{
+  "annotations": {
+    "list": [
+      {
+        "datasource": "Prometheus",
+        "enable": true,
+        "expr": "changes(airflow_scheduler_scheduler_loop_duration_count[1m]) == 0",
+        "iconColor": "red",
+        "name": "Scheduler Stuck",
+        "step": "1m",
+        "tagKeys": "hostname"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(airflow_scheduler_scheduler_loop_duration_count, cluster)",
+        "refresh": 1
+      },
+      {
+        "name": "dag_id",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(airflow_ti_start_total{cluster=\"$cluster\"}, dag_id)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Scheduler Loop Duration p95",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(airflow_scheduler_scheduler_loop_duration_bucket{cluster=\"$cluster\"}[5m])) by (le, hostname))",
+          "legendFormat": "{{hostname}} p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 10},
+              {"color": "red", "value": 30}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+Полный template обычно ~50+ panels. Используйте этот фрагмент как стартовую точку, дорабатывайте под свою специфику.
+
+---
+
+## Alerting playbook
+
+Каждый alert должен иметь: **expression**, **severity**, **runbook** (что делать при срабатывании).
+
+### Alert 1: Scheduler Down
+
+```yaml
+- alert: AirflowSchedulerDown
+  expr: |
+    count(airflow_scheduler_scheduler_loop_duration_count{cluster="$cluster"}) == 0
+    OR
+    rate(airflow_scheduler_scheduler_loop_duration_count{cluster="$cluster"}[5m]) == 0
+  for: 2m
+  labels:
+    severity: critical
+    component: scheduler
+  annotations:
+    summary: "Scheduler isn't producing metrics for 2 minutes"
+    runbook: |
+      1. Check `kubectl get pods -n airflow -l app=scheduler` — pod restart loops?
+      2. Check scheduler logs: `kubectl logs deploy/airflow-scheduler --tail=200`
+      3. Check DB connectivity: `kubectl exec deploy/airflow-scheduler -- airflow db check`
+      4. If pod OOM: increase memory request/limit
+      5. If DB connection lost: check sql_alchemy_pool_size + Postgres health
+```
+
+### Alert 2: Scheduler Loop Slow
+
+```yaml
+- alert: AirflowSchedulerLoopSlow
+  expr: |
+    histogram_quantile(0.95,
+      sum(rate(airflow_scheduler_scheduler_loop_duration_bucket{cluster="$cluster"}[5m]))
+      by (le)
+    ) > 30
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Scheduler p95 loop duration > 30s (norm <5s)"
+    runbook: |
+      1. Check Tempo traces: query `{service.name="airflow-scheduler" && duration > 20s}`
+      2. Common causes:
+         - DB query slow (check pg_stat_statements)
+         - Critical section contention (multi-scheduler stuck)
+         - Excessive DAG parsing time → separate dag-processor
+         - Too many DAGs (>5k) per scheduler
+```
+
+### Alert 3: Queued Tasks Backlog
+
+```yaml
+- alert: AirflowQueuedBacklog
+  expr: sum(airflow_executor_queued_tasks{cluster="$cluster"}) > 500
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Queued tasks > 500 для 15+ минут"
+    runbook: |
+      1. Check executor.open_slots — если 0 длительно, scale up workers
+      2. Check pool occupancy — может pool exhausted (gpu_pool full)
+      3. Check broker health (Redis/Celery, k8s API health)
+      4. Smell test — есть ли backfill running?
+```
+
+### Alert 4: Triggerer Stuck
+
+```yaml
+- alert: AirflowTriggererStuck
+  expr: |
+    rate(airflow_triggerer_events_per_second{cluster="$cluster"}[10m]) == 0
+    AND
+    airflow_triggerer_running_triggers{cluster="$cluster"} > 0
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Triggerer не обрабатывает events за 5 минут"
+    runbook: |
+      1. Restart triggerer pod
+      2. Check triggerer logs для asyncio errors
+      3. Check trigger table в DB — есть ли stuck triggers с прошлым created_date
+```
+
+### Alert 5: High DAG Failure Rate
+
+```yaml
+- alert: AirflowDagFailureRate
+  expr: |
+    (sum(rate(airflow_dagrun_failed_total{cluster="$cluster"}[1h])) /
+     sum(rate(airflow_dagrun_total{cluster="$cluster"}[1h]))) > 0.1
+  for: 30m
+  labels:
+    severity: warning
+  annotations:
+    summary: ">10% DagRuns failing за последний час"
+    runbook: |
+      1. Identify failed DAGs:
+         topk(10, sum(rate(airflow_dagrun_failed_total[1h])) by (dag_id))
+      2. Check common errors в task logs
+      3. Возможен upstream system outage (Snowflake down, S3 throttling)
+```
+
+### Alert 6: Metadata DB Connection Saturated
+
+```yaml
+- alert: AirflowDBPoolSaturated
+  expr: |
+    (airflow_db_pool_checked_out{cluster="$cluster"} /
+     airflow_db_pool_size{cluster="$cluster"}) > 0.9
+  for: 10m
+  labels:
+    severity: warning
+  annotations:
+    summary: "DB pool > 90% usage"
+    runbook: |
+      1. Check long-running queries: SELECT pid, query_start, query FROM pg_stat_activity
+      2. If multiple Airflow components — increase sql_alchemy_pool_size
+      3. Consider PgBouncer для connection pooling
+```
+
+### Alert 7: OpenLineage Events Failing
+
+```yaml
+- alert: AirflowOLEventsFailing
+  expr: |
+    (rate(airflow_openlineage_events_failed_total{cluster="$cluster"}[10m]) /
+     rate(airflow_openlineage_events_emitted_total{cluster="$cluster"}[10m])) > 0.05
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: ">5% OL events fail для 15 минут"
+    runbook: |
+      1. Check Marquez health: curl http://marquez:5000/healthcheck
+      2. Check OL provider logs в worker pods
+      3. Common: Marquez DB exhausted disk, network policy blocks
+```
+
+### Alert 8: Long-running DAGRun (SLA-based)
+
+```yaml
+- alert: AirflowDagRunSLAViolation
+  expr: |
+    (time() - airflow_dagrun_start_date_timestamp{cluster="$cluster", state="running"}) > 7200
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "DAG {{ $labels.dag_id }} running > 2 hours"
+    runbook: |
+      1. Check DagRun in UI: $UI_URL/dags/{{ $labels.dag_id }}/grid
+      2. Identify slow task через traces
+      3. Decide: kill (clear) или wait
+```
+
+---
+
+## SLO definitions
+
+Service Level Objectives для Airflow platform:
+
+| SLO | Target | Measurement |
+|---|---|---|
+| **Scheduler availability** | 99.9% | `(1 - downtime_seconds / 30d) >= 0.999` |
+| **DagRun success rate** | 99% | `sum(success) / sum(total) >= 0.99` |
+| **Task latency p95** | < expected_p99 from history | `task_duration_p95 < baseline` |
+| **OL events delivery** | 99% | `events_emitted / (emitted + failed) >= 0.99` |
+| **Trigger response time** | < 10 минут от POST trigger до first TI start | `dagrun.start - dagrun.created < 600s` |
+
+Error budgets:
+
+- 0.1% downtime = ~43 minutes/month — это бюджет на planned maintenance, incidents.
+- Если бюджет «выгорает» — freeze deployments, focus на reliability.
+
+---
+
+## Production gotchas
+
+### 1. PromQL queries — `rate()` vs `irate()`
+
+`rate()` — average over time window — что нужно для dashboards. `irate()` — instant rate, для high-frequency metrics. Используйте `rate()` для большинства Airflow metrics.
+
+### 2. `sum()` без grouping label — теряет detail
+
+```promql
+# BAD — теряет hostname info
+sum(rate(airflow_ti_finish_total[5m]))
+
+# GOOD
+sum(rate(airflow_ti_finish_total[5m])) by (state, hostname)
+```
+
+### 3. Histogram bucket boundaries
+
+Default `_bucket` boundaries для scheduler_loop_duration: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, ...]. Для p95 calculation на range 1-30s достаточно. Если ваши scheduler tick 30-60s — нужно custom buckets через OTel SDK.
+
+### 4. `for: 0s` в alerts — false positives
+
+Без `for:` любая краткосрочная аномалия (10s spike) → alert. `for: 2m-10m` фильтрует transient noise.
+
+### 5. Alert fatigue
+
+Слишком много alerts → on-call ignores. **Discipline**:
+
+- Critical (page) = действие НУЖНО сейчас или production down
+- Warning (Slack) = посмотреть на следующем дежурстве
+- Info — Grafana annotation, no notification
+
+Если warning не actionable — удалите его.
+
+### 6. `cluster` label per metric
+
+Без cluster filter multi-cluster setup в Grafana показывает aggregated за все. Запутывает. Variable `$cluster` обязателен в templating.
+
+### 7. Annotations для deployments
+
+В Grafana добавьте annotation source: deploys из CI. Это поможет correlatе metric anomaly с deploy time.
+
+```json
+{
+  "annotations": {
+    "list": [
+      {
+        "datasource": "Prometheus",
+        "expr": "changes(deployment_version_info[1m]) > 0",
+        "name": "Deployments"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Что НЕ нужно мониторить
+
+- **Per-DAG count metrics** для всех 10k DAGs — high cardinality blow-up Prometheus.
+- **Per-task latency** для каждого task в каждом DAG — same issue.
+- **Sub-second metrics** в scheduler tick — noise.
+
+**Принцип:** мониторить агрегаты, drill-down через traces к specific run.
+
+---
+
+<KnowledgeCheck
+  question="Production Airflow получает на Slack `AirflowDagFailureRate > 10% за час`. On-call открывает Grafana. Какая последовательность диагностики через dashboards и traces — топ 5 шагов?"
+  answer="**Step 1: Identify scope (Overview dashboard).** Какие DAGs failing? PromQL: `topk(10, sum(rate(airflow_dagrun_failed_total[1h])) by (dag_id))`. Один DAG = isolated issue. Много DAGs = systemic (infra/upstream). **Step 2: Common ground (Infra dashboard).** Если много DAGs — проверить infra: (a) `airflow_db_pool_checked_out` — DB saturated? (b) `airflow_scheduler_scheduler_loop_duration` — scheduler health? (c) Connection error rate (proxy logs Snowflake/S3). Если infra OK — переход к step 3. **Step 3: Task-level analysis.** Какие tasks failing внутри affected DAGs? `topk(10, sum(rate(airflow_ti_finish_total{state='failed'}[1h])) by (task_id, dag_id))`. Если все 'load_*' tasks failing — Snowflake outage. Если только 'fetch_api' — third-party API down. **Step 4: Drill to trace.** Take один failed run id → open Tempo trace → найти exception в span. Tempo TraceQL: `{dag_id="etl_orders" && status=error}` за affected period. Span attributes покажут error.type, error.message. **Step 5: Action based on root cause.** (a) Upstream service down → check status page (https://status.snowflake.com, AWS status), wait or escalate; (b) Internal bug new deploy → rollback DAG version через git revert; (c) Resource exhaustion (pool full) → scale or wait; (d) Network issue (DNS, firewall) → involve infra team. **После resolve:** clear failed TI через REST API (модуль 13/04 pattern), monitor recovery rate. **Post-mortem:** добавить alert на root cause source (если upstream — alert на `upstream_health`), update runbook для класса incident."
+/>

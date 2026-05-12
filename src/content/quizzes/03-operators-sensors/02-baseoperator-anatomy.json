@@ -1,0 +1,60 @@
+{
+  "lessonSlug": "03-operators-sensors/02-baseoperator-anatomy",
+  "moduleId": "03-operators-sensors",
+  "_meta": { "idPrefix": "airflow-m03-02" },
+  "questions": [
+    {
+      "id": "airflow-m03-02-q1",
+      "type": "multiple-choice",
+      "question": "Что делает атрибут `template_fields` на класс-наследнике BaseOperator?",
+      "options": [
+        { "id": "a", "text": "Перечисляет required параметры __init__" },
+        { "id": "b", "text": "Tuple имён атрибутов, которые перед execute() прогоняются через Jinja с DAG context (ds, ti, params и т.п.). На subclass нужно явно объявлять, наследование не подмешивается автоматически" },
+        { "id": "c", "text": "Только для отображения в UI Rendered Templates tab — runtime не использует" },
+        { "id": "d", "text": "Поля, которые сериализуются в serialized_dag" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`template_fields` — это tuple на уровне класса с именами атрибутов, которые scheduler прогоняет через Jinja между шагами 2 (render_templates) и 4 (pre_execute) lifecycle. Это позволяет писать `op_kwargs={'date': '{{ ds }}'}` и получить отрендеренное значение в execute(). На subclass нужно явно: `template_fields = (*Parent.template_fields, 'new_field')` — иначе newly added attribute не обработается Jinja и в UI Rendered Templates tab не появится.",
+      "studyHint": "Повторите урок 02 — раздел 'Template fields — Jinja-рендеринг атрибутов'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-02-q2",
+      "type": "multiple-choice",
+      "question": "Вы пишете custom SparkSubmitOperator, который запускает Spark application на удалённом cluster и ждёт его завершения. Какой метод обязательно реализовать кроме execute()?",
+      "options": [
+        { "id": "a", "text": "pre_execute() — там делать submit" },
+        { "id": "b", "text": "on_kill() — должен отправить cancel в Spark master по application_id; без него при execution_timeout / clear через UI Airflow считает task failed, но Spark application продолжает работать как orphan, занимая cluster resources" },
+        { "id": "c", "text": "post_execute() — для cleanup" },
+        { "id": "d", "text": "__del__() — Python garbage collection" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "on_kill() вызывается когда: (1) execution_timeout превышен — scheduler шлёт SIGTERM; (2) пользователь делает clear на running task; (3) worker pod evicted в K8s. Default on_kill — pass. Если ваш operator управляет внешним ресурсом (Spark job, K8s pod, BigQuery query), отсутствие on_kill означает resource leak — Airflow считает task failed, а внешний job продолжает работать. Контракт: idempotent, fast (worker даёт 60s до SIGKILL), не делать blocking I/O без timeout.",
+      "studyHint": "Повторите урок 02 — раздел 'on_kill — что вызывается при task timeout'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-02-q3",
+      "type": "multiple-choice",
+      "question": "Между шагами 4 (pre_execute), 5 (execute), 6 (post_execute) lifecycle BaseOperator — что делает Airflow с return value execute()?",
+      "options": [
+        { "id": "a", "text": "Только логирует" },
+        { "id": "b", "text": "Передаёт в post_execute(context, result), затем после post_execute пушит в XCom как 'return_value' если do_xcom_push=True (default). Это происходит до перевода TI в state SUCCESS" },
+        { "id": "c", "text": "Сразу шлёт downstream tasks" },
+        { "id": "d", "text": "Сохраняет в файл на worker" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lifecycle: execute() возвращает значение → post_execute(context, result) получает его → xcom_push('return_value', result) — INSERT в xcom table → TI state = SUCCESS commit. Только после COMMIT downstream могут стартовать. Если do_xcom_push=False — этап pushXCom пропускается (полезно для больших результатов чтобы не засорять metadata DB). post_execute может raise — task будет failed несмотря на successful execute().",
+      "studyHint": "Повторите урок 02 — раздел 'Полный lifecycle execute() — пошагово'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-02-q4",
+      "type": "true-false",
+      "question": "Mutable default argument в __init__ custom operator (`def __init__(self, items: list = []): ...`) — корректный pattern в Airflow, потому что Airflow создаёт новый instance operator на каждый DagRun.",
+      "correctAnswer": false,
+      "explanation": "Это **classic Python pitfall**, и в Airflow он особенно опасен. Default `[]` создаётся один раз при определении функции и шарится между всеми instances класса. На втором парсе DAG (через 30 секунд по default min_file_process_interval), если первый прогон что-то добавил в self.items, второй увидит это. Pattern: `def __init__(self, items: list | None = None):` и внутри `self.items = items or []`. Симптомы при ошибке — state накапливается между runs, появляются неожиданные значения, hard-to-debug bugs. Airflow создаёт operator instance каждый раз при DAG parse, но default argument шарен.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

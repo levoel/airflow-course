@@ -1,0 +1,89 @@
+{
+  "moduleId": "13-rest-api-cli",
+  "title": "Module 13 Exam — REST API и CLI",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m13-exam",
+    "description": "6-question integrated exam for Module 13"
+  },
+  "questions": [
+    {
+      "id": "airflow-m13-exam-q1",
+      "type": "multiple-choice",
+      "question": "REST API v1 в Airflow 2.10/2.11 — где он живёт архитектурно?",
+      "options": [
+        { "id": "a", "text": "Отдельный процесс api-server" },
+        { "id": "b", "text": "Внутри webserver (Flask + Gunicorn). Делит pool workers с UI, делит DB connection pool. Heavy API нагрузка влияет на UI latency. В 3.x появится отдельный API server (FastAPI)" },
+        { "id": "c", "text": "В scheduler" },
+        { "id": "d", "text": "Standalone Docker container" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В 2.x API v1 — это Flask blueprint внутри webserver. Это означает: рестарт webserver роняет API; UI и API делят gunicorn pool; sql_alchemy_pool_size должен покрывать оба. В 3.x появится отдельный API server на FastAPI (REST v2), что даст изоляцию resources.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m13-exam-q2",
+      "type": "multiple-choice",
+      "question": "Идемпотентный trigger DAG из CI/CD: какой правильный pattern?",
+      "options": [
+        { "id": "a", "text": "POST без dag_run_id, ловить 409 на retry" },
+        { "id": "b", "text": "Детерминированный dag_run_id (например `ci__${github.run_id}__${sha}`). На повторный POST API вернёт 409 Conflict — CI трактует как success (или GET fetch существующий run). Это гарантирует ровно один DagRun на CI build" },
+        { "id": "c", "text": "POST с генерируемым UUID" },
+        { "id": "d", "text": "Использовать только CLI" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Без `dag_run_id` Airflow генерирует timestamp-based ID, каждый POST → новый run, retry CI создаёт дубли. Детерминированный ID (из stable CI identifiers) + handling 409 как success = exactly-once trigger semantics. Дополнительно: первый poll через 10-15 секунд после POST для избежания race condition между write и read replica.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-exam-q3",
+      "type": "multiple-choice",
+      "question": "`basic_auth` vs JWT custom backend — главное преимущество JWT в production?",
+      "options": [
+        { "id": "a", "text": "Лучшая security" },
+        { "id": "b", "text": "Performance: signature verify ~1-5ms (CPU-light), нет DB lookup. Bcrypt в basic_auth ~80-120ms CPU на каждый request → bottleneck при >30 RPS. JWT scales linearly с CPU, basic_auth — нет" },
+        { "id": "c", "text": "JWT проще настроить" },
+        { "id": "d", "text": "JWT не требует FAB role" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Главная проблема basic_auth в production — bcrypt cost на каждый request (security feature, но bottleneck). JWT signature verify асимптотически быстрее: RS256 ~1-5ms, ED25519 ~0.5-2ms. Auth performance не bottleneck → webserver scales. JWT также не требует DB lookup (claims внутри token) — можно cache verification keys. Тradeoff: token rotation сложнее, нужна JWKS endpoint от OAuth provider.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m13-exam-q4",
+      "type": "multiple-choice",
+      "question": "CLI команда для production cron — daily cleanup metadata DB. Какой правильный invocation?",
+      "options": [
+        { "id": "a", "text": "airflow db reset" },
+        { "id": "b", "text": "`airflow db clean --clean-before-timestamp $(date -u -d '30 days ago' +%Y-%m-%d) --yes --skip-archive` — удаляет rows старше 30 дней без интерактивного confirm, без создания archive tables. Запускается из CronJob/cron daily в 3:00 AM" },
+        { "id": "c", "text": "airflow db downgrade" },
+        { "id": "d", "text": "DROP TABLE log;" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`db reset` — полное удаление всех данных (для dev/disaster recovery). `db downgrade` — откат миграций. `db clean` — production cleanup tool: удаляет старые rows из log, task_instance, dag_run, xcom, task_reschedule. `--skip-archive` важно — без него создаются `_airflow_deleted__*` tables, что удваивает storage. Без cleanup metadata DB растёт unbounded (log таблица — 70% объёма обычно).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m13-exam-q5",
+      "type": "multiple-choice",
+      "question": "Production scenario: live dashboard через REST API polling начал OOM-ить webserver. Какое архитектурное решение правильное?",
+      "options": [
+        { "id": "a", "text": "Увеличить memory webserver pod" },
+        { "id": "b", "text": "Заменить polling на OpenTelemetry metrics (модуль 14) + Prometheus + Grafana. Это push-based, дешёвый по resources, real-time. Альтернативно — Listener API (модуль 12) для push events. REST API не предназначен для high-frequency polling dashboards" },
+        { "id": "c", "text": "Кешировать в LocalStorage браузера" },
+        { "id": "d", "text": "Отключить ненужных пользователей" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Правильный pattern для dashboards: OTel metrics push → Prometheus scrape → Grafana visualization. Polling REST API для real-time dashboards — антипаттерн, потому что каждый GET — heavy SQL query + marshmallow JSON serialization. На N concurrent users это N RPS на webserver. Listener API (модуль 12) даёт push events для state changes — нулевой polling overhead. Long-term migration: переход на observability stack (модуль 14).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m13-exam-q6",
+      "type": "true-false",
+      "question": "В Airflow 2.10/2.11 REST API v1 (Flask-RESTful) — это stable production API. REST API v2 на FastAPI появляется только в 3.x — поэтому для current LTS deployments v1 остаётся основным механизмом интеграции.",
+      "correctAnswer": true,
+      "explanation": "Хронология: API v1 stable с 2.0 (после долгого 'experimental' периода в 1.10). Это Flask-RESTful + Connexion + OpenAPI 3 spec. Полностью обратно совместимый в 2.x line. В 3.0 — переход на FastAPI (REST v2) с auto-generated OpenAPI, async support, лучшим typing. Но 2.10/2.11 LTS — это v1 mainstream. Все CI/CD integrations для current production должны использовать v1. Migration path к v2 — отдельная тема (финальный модуль upgrade).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

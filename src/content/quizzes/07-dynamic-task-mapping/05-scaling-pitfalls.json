@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "07-dynamic-task-mapping/05-scaling-pitfalls",
+  "moduleId": "07-dynamic-task-mapping",
+  "_meta": { "idPrefix": "airflow-m07-05" },
+  "questions": [
+    {
+      "id": "airflow-m07-05-q1",
+      "type": "multiple-choice",
+      "question": "DAG ежедневно обрабатывает 2000 files через .expand(). Production symptoms: scheduler tick 30s+, UI медленная. Какой fix приоритет #1?",
+      "options": [
+        { "id": "a", "text": "Добавить CPU scheduler-у" },
+        { "id": "b", "text": "Refactoring на chunked mapping: вместо 2000 mapped TI делать chunks 50-100 items → 20-40 mapped TI. process_chunk.expand(chunk=chunks_of_100). Reduces scheduler load 50-100×, UI быстрый, parallelism сохраняется (20+ параллельных chunks). Изолированный retry на chunk-level (не file-level, но всё равно useful)" },
+        { "id": "c", "text": "Switch на Kubernetes executor" },
+        { "id": "d", "text": "Перезагрузить scheduler" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Chunked mapping — #1 fix. 2000 mapped TI → 20-40 chunks по 100 items. Scheduler load снижается в 50-100×. UI быстрый. Parallelism сохраняется (с 16 workers — 16 chunks parallel, total work distributed). Trade-off: isolated retry на chunk-level не file-level. Если file-level retry critical (один retry на 100-file chunk re-does весь chunk) — добавить max_active_tis_per_dag вместо chunked. CPU/restart — band-aid, не решает корневую проблему scheduler overload.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-05-q2",
+      "type": "multiple-choice",
+      "question": "Чем отличаются `max_active_tis_per_dag` и `pool` для limiting mapped tasks concurrency?",
+      "options": [
+        { "id": "a", "text": "Одинаковые" },
+        { "id": "b", "text": "max_active_tis_per_dag — per-task limit (только эта task), per-DAG scope, declarative в декораторе. pool — globally shared concurrency limit (cross-DAG), все tasks с этим pool делят slots. Combine: pool для cross-DAG resource limit (DB connections), max_active_tis_per_dag для intra-DAG fine-tune" },
+        { "id": "c", "text": "max_active_tis_per_dag — это deprecated" },
+        { "id": "d", "text": "pool работает только в Celery" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Различные scope и сematics. max_active_tis_per_dag=N — этот таск имеет max N concurrent в этом DAG. Если 500 mapped TI scheduled, max 10 running concurrently. pool='db' size=20 — все tasks (across DAGs) с этим pool делят 20 slots. Use cases: pool для shared resource limit (DB pool 20 connections — limit total Airflow-wide), max_active_tis_per_dag для intra-DAG rate limit (5 mapped TI concurrent чтобы не overload upstream). Combine: pool='api', pool_slots=1, max_active_tis_per_dag=5 для double-bounded.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-05-q3",
+      "type": "multiple-choice",
+      "question": "500 items × 5s processing каждый. Mapping vs batch vs chunked — какой подход дает best wall time + scheduler health?",
+      "options": [
+        { "id": "a", "text": "Batch — один task" },
+        { "id": "b", "text": "Chunked mapping — 20 mapped TI × 25 items. С 16 workers parallel — wall time ~165s. DB rows ~40 + state transitions. Best of both: parallelism wins (vs batch ~42min sequential), low scheduler load (vs 500 mapped TI overhead). Sweet spot: chunk size 10-50 items per mapped TI" },
+        { "id": "c", "text": "Full mapping 500 TI" },
+        { "id": "d", "text": "Зависит от настроения" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Quantitative: Full mapping 500 TI: overhead heavy (50s scheduling, 250s worker startup для Celery), 2500+ DB rows, scheduler load. Batch (1 task): wall time 42min sequential, не parallel. Chunked (20 TI × 25 items each): parallelism через 16 workers даёт ~165s wall time + 40 DB rows. Best balance. Sweet spot chunk 10-50 items — достаточно parallelism, manageable scheduler load. Если item heavy (>30s) — можно меньше chunk, ближе к full mapping. Если items fast (ms) — больше chunk или full batch.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m07-05-q4",
+      "type": "true-false",
+      "question": "Mapped TI delivers isolated retry per item — главное преимущество vs batch processing. Если 1 из 500 items fails, можно retry только эту 1 TI с её retry count, не re-do весь batch. Это decisive для long-running heterogeneous items с individual transient errors.",
+      "correctAnswer": true,
+      "explanation": "Да, isolated retry — главный value mapping. В batch (один task для 500 items): 1 failure → весь batch failed → retry перерабатывает все 500 (если код не idempotent с checkpoint logic). В mapping: process[247] fails → retry именно её (свой retries count, retry_delay), остальные 499 success. Critical для: items с heterogeneous failure modes (некоторые transient API errors, другие OK), expensive processing (don&apos;t redo all on 1 failure), DAG где partial success acceptable + tracking what failed. Если retry not important (all-or-nothing, items быстрые, code idempotent) — batch проще и быстрее.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

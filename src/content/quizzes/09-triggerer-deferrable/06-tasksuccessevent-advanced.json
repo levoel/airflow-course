@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "09-triggerer-deferrable/06-tasksuccessevent-advanced",
+  "moduleId": "09-triggerer-deferrable",
+  "_meta": { "idPrefix": "airflow-m09-06" },
+  "questions": [
+    {
+      "id": "airflow-m09-06-q1",
+      "type": "multiple-choice",
+      "question": "TaskSuccessEvent (2.10+) — что это и когда оправдан?",
+      "options": [
+        { "id": "a", "text": "Просто синоним TriggerEvent" },
+        { "id": "b", "text": "Special TriggerEvent subclass: triggerer завершает task без возврата на worker (UPDATE TI state=success, payload→XCom). Skipping execute_complete сохраняет ~5-30s worker startup. Оправдан когда execute_complete тривиально (no heavy compute, no side effects)" },
+        { "id": "c", "text": "Замена deferred state" },
+        { "id": "d", "text": "Только для testing" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "TaskSuccessEvent — оптимизация для simple sensors. Triggerer yields TaskSuccessEvent(value), event handler делает UPDATE TI=success + xcom=value напрямую, DELETE trigger row. NO scheduler tick → worker startup → execute_complete. Сохраняет 5-30s overhead на каждом triggered event. Use when: execute_complete тривиально (validate + return), нет heavy compute, нет access к Airflow context (variables/connections нужны), нет side effects. Don't use when: execute_complete делает CPU work, или нужен post-event processing на worker.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-06-q2",
+      "type": "multiple-choice",
+      "question": "Production HA triggerer setup — minimum recommendation?",
+      "options": [
+        { "id": "a", "text": "1 instance — больше не нужно" },
+        { "id": "b", "text": "Minimum 2 replicas для HA (failover при crash, rolling updates без downtime), PodDisruptionBudget maxUnavailable=1, resources 500m CPU / 1Gi memory per replica, livenessProbe для auto-restart, метрика airflow.triggerer.running_triggers для capacity planning" },
+        { "id": "c", "text": "5+ instances always" },
+        { "id": "d", "text": "Не нужно HA для triggerer" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production checklist: (1) replicas: 2 minimum (failover + rolling updates); (2) PDB maxUnavailable=1 — обеспечивает рабочесть во время K8s evictions; (3) Resources tuned per scale: 500m/1Gi для <5k triggers, 2 CPU/4Gi для 5-15k; (4) Liveness probe через 'airflow jobs check --job-type TriggererJob'; (5) Monitoring: running_triggers, events_emitted, failed counts, heartbeat staleness. Single triggerer = SPOF, недопустимо в production. 5+ replicas — over-provisioning unless scale demands; обычно достаточно 2-3 для большинства deployments.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m09-06-q3",
+      "type": "multiple-choice",
+      "question": "Queue separation для multi-team Airflow — зачем нужно?",
+      "options": [
+        { "id": "a", "text": "Performance — quicker triggers" },
+        { "id": "b", "text": "Fault isolation: bad trigger от team-A с blocking call замораживает только их triggerer event loop, team-B affected. Deploy separate triggerer instances per queue, --queues='team-a,default'. Trade-off: extra infrastructure cost vs isolation safety" },
+        { "id": "c", "text": "Только для performance" },
+        { "id": "d", "text": "Required by Kubernetes" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fault isolation: single triggerer asyncio loop shared all triggers — один bad trigger (blocking call, infinite loop, memory leak) affects all teams. Queue separation: triggerer --queues='team-a' processes only team-A triggers (matched by queue attribute), team-B unaffected. Trade-offs: extra pods/CPU/memory cost, operational complexity (separate dashboards/alerts), risk uneven utilization, default queue routing carefulness. Alternative mitigations: rigorous code review, linting (ruff ASYNC101 for blocking calls), per-trigger latency monitoring with alerts. Queue separation — operational safety net.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m09-06-q4",
+      "type": "true-false",
+      "question": "При triggerer crash без graceful SIGTERM, его triggers сохраняются в DB (persistent), но требуется ~30-90s для adoption другим triggerer. Triggers не теряются, но временно frozen.",
+      "correctAnswer": true,
+      "explanation": "Triggers persistent в trigger table — НЕ in-memory only. Crash scenario: triggerer dies, last heartbeat stale → after triggerer_health_check_threshold (30s) считается dead → scheduler housekeeping (next tick) UPDATE trigger SET triggerer_id=NULL для всех его triggers → live triggerer на следующем своём tick (1s) делает SELECT FOR UPDATE SKIP LOCKED, adopting orphaned triggers → resume run() from start (with same serialized kwargs). Total typical: 30-90s. Triggers re-init с serialized state — counters сбрасываются, но absolute deadlines работают correctly. Это design feature: state в DB (durable), processing в memory (fast). Graceful shutdown (SIGTERM) flushes events, releases triggers быстрее — kill -9 forces full timeout sequence.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

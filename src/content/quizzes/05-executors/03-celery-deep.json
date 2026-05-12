@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "05-executors/03-celery-deep",
+  "moduleId": "05-executors",
+  "_meta": { "idPrefix": "airflow-m05-03" },
+  "questions": [
+    {
+      "id": "airflow-m05-03-q1",
+      "type": "multiple-choice",
+      "question": "Worker концурент=16, prefetch_multiplier=4. В очереди 200 short (1 min) + 1 long (1 hour) task. Что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Все 201 task завершатся ~12 минут" },
+        { "id": "b", "text": "Worker prefetches 64 messages (16×4). Если в них long task — он занимает slot 1 час, prefetched short tasks (≤63) ждут локально → starvation, другие workers idle, не могут забрать tasks (они prefetched)" },
+        { "id": "c", "text": "Long task будет skipped" },
+        { "id": "d", "text": "Worker автоматически перераспределит" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это classic prefetch starvation. Worker reserves 64 messages у broker (unacked), они невидимы другим workers. Long task в slot блокирует throughput всей prefetched batch. Fix: `worker_prefetch_multiplier=1` — worker берёт только concurrency-сколько-есть, остальные доступны другим workers. Также — separate queues для long tasks, или Multiple Executors (long → K8s).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-03-q2",
+      "type": "multiple-choice",
+      "question": "`celery_acks_late = True` — что это делает и зачем?",
+      "options": [
+        { "id": "a", "text": "Откладывает task execution на 10 секунд" },
+        { "id": "b", "text": "Worker делает ACK у broker ТОЛЬКО после успешного выполнения task. На worker crash до ACK — broker возвращает message в queue → другой worker подберёт (at-least-once delivery)" },
+        { "id": "c", "text": "Это для performance" },
+        { "id": "d", "text": "Disable acks" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default acks_late=False — worker ACK сразу при получении message. Crash → lost task. С acks_late=True — ACK после exec → at-least-once delivery, message не теряется. Trade-off: возможно duplicate execution (если worker crashed после exec но до ACK). В Airflow idempotency на уровне task_instance state (если уже success — повторный run не выполнит callable дважды), так что duplication безопасна.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-03-q3",
+      "type": "multiple-choice",
+      "question": "Long task длится 2 часа, broker = Redis. Какая configuration критична?",
+      "options": [
+        { "id": "a", "text": "Никакой особой" },
+        { "id": "b", "text": "`broker_transport_options = {'visibility_timeout': 21600}` (6 часов) — Redis default visibility 1h, после она считает task lost и ДУБЛИРУЕТ message → double execution" },
+        { "id": "c", "text": "Включить debug logging" },
+        { "id": "d", "text": "Set workers=1" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Redis broker использует visibility_timeout: после получения message worker должен ACK его в течение этого времени. Если нет — Redis считает message lost (assumption: worker dead) и возвращает в очередь → другой worker берёт. Long-running task с visibility_timeout < duration → double exec (одна задача выполняется дважды). Fix: `broker_transport_options={'visibility_timeout': 21600}` (6h). Для RabbitMQ это менее critical — там durable queue с manual ack.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-03-q4",
+      "type": "true-false",
+      "question": "Celery worker сам выполняет user code (импортирует DAG, вызывает callable). Это не subprocess, как в LocalExecutor.",
+      "correctAnswer": false,
+      "explanation": "Celery worker НЕ выполняет user code сам. Он получает message, calls `execute_command(command_list)` — это `subprocess.check_call(['airflow', 'tasks', 'run', ...])`. Subprocess re-parses DAG file, импортирует callable, и зовёт его. Это та же модель, что и в LocalExecutor — task isolation от worker crash, fresh DAG import. Trade-off — ~1-2s overhead на task startup из-за Python warmup + DAG parse.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

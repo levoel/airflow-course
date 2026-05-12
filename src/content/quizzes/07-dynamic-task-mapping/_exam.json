@@ -1,0 +1,89 @@
+{
+  "moduleId": "07-dynamic-task-mapping",
+  "title": "Module 07 Exam — Dynamic Task Mapping",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m07-exam",
+    "description": "6-question integrated exam for Module 07"
+  },
+  "questions": [
+    {
+      "id": "airflow-m07-exam-q1",
+      "type": "multiple-choice",
+      "question": "Дайте полное описание parse vs runtime для `process.expand(file=get_files())` где get_files returns 5 элементов",
+      "options": [
+        { "id": "a", "text": "Всё происходит при parse" },
+        { "id": "b", "text": "Parse: создаётся MappedOperator placeholder, length unknown, serialized_dag хранит XComArg reference. DagRun create: 2 TI rows — get_files (map_index=-1, scheduled) и process placeholder (map_index=-1, scheduled). После get_files success: scheduler в Phase 2 reads upstream XCom, calculates length=5, удаляет placeholder, создаёт 5 task_instance rows с map_index 0..4. Workers execute mapped TI: каждый xcom_pull upstream, picks element по map_index, runs callable, push own XCom" },
+        { "id": "c", "text": "Scheduler знает length при parse" },
+        { "id": "d", "text": "Mapped TI создаются workers" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Polный end-to-end: (1) **Parse** (DAG processor): видит .expand → MappedOperator placeholder. serialized_dag JSON с expand_input=XComArg(get_files, return_value), _is_mapped=true, length=unknown. (2) **DagRun creation**: 2 TI rows — get_files (-1, scheduled), process placeholder (-1, scheduled). (3) **Phase 2 — upstream runs**: scheduler enqueues get_files, worker runs, return [a,b,c,d,e], INSERT xcom row. (4) **Phase 2 — expand_mapped_task**: scheduler видит placeholder + upstream done → resolves XComArg → length=5 → vs max_map_length (OK) → DELETE placeholder, INSERT 5 TI с map_index 0..4. (5) **Workers**: каждый mapped TI execute() — xcom_pull get_files (full list), pick element[map_index], call callable, INSERT own xcom с map_index. (6) **Downstream**: aggregation pulls 5 xcom rows ORDER BY map_index, gets list.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-exam-q2",
+      "type": "multiple-choice",
+      "question": "В production DAG 2000 mapped TI/day. Scheduler tick 30s, UI hang. Какой полный fix-pattern?",
+      "options": [
+        { "id": "a", "text": "Просто увеличить max_map_length" },
+        { "id": "b", "text": "Refactoring на chunked mapping (приоритет 1): 20 mapped TI × 100 items per chunk вместо 2000 TI. Reduce scheduler load 100×, UI быстрый, parallelism сохраняется через 16 workers ~165s wall time. Если file-level isolated retry critical — max_active_tis_per_dag=20 (приоритет 2). Только если оба невозможны — увеличение max_map_length + tune scheduler (приоритет 3). Plus: max_active_runs для backfill safety, Custom XCom Backend для large XCom" },
+        { "id": "c", "text": "Switch на Kubernetes Executor" },
+        { "id": "d", "text": "Перезагрузить кластер" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Priority order: (1) **Chunked mapping** — самый impactful. process_chunk.expand(chunk=chunks_of_100) → 20 mapped TI. Scheduler load /100, UI быстрый, parallelism сохраняется. Trade-off: chunk-level retry (не file-level). (2) **max_active_tis_per_dag** если file-level retry critical — limits concurrent mapped TI до 20, остальные ждут в scheduled. Wall time увеличивается но scheduler health OK. (3) **Только если оба невозможны** — увеличить max_map_length, tune scheduler (max_tis_per_query smaller batches, additional schedulers для HA, Postgres tuning pgbouncer/partitioning), это band-aid. **Plus**: max_active_runs=2 для backfill safety, Custom XCom Backend если каждая mapped TI large XCom, conscious UI usage (list view вместо grid).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-exam-q3",
+      "type": "multiple-choice",
+      "question": "Когда mapping vs batch processing? Дайте decision framework",
+      "options": [
+        { "id": "a", "text": "Mapping всегда лучше" },
+        { "id": "b", "text": "Mapping когда: (1) item processing heavy (>10s — overhead Airflow меньше чем processing), (2) нужен isolated retry per item (transient errors heterogeneous), (3) нужны separate logs per item для debug, (4) N маленькое-medium (<500). Batch когда: (1) items быстрые (<1s — overhead dominates), (2) N огромное (>1000 — scheduler death), (3) failure all-or-nothing acceptable, (4) cross-element logic needed (running totals, prev/next). Chunked — компромисс для medium-large N с parallelism" },
+        { "id": "c", "text": "Batch всегда" },
+        { "id": "d", "text": "Random выбор" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Decision framework: **Mapping value**: heavy items (parallelism wins), isolated retry critical, per-item logs needed, manageable N. **Batch value**: fast items (overhead dominates), huge N (scheduler death prevention), all-or-nothing failure mode, cross-element logic. **Chunked compromise**: medium-large N (200-2000), retains parallelism с low scheduler load. Quantitative example: 500 items × 5s each: Mapping ~3min wall time но scheduler heavy. Batch sequential ~42min. Chunked (20 TI × 25 items) ~165s + low scheduler load = best balance.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m07-exam-q4",
+      "type": "multiple-choice",
+      "question": "DAG deploy 12 specific service+region комбинаций из 60 cartesian + общая konstanta artifact_uri. Какой полный TaskFlow pattern?",
+      "options": [
+        { "id": "a", "text": "expand(env=..., region=..., service=...) — 60 mapped TI" },
+        { "id": "b", "text": "@task get_targets() returns list of 12 dicts с конкретными комбинациями + validation valid combos (fail fast). Затем deploy.partial(artifact_uri=...).expand_kwargs(get_targets()). Это 12 mapped TI (не 60 cartesian, никаких wasted), constants хранятся одиножды в MappedOperator metadata, validation upstream предотвращает invalid configs из reaching deploy" },
+        { "id": "c", "text": "12 separate tasks без mapping" },
+        { "id": "d", "text": "Cartesian + filter в callable" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production pattern: (1) **@task get_deploy_targets** returns list[dict] с 12 explicit combinations, включает validation (assert валидные env/region/service combos, известный whitelist) — fail fast preventing invalid deploys; (2) **deploy.partial(artifact_uri=..., version=...).expand_kwargs(get_targets())** — constants хранятся одиножды, dynamic per-target args. 12 mapped TI, не 60 cartesian waste. (3) **post_deploy_check(trigger_rule='all_done')** — validates all regions, fails if any failed, triggers rollback alerts. (4) Optional **max_active_tis_per_dag=2** для canary rollout (deploy 2 regions at a time).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-exam-q5",
+      "type": "multiple-choice",
+      "question": "Mapped task сделал xcom_pull от upstream который возвращает 500-item list (~10MB). 500 mapped TI runs. Какие проблемы и решения?",
+      "options": [
+        { "id": "a", "text": "Никаких проблем" },
+        { "id": "b", "text": "Каждая mapped TI делает свой xcom_pull(upstream) — receives FULL 10MB list (не just свой element initially), затем picks element[map_index]. 500 × 10MB = 5GB network traffic + memory hydration. Solutions: (1) Custom XCom Backend offload в S3 (DB ref маленькая, fetch on demand); (2) Refactor — upstream возвращает list of S3 URIs, mapped TI делает S3 fetch только своего element; (3) Reduce mapping count через chunking" },
+        { "id": "c", "text": "Air автомат streamит" },
+        { "id": "d", "text": "Это OK, RAM modern достаточно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Subtle production issue. Mapped TI на execute() делает xcom_pull(upstream) для resolving expand_input — receives FULL upstream value, не just свой element (Airflow architecture choice — каждая TI independent). Затем picks element[map_index]. 500 TI × 10MB = 5GB traffic + memory pressure (каждая worker holds 10MB в memory). Solutions: (1) **Custom XCom Backend** offload upstream return в S3, ref в DB маленький; на pull worker streams from S3, memory pressure меньше; (2) **Architectural refactor** — upstream returns list[S3 URI strings] (маленький), mapped TI делает S3 GET только своего element; (3) **Chunking** — N mapped TI с N=50 → less pulls; (4) **XComObjectStorageBackend** с правильным threshold.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-exam-q6",
+      "type": "true-false",
+      "question": "Production-grade mapping DAG требует обязательные patterns: trigger_rule='all_done' на aggregator (resilience к partial failures), max_active_tis_per_dag (rate limit), retries per mapped TI, validation upstream length, max_active_runs для backfill safety, и monitoring metrics (failure rate, mapped count) — без этих элементов mapping становится anti-pattern в production.",
+      "correctAnswer": true,
+      "explanation": "Да, comprehensive checklist для production mapping. Без этих patterns DAG fragile: (1) **trigger_rule='all_done' on aggregator** — agg runs даже с partial failures, validates threshold; (2) **max_active_tis_per_dag** — rate limit downstream services/DB pools; (3) **retries + retry_delay per mapped TI** — handle transient errors isolated per item; (4) **upstream validation** — assert non-empty, max size, valid types — fail fast prevents bad expand; (5) **max_active_runs=2-3** — backfill safety, prevents 365 days × N mapped TI overwhelm; (6) **monitoring** — alerts на failure_rate > 10%, mapped_count > threshold, scheduler tick p99. Plus: Custom XCom Backend для large mapped XCom, conscious UI usage (list view), regular DB cleanup. Без этого — production incidents inevitable.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

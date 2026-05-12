@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "06-xcom-data-passing/04-custom-xcom-backend",
+  "moduleId": "06-xcom-data-passing",
+  "_meta": { "idPrefix": "airflow-m06-04" },
+  "questions": [
+    {
+      "id": "airflow-m06-04-q1",
+      "type": "multiple-choice",
+      "question": "Custom XCom Backend — какой contract должен implement класс?",
+      "options": [
+        { "id": "a", "text": "Override execute() и pre_execute() методы" },
+        { "id": "b", "text": "Subclass BaseXCom, override staticmethod serialize_value(value, **meta) → bytes и staticmethod deserialize_value(result) → Any. Метаданные task_id/dag_id/run_id/map_index доступны для построения storage path" },
+        { "id": "c", "text": "Implement IXComBackend interface" },
+        { "id": "d", "text": "Подпишитесь на signal" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Custom XCom Backend = subclass `airflow.models.xcom.BaseXCom` (или `airflow.sdk.bases.xcom.BaseXCom` в 2.10+). Override два staticmethod: serialize_value(value, *, key, task_id, dag_id, run_id, map_index) → bytes для DB, deserialize_value(result) → Python value. Метаданные позволяют строить детерминированные storage paths типа s3://bucket/xcom/<dag_id>/<run_id>/<task_id>/map_<idx>/<key>.parquet. Configure через `[core] xcom_backend = path.to.MyBackend`.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m06-04-q2",
+      "type": "multiple-choice",
+      "question": "Hybrid pattern (DB + S3): какой threshold logic правильный?",
+      "options": [
+        { "id": "a", "text": "Всегда в S3, никогда в DB" },
+        { "id": "b", "text": "Small JSON-serializable (< 32KB) хранить в DB как default — fast pull, no S3 overhead. Большие или сложные типы (pandas, numpy) идут в S3 как Parquet, в DB остаётся reference JSON (~200 bytes) — best of both worlds" },
+        { "id": "c", "text": "Threshold 1 byte" },
+        { "id": "d", "text": "Random выбор" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Hybrid pattern: малые JSON (status, counts) — в DB (zero S3 overhead, sub-ms pull). Большие (>32KB) или сложные типы (pd.DataFrame, np.ndarray) — в S3 как Parquet/native format, в DB JSON ref {'uri':'s3://...', 'type':'pandas'} ~200 bytes. Best of both: DB не раздувается на больших payload, S3 cost минимальный (не каждый XCom туда), latency маленьких pulls остаётся fast. Production tuning: threshold 1024-4096 bytes.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-04-q3",
+      "type": "multiple-choice",
+      "question": "Что произойдёт если backend класс не доступен на worker (только на scheduler)?",
+      "options": [
+        { "id": "a", "text": "Worker fallback на DB backend" },
+        { "id": "b", "text": "Worker падает с ImportError при попытке deserialize XCom. Backend должен быть в PYTHONPATH ВСЕХ компонентов: scheduler, webserver, workers, triggerer. Helm chart values должны указывать plugin для всех — иначе UI показывает error, downstream tasks fail" },
+        { "id": "c", "text": "Worker отправит scheduler-у запрос" },
+        { "id": "d", "text": "Auto-deploy backend" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Backend класс используется при KAJDOM XCom операции — push, pull, UI render. Если plugin не importable на worker pod → ImportError при deserialize → task failed. Same для webserver — UI XCom view crashes. Production fix: embed backend в Python package (airflow-extensions), install через pip в Dockerfile workers + scheduler + webserver. Не полагаться на plugins/ folder mount (часто неконсистентно на K8s). В Helm chart обязательно укажите plugin для всех components.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m06-04-q4",
+      "type": "true-false",
+      "question": "Path traversal — известная уязвимость Custom Backend если deserialize_value тривиально доверяет JSON ref `{'uri': 's3://...'}` из DB. Атакующий с DB write access (например через compromised admin UI) может inject `{'uri': 's3://bucket/../../other-bucket/secrets'}` и читать произвольные blobs — mitigation: validate URI начинается с expected prefix.",
+      "correctAnswer": true,
+      "explanation": "Да, это реальный security concern. Если deserialize_value() читает любой URI из XCom value — это лазейка. Mitigation: (1) валидация URI prefix: `if not uri.startswith(f's3://{ALLOWED_BUCKET}/xcom/'): raise ValueError;` (2) IAM scope-down — worker может писать только под xcom/<dag_id>/...; (3) SSE-KMS encryption per-DAG; (4) CloudTrail/audit logging S3 access; (5) bucket policy restricting access только Airflow IAM roles. Также PII concerns: lifecycle policy auto-delete после 90 дней, no public reads.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

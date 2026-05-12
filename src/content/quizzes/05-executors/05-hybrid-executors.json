@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "05-executors/05-hybrid-executors",
+  "moduleId": "05-executors",
+  "_meta": { "idPrefix": "airflow-m05-05" },
+  "questions": [
+    {
+      "id": "airflow-m05-05-q1",
+      "type": "multiple-choice",
+      "question": "В CeleryKubernetesExecutor как scheduler определяет, какой executor выполнит task?",
+      "options": [
+        { "id": "a", "text": "Random" },
+        { "id": "b", "text": "По `queue` parameter task. Если `queue` совпадает с `[celery_kubernetes_executor] kubernetes_queue` (default 'kubernetes') → KubernetesExecutor. Иначе → CeleryExecutor" },
+        { "id": "c", "text": "По task name" },
+        { "id": "d", "text": "По размеру task" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "CeleryKubernetesExecutor — wrapper, который держит instances CeleryExecutor + KubernetesExecutor. На queue_command(): читает ti.queue, сравнивает с kubernetes_queue config. Match → routes на KubernetesExecutor; иначе → CeleryExecutor. Использование: `@task(queue='kubernetes')` — heavy/GPU, `@task` или `@task(queue='default')` — light. Configurable: можно изменить trigger queue name через `kubernetes_queue = my_custom_k8s`.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-05-q2",
+      "type": "multiple-choice",
+      "question": "Hybrid CeleryKubernetesExecutor vs Multiple Executors (AIP-61) — главные differences?",
+      "options": [
+        { "id": "a", "text": "Они идентичны" },
+        { "id": "b", "text": "Hybrid: фикс 2 executors (Celery + K8s), routing через `queue=`, available 2.3+. AIP-61: до N executors, routing через `executor=`, aliases поддерживаются, available 2.10+, более явный API, можно two Celery executors с разными configs" },
+        { "id": "c", "text": "Hybrid — для prod, AIP-61 — для dev" },
+        { "id": "d", "text": "AIP-61 — deprecated" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Hybrid (CeleryKubernetes/LocalKubernetes) — 2.3 release, фиксированная пара executors, routing скрытый в `queue` param (что путает — queue был для priority routing within executor). AIP-61 — 2.10 release, явный API `@task(executor='X')`, до N executors, aliases (`Class:alias` для двух instances одного executor). На 2.10+ — AIP-61 preferred. Hybrid ещё OK для legacy 2.3-2.9 или если ровно 2 executors. Migration hybrid → AIP-61 простой (backward compat через queue routing).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m05-05-q3",
+      "type": "multiple-choice",
+      "question": "Когда LocalKubernetesExecutor предпочтительнее CeleryKubernetesExecutor?",
+      "options": [
+        { "id": "a", "text": "Никогда" },
+        { "id": "b", "text": "Single-node deployment, нет Celery infrastructure (Redis/RabbitMQ), small объём short tasks (<100/min), но иногда нужны heavy GPU tasks. Минимум setup complexity, без overhead Celery" },
+        { "id": "c", "text": "Большие enterprise deployments" },
+        { "id": "d", "text": "Только в dev" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "LocalKubernetesExecutor = LocalExecutor (для short tasks) + KubernetesExecutor (для heavy). Use case: small/medium на одной машине, без Redis, но иногда нужны GPU pods или isolated environments. Минимум infrastructure — нет broker. Throughput limit single-node (до 100 short tasks/min). Для больших throughputs — CeleryKubernetesExecutor (horizontal scaling). На 2.10+ — Multiple Executors `executor=LocalExecutor,KubernetesExecutor` cleaner.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-05-q4",
+      "type": "true-false",
+      "question": "В hybrid CeleryKubernetesExecutor оба executor instances запускаются — даже если ни одна task не идёт на KubernetesExecutor (например все `queue='default'`). Это означает scheduler делает heartbeat и для Celery, и для K8s executor каждый tick.",
+      "correctAnswer": true,
+      "explanation": "Wrapper держит instances обоих executors с момента scheduler start. На каждом heartbeat() — вызывает heartbeat обоих child instances. K8s watcher thread запускается даже если ни одна K8s task ещё не была. Это 2x scheduler footprint vs single executor. На high throughput — заметный overhead. Trade-off за flexibility. На AIP-61 — то же самое: все configured executors heartbeat-ятся. Mitigation — не configure executors, которые не используются.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

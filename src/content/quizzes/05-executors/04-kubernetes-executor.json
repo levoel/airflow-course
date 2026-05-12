@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "05-executors/04-kubernetes-executor",
+  "moduleId": "05-executors",
+  "_meta": { "idPrefix": "airflow-m05-04" },
+  "questions": [
+    {
+      "id": "airflow-m05-04-q1",
+      "type": "multiple-choice",
+      "question": "Что такое watcher thread в KubernetesExecutor?",
+      "options": [
+        { "id": "a", "text": "Отдельный pod, который мониторит scheduler" },
+        { "id": "b", "text": "multiprocessing.Process внутри scheduler-процесса; subscribed на K8s API events (watch=true) для pods с label airflow-worker=<scheduler_job_id>; парсит pod status (Pending/Running/Succeeded/Failed) и обновляет task_instance state в metadata DB через result_queue" },
+        { "id": "c", "text": "Cron job в Airflow UI" },
+        { "id": "d", "text": "Sidecar container" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "KubernetesJobWatcher — multiprocessing.Process (для isolation от scheduler crash). Subscribes на /api/v1/namespaces/{ns}/pods?watch=true&labelSelector=airflow-worker=<job_id>. Получает stream events (ADDED, MODIFIED, DELETED), парсит pod phase, кладёт (ti_key, state) в multiprocessing.Queue. Scheduler читает и обновляет TI в DB. Если watcher умер — TI застревают в running; safety net через scheduler_zombie_task_threshold (5min) reset zombie TI.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-04-q2",
+      "type": "multiple-choice",
+      "question": "Cold start pod 25s, task длится 2 минуты. Список mitigations для уменьшения cold start?",
+      "options": [
+        { "id": "a", "text": "Использовать bigger pods" },
+        { "id": "b", "text": "(1) Pre-pull images через DaemonSet (kubelet cache); (2) Slim image (только нужные providers); (3) imagePullPolicy: IfNotPresent с конкретным tag; (4) Reserved node pool с warm pods; (5) для коротких tasks — routing на CeleryExecutor через Multiple Executors (AIP-61)" },
+        { "id": "c", "text": "Set parallelism=1" },
+        { "id": "d", "text": "Disable watcher" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cold start (5-30s) состоит из: K8s scheduling (~1s), image pull (5-20s — самый большой), Python warmup (1-3s), DAG parse (2-5s). DaemonSet pre-puller — image кеширован на каждой ноде, pull skipped. Slim image (custom build только с нужными providers) уменьшает pull до 2-3x. IfNotPresent + конкретный tag — no re-pull. Для коротких tasks (<30s) overhead 80%+ — переход на Celery (через Multiple Executors / hybrid) дешевле чем оптимизация cold start.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-04-q3",
+      "type": "multiple-choice",
+      "question": "Per-task customization pod (GPU, memory, image) — как делается?",
+      "options": [
+        { "id": "a", "text": "Глобальный pod_template_file" },
+        { "id": "b", "text": "`executor_config={\"pod_override\": V1Pod(spec=V1PodSpec(...))}` — scheduler берёт pod_template_file как base, делает deep-merge с pod_override и POST результирующий manifest в K8s API" },
+        { "id": "c", "text": "Через environment variables" },
+        { "id": "d", "text": "Только через rebuild image" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "executor_config — per-task dictionary. `pod_override` — kubernetes.client.V1Pod object с overrides. Scheduler делает deep merge: pod_template_file as base + pod_override fields overwrite specific places (resources, node_selector, image, env, tolerations, etc). Это позволяет одну task запустить с GPU + custom image, другую — с default ресурсами, в одном DAG. Бонус — readable Python code (V1Pod) вместо YAML.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-04-q4",
+      "type": "true-false",
+      "question": "`delete_worker_pods=True` гарантирует, что pod будет удалён после завершения. Если PDB (PodDisruptionBudget) configured — это override-нёт PDB и pods будут удалены.",
+      "correctAnswer": false,
+      "explanation": "PDB может ПОМЕШАТЬ удалению pods. PDB защищает minimum N pods от disruption (для voluntary disruption — eviction). При попытке delete pod, который попадает под PDB constraint — K8s API отказывает. На airflow-worker pods PDB не нужен (они ephemeral, одиночные). Result — pods накапливаются, eventually node ENOSPC. Fix: убрать PDB на airflow-worker label, или явно exclude. Также проверять `kubectl get pods --field-selector status.phase=Succeeded -n airflow` периодически.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

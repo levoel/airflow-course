@@ -1,0 +1,89 @@
+{
+  "moduleId": "10-connections-secrets",
+  "title": "Module 10 Exam — Connections, Variables, Secrets",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m10-exam",
+    "description": "6-question integrated exam for Module 10 Connections / Variables / Secrets"
+  },
+  "questions": [
+    {
+      "id": "airflow-m10-exam-q1",
+      "type": "multiple-choice",
+      "question": "Connection lookup chain в Airflow 2.10/2.11 — какой strict order?",
+      "options": [
+        { "id": "a", "text": "Только metadata DB" },
+        { "id": "b", "text": "Secrets Backend (если configured) → AIRFLOW_CONN_<NAME> env var → metadata DB. Первый non-None Connection wins, остальные stages skip. Identical логика для Variables (AIRFLOW_VAR_*)" },
+        { "id": "c", "text": "DB → ENV → Backend" },
+        { "id": "d", "text": "Параллельно всё" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lookup order hard-coded: (1) Secrets Backend, (2) ENV (AIRFLOW_CONN_<KEY>), (3) DB. Первый non-None Connection wins, fall-through на следующий stage если None. Identical для Variables. Order не настраивается, но можно chain multiple backends в [secrets] backend (comma-separated). Это важно понимать для debugging — если ENV var imalformed, она прерывает chain ДО DB; если Vault timeout, depending на backend implementation либо fallback либо exception.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m10-exam-q2",
+      "type": "multiple-choice",
+      "question": "Fernet token полное содержание?",
+      "options": [
+        { "id": "a", "text": "Plain AES output" },
+        { "id": "b", "text": "Version(1B) || Timestamp(8B) || IV(16B) || AES-128-CBC-ciphertext(N*16B) || HMAC-SHA256(32B), всё base64-url-encoded. 32-byte key split на signing(0:16) + HMAC(16:32) subkeys. Encrypt-then-MAC pattern" },
+        { "id": "c", "text": "RSA 2048" },
+        { "id": "d", "text": "ChaCha20" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fernet — это spec от Heroku, реализованная в PyCA cryptography. Token format строго определён: version (0x80) + Unix timestamp + random IV + AES-128-CBC ciphertext (PKCS#7 padded) + HMAC-SHA256 tag. 32-byte Fernet key split на 16-byte signing key для AES и 16-byte HMAC key. Encrypt-then-MAC — HMAC вычисляется after encryption, verify before decrypt. Any tampering detected immediately. base64-url-encoded final blob.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m10-exam-q3",
+      "type": "multiple-choice",
+      "question": "Top-level `Variable.get('api_endpoint')` в DAG-файле — почему проблема и какие 4 fix?",
+      "options": [
+        { "id": "a", "text": "Не работает синтаксически" },
+        { "id": "b", "text": "Выполняется на каждом DAG parse (~30s default). N DAGs × 30s = высокий RPS на secrets backend → potential overload. Fixes: (1) move внутрь @task callable, (2) [secrets] use_cache=True, (3) Jinja templates {{ var.value.x }} в operator kwargs, (4) ENV vars AIRFLOW_VAR_* для static config" },
+        { "id": "c", "text": "Always production-ready" },
+        { "id": "d", "text": "Только из-за Fernet" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DAG file top-level выполняется каждый DAG parse — каждые 30s по default (min_file_process_interval). Variable.get → SQL query (DB) или HTTP к Vault/SM. Для 100 DAGs × 3 Variable.get × parsing_processes=4 = hundreds of RPS на backend. Fixes: (1) Move внутрь @task — lazy eval, runtime only. (2) [secrets] use_cache=True с TTL — снижает rate × десятки. (3) Jinja {{ var.value.x }} в templated args — resolves только при task render runtime. (4) ENV vars — instant in-memory lookup, нет нагрузки. Production: combination of all four в зависимости от случая.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m10-exam-q4",
+      "type": "multiple-choice",
+      "question": "Vault auth_type='kubernetes' best practice для EKS/AKS/GKE production?",
+      "options": [
+        { "id": "a", "text": "Token в env" },
+        { "id": "b", "text": "Vault TrustS K8s ServiceAccount tokens. SA mounted token → Vault TokenReview API verifies через K8s → выдаёт Vault token bound to policies. No long-lived credentials в Airflow config. Identity-based auth, native K8s integration" },
+        { "id": "c", "text": "AppRole в env" },
+        { "id": "d", "text": "RBAC через etcd" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Kubernetes auth method — gold standard для K8s deployments. Setup: enable auth в Vault, configure с K8s API endpoint + CA cert, define roles binding SA name + namespace → policies. Pod's mounted JWT token → VaultBackend читает /var/run/secrets/.../token → отправляет к Vault → Vault TokenReview через K8s API → если verified, выдаёт Vault token. No secrets в Airflow config — identity-based. Comparable patterns: IRSA для EKS + AWS Secrets Manager, Workload Identity для GKE + GCP Secret Manager, Managed Identity для AKS + Azure Key Vault. Всё это — bind cloud identity к K8s SA, без long-lived creds.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m10-exam-q5",
+      "type": "multiple-choice",
+      "question": "Compromised production secret (например, leaked AWS access key в git) — response priority?",
+      "options": [
+        { "id": "a", "text": "Сначала forensics, потом revoke" },
+        { "id": "b", "text": "< 15 min revoke compromised credential (deactivate, не delete для forensics). Fast revocation > complete forensics. После revoke: deploy new credentials, force Airflow cache invalidate (pod restart), CloudTrail audit для understanding impact, post-mortem с systemic fixes" },
+        { "id": "c", "text": "24h delay" },
+        { "id": "d", "text": "Ничего не делать" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Compromised secret = ticking timer. Each minute = potential damage. Priority sequence: (1) **0-5 min**: Confirm compromise, assess scope. (2) **5-15 min**: REVOKE immediately. AWS IAM deactivate (не delete — leave для CloudTrail forensics). Vault lease revoke. DB ALTER USER PASSWORD. (3) **15-20 min**: Deploy new credentials в backend. Force Airflow refresh — pod restart accelerates cache invalidation. (4) **30+ min**: CloudTrail audit для understanding misuse. (5) **2h**: Incident report. (6) **Post-mortem**: Systemic prevention — pre-commit hooks, secret scanning CI, migration к short-lived credentials. Don't wait для complete forensics ДО revoke. Bounded damage > complete understanding.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m10-exam-q6",
+      "type": "true-false",
+      "question": "В Airflow 2.10/2.11 настройка `[secrets] use_cache = True` создаёт per-process in-memory cache (каждый scheduler/worker/triggerer pod имеет свой), что значит изменение Variable в Vault не подхватывается до cache_ttl_seconds expire или pod restart.",
+      "correctAnswer": true,
+      "explanation": "use_cache implementation: per-process in-memory Python dict. Каждый pod (scheduler / worker / triggerer) имеет независимый cache. После TTL expire (default 900s в новых версиях) — re-fetch из backend. Trade-offs: (+) очень cheap, нет external dependencies, drastically снижает backend RPS. (-) Не consistent — после vault kv put обновлённого value, разные pods могут видеть разные values до TTL expire. (-) Изменения в UI Variable не propagate instantly. Force update: kubectl rollout restart deployment/<airflow-component>. Tune cache_ttl_seconds под workload: больше = меньше backend load + дольше propagation. Production typical: 300-900s.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

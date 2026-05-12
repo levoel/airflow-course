@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "06-xcom-data-passing/05-object-storage-xcom",
+  "moduleId": "06-xcom-data-passing",
+  "_meta": { "idPrefix": "airflow-m06-05" },
+  "questions": [
+    {
+      "id": "airflow-m06-05-q1",
+      "type": "multiple-choice",
+      "question": "Что такое XComObjectStorageBackend (2.8+) и через какой layer работает?",
+      "options": [
+        { "id": "a", "text": "Custom backend для Redis" },
+        { "id": "b", "text": "Готовый backend в провайдере apache-airflow-providers-common-io. Использует fsspec для unified API над S3/GCS/Azure/local FS. Configuration: xcom_backend = ...XComObjectStorageBackend, xcom_objectstorage_path = s3://conn_id@bucket/prefix" },
+        { "id": "c", "text": "Replication mechanism" },
+        { "id": "d", "text": "Это часть core, не provider" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "XComObjectStorageBackend — готовый Custom Backend из common.io provider (2.8+). Под капотом — fsspec abstraction (s3fs, gcsfs, adlfs, local). Один backend класс для любого storage. Configuration: `[core] xcom_backend=airflow.providers.common.io.xcom.backend.XComObjectStorageBackend` и `[common.io] xcom_objectstorage_path=s3://aws_default@bucket/xcom`. Spares от написания custom backend для generic JSON cases.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m06-05-q2",
+      "type": "multiple-choice",
+      "question": "Почему `xcom_objectstorage_threshold=1024` лучше дефолтного `-1`?",
+      "options": [
+        { "id": "a", "text": "Дефолт -1 — best practice" },
+        { "id": "b", "text": "Threshold=-1 означает ВСЕ XCom в Object Storage, включая 10-byte status — overkill, лишний S3 latency (50-200ms) на каждый pull. Threshold=1024-4096 даёт hybrid: small JSON в DB (fast), large в Object Storage. Production sweet spot" },
+        { "id": "c", "text": "1024 — это max" },
+        { "id": "d", "text": "Influences PostgreSQL replication" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Threshold=-1 (default) — все XCom идут в Object Storage. Каждый pull даже маленького status XCom = S3 round-trip 50-200ms = latency hit. С threshold=1024-4096: малые status в DB (sub-ms), большие в S3. Best of both worlds. Конкретное число выбирайте на основе вашего payload distribution (изучите octet_length(value) в текущей xcom table). Не забудьте также lifecycle policy на bucket — orphan files накапливаются.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m06-05-q3",
+      "type": "multiple-choice",
+      "question": "XComObjectStorageBackend vs Custom Backend на pandas Parquet — когда какой?",
+      "options": [
+        { "id": "a", "text": "Custom всегда лучше" },
+        { "id": "b", "text": "XComObjectStorageBackend если JSON-serializable достаточно, multi-cloud, не хочется maintain код. Custom если pandas/numpy/Arrow large objects — JSON slow + lossy (теряет dtypes); native Parquet сжимает в 5-10x. Также custom для специфической security (per-tenant KMS), specific layout, custom encryption" },
+        { "id": "c", "text": "Они идентичны" },
+        { "id": "d", "text": "XComObjectStorageBackend deprecated" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Готовый XComObjectStorageBackend — universal, low-maintenance, multi-cloud (S3/GCS/Azure через fsspec). Хорош для общих JSON-serializable payload. Custom требуется когда: (1) pandas/numpy native format — Parquet сжимает 5-10× vs JSON, сохраняет dtypes, fast read; (2) custom security (per-DAG KMS keys, signing); (3) specific storage layout (Hive partitioning, lifecycle by team); (4) custom optimizations (chunking, streaming, async). Большинство team-ов начинают с готового, переходят на custom когда есть specific need.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m06-05-q4",
+      "type": "true-false",
+      "question": "XCom files в Object Storage НЕ удаляются автоматически при cleanup DagRun (в отличие от DB rows которые удаляются через FK CASCADE) — без S3 lifecycle policy bucket растёт infinitely, через 6 месяцев — миллионы orphan blobs.",
+      "correctAnswer": true,
+      "explanation": "Да, это критичный production concern. В DB xcom rows удаляются через FK CASCADE при `DELETE FROM dag_run`, но Object Storage backend не делает соответствующий S3 DELETE при cleanup. Файлы остаются. Через 6 месяцев — миллионы orphan blobs, S3 cost grows. Mitigation: (1) S3 lifecycle policy с Expiration после 30-90 дней по prefix `xcom/`; (2) DAG для активного cleanup orphan blobs (compare с active DagRun list); (3) periodic audit S3 storage usage. Это true для всех Custom Backend — единственное исключение default DB backend благодаря FK CASCADE.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

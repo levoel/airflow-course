@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/07-openlineage-aware-patterns",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-07" },
+  "questions": [
+    {
+      "id": "airflow-m17-07-q1",
+      "type": "multiple-choice",
+      "question": "Какой operator auto-emits OpenLineage events?",
+      "options": [
+        { "id": "a", "text": "BashOperator" },
+        { "id": "b", "text": "SQL operators (PostgresOperator, SQLExecuteQueryOperator, BigQueryOperator) — parse SQL для source/target tables. S3 operators emit bucket/key as datasets. Spark operators через OL Spark agent. dbt operators native OL support. PythonOperator — manual через extractor или inlets/outlets" },
+        { "id": "c", "text": "Все operators" },
+        { "id": "d", "text": "Только custom operators" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OL provider (apache-airflow-providers-openlineage) auto-emits для standard operators. SQL operators — parsing через sqlparse, extracts source/target tables. S3 operators — bucket/key as Dataset. Spark operators — устанавливается openlineage-spark в Spark job, OL agent emits события напрямую к Marquez (bypasses Airflow). dbt — native integration. PythonOperator / @task — НЕТ auto-emission, нужен custom extractor или declarative inlets/outlets.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m17-07-q2",
+      "type": "multiple-choice",
+      "question": "PythonOperator делает SQL queries через PostgresHook. Как получить lineage?",
+      "options": [
+        { "id": "a", "text": "Невозможно" },
+        { "id": "b", "text": "Best: переписать на SQLExecuteQueryOperator (still доступно в 2.x) — auto-emission. Alternative: @task(inlets=[Table('source')], outlets=[Table('target')]) — declarative lineage. Last resort: write custom extractor (полный controll, но больше работы)" },
+        { "id": "c", "text": "Только integration tests" },
+        { "id": "d", "text": "Manual logging в Marquez API" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Priority list: (1) Replace на SQLExecuteQueryOperator — zero code change, automatic lineage. Best ROI. (2) inlets/outlets declarative — `@task(inlets=[Table('warehouse', 'staging', 'orders')], outlets=[...])` — 5-10 min per task, OL provider reads и emits. (3) Custom extractor — class implementing BaseExtractor, registered via entry_points. ~1 day per unique operator type. Manual emit через OpenLineageAdapter возможен но messy. Production: 95% coverage через approaches 1+2.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-07-q3",
+      "type": "multiple-choice",
+      "question": "DAG имеет один 'do_everything' task который reads 5 sources, writes 3 targets. Что плохо для lineage?",
+      "options": [
+        { "id": "a", "text": "Slow execution" },
+        { "id": "b", "text": "Single task → один OL event с 5 inputs + 3 outputs в одном blob. Marquez показывает один node со множеством arrows — hard визуально trace data flow. Fix: split на multiple tasks per transformation — каждый emits separate clean event" },
+        { "id": "c", "text": "Memory usage" },
+        { "id": "d", "text": "Не работает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lineage clarity — function of DAG structure. Один 'do_everything' = opaque blob в Marquez. Split на logical transformations: stage_orders(orders → staging_orders), stage_customers, build_dim_orders(staging_orders + staging_customers → dim_orders). Каждый task — separate OL event с focused inputs/outputs. Result: clean visual graph в Marquez, useful для impact analysis ('what depends on dim_orders?'), root cause analysis ('orders broken — where?'). Investment in DAG decomposition pays off в lineage usability.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-07-q4",
+      "type": "true-false",
+      "question": "Datasets (Airflow 2.4+) сами по себе создают lineage events — outlets=[Dataset(...)] enough для OL emission.",
+      "correctAnswer": true,
+      "explanation": "Dataset references в outlets — OL provider emits dataset events автоматически. Plus dataset-driven scheduling shows как lineage links в Marquez (producer DAG → consumer DAG). В 3.x Datasets → Assets (rename via AIP-74), concept identical. Datasets/Assets — declarative lineage из коробки, без extractors. Best practice: use Datasets для inter-DAG data dependencies — auto-scheduling + auto-lineage в одном.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

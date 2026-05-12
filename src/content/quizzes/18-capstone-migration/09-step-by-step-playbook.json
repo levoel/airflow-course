@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/09-step-by-step-playbook",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-09" },
+  "questions": [
+    {
+      "id": "airflow-m18-09-q1",
+      "type": "multiple-choice",
+      "question": "Pre-requisites для migration day. Что критично?",
+      "options": [
+        { "id": "a", "text": "Только backup" },
+        { "id": "b", "text": "(1) Уже на 2.11 LTS (not 2.10); (2) Staging environment running 3.x 2+ недели; (3) airflow upgrade-check 0 criticals; (4) AIR301/AIR302 violations = 0; (5) API consumers ready для v2; (6) Backup procedure tested; (7) Rollback procedure tested на staging; (8) Communication plan; (9) Maintenance window approved" },
+        { "id": "c", "text": "Только Helm chart готов" },
+        { "id": "d", "text": "Nothing критично" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production migration — not impromptu. 9-item checklist mandatory. Key: 2.11 LTS не 2.10 (includes migration helpers, AIR rules active); staging soak 2+ weeks (catches real issues); zero criticals от upgrade-check (no surprises); rollback tested (knowing exact steps if needed); communication (stakeholders нervous). Skipping checklist items = migration disaster. 6-12 months preparation, then 1 weekend execution.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-09-q2",
+      "type": "multiple-choice",
+      "question": "Migration day step 5: airflow db migrate running 45 minutes на 'Adding column user_id to ab_user_role'. Что делать?",
+      "options": [
+        { "id": "a", "text": "Kill process immediately" },
+        { "id": "b", "text": "DO NOT cancel. Verify progress not deadlock (pg_stat_activity, pg_locks check). Estimate completion time (ab_user_role может быть 100GB → 1-2h ALTER TABLE). Communicate timeline update к stakeholders. Monitor IOPS — if active, just slow. Decision at 2-hour mark: continue или rollback с DB restore" },
+        { "id": "c", "text": "Restart Postgres" },
+        { "id": "d", "text": "Cancel и retry" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Long-running migrations common для large DBs. NEVER cancel — leaves DB inconsistent. Diagnose: SELECT FROM pg_stat_activity (is query running?), pg_locks (deadlock?), IOPS (work happening?). Communicate updated timeline. Decision point at 2 hours: continue if progressing, rollback (restore snapshot) if stuck. Lessons: pre-migration testing с production DB clone catches это; pre-migration cleanup (DELETE FROM ab_permission_view_role WHERE created_on < '2 years ago') reduces table sizes.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-09-q3",
+      "type": "multiple-choice",
+      "question": "После cutover к 3.x успешно. Когда decommissioning 2.x backup snapshot?",
+      "options": [
+        { "id": "a", "text": "Immediately" },
+        { "id": "b", "text": "Keep 30-35 days. Reasoning: (1) Possible subtle issues discovered week-1 (data quality, performance regression); (2) RDS automated backups retention period align; (3) Compliance requirement (financial regulators often 30 days). After этого — manual snapshots можно archive (Glacier) или delete. Production rule: rollback option available month after migration" },
+        { "id": "c", "text": "Через 1 год" },
+        { "id": "d", "text": "Never" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Post-migration backup retention — defense in depth. 30-day window catches: subtle bugs surfacing only с specific data patterns, performance regression decisions, compliance audits. Decommissioning early — accepts что rollback impossible. Production rule: migration window 'closes' after 30 days clean operations. Backup snapshots cost ~$0.05/GB/month — cheap insurance. Manual snapshots можно move к Glacier ($0.004/GB) для long-term archive.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-09-q4",
+      "type": "true-false",
+      "question": "Migration выполнять лучше Saturday morning, не Friday evening.",
+      "correctAnswer": true,
+      "explanation": "Saturday morning best для migrations: (1) Team rested, full weekend availability for recovery если issues; (2) Low production traffic; (3) Stakeholders not waiting for Monday morning reports; (4) Two full days monitoring before normal business hours. Friday evening — anti-pattern: team tired, weekend сompromised если issues, recovery options limited (vendor support reduced weekends). Always plan: backup → execute → monitor 48h. Communication critical — stakeholders informed of timeline и rollback decision points.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

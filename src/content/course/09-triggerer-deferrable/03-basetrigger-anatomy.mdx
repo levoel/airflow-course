@@ -1,0 +1,442 @@
+---
+title: "BaseTrigger anatomy — serialize, run, TriggerEvent"
+description: "Полный walkthrough BaseTrigger subclass: __init__, serialize(), async run() generator, TriggerEvent emission, lifecycle с custom DateTimeTrigger example"
+order: 3
+difficulty: "advanced"
+estimatedTime: 32
+topics: ["BaseTrigger", "TriggerEvent", "asyncio", "Custom Triggers", "Serialization"]
+---
+
+# BaseTrigger anatomy — препарирование custom trigger
+
+Чтобы deeply понимать deferrable operators, нужно написать **свой** trigger. Это даёт точную ментальную модель того, что происходит между `self.defer()` и `execute_complete()`, какие contract обязан соблюдать любой trigger, какие подводные камни возникают при serialization и async execution.
+
+Этот урок — препарирование `BaseTrigger` через создание собственного `DateTimeTrigger`: trigger, который засыпает до указанного момента времени и эмитит event. Это minimal, но complete example: показывает все 5 обязательных частей custom trigger.
+
+---
+
+## BaseTrigger contract
+
+Любой custom trigger наследует `airflow.triggers.base.BaseTrigger`:
+
+```python
+from airflow.triggers.base import BaseTrigger, TriggerEvent
+from typing import Any, AsyncIterator
+
+
+class BaseTrigger:
+    """Контракт минимального trigger."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Все state-параметры. JSON-serializable."""
+
+    def serialize(self) -> tuple[str, dict[str, Any]]:
+        """
+        Returns (classpath, kwargs) для DB storage.
+        После deserialize __init__ должен получить эти kwargs.
+        """
+        raise NotImplementedError
+
+    async def run(self) -> AsyncIterator[TriggerEvent]:
+        """
+        Async generator. Ждёт условие, yield TriggerEvent.
+        ОБЯЗАН использовать await asyncio.sleep, не time.sleep.
+        """
+        raise NotImplementedError
+
+    def __eq__(self, other: object) -> bool:
+        """
+        Используется для deduplication: одинаковые triggers
+        не создаются дважды.
+        """
+        ...
+```
+
+5 обязательных кусков:
+
+1. **`__init__`** — принимает все нужные state параметры
+2. **`serialize()`** — возвращает tuple (classpath, dict) — JSON-serializable
+3. **`run()`** — async generator с реальной логикой
+4. **TriggerEvent emission** — yield с payload
+5. **(optional) `__eq__`** — для deduplication
+
+---
+
+## Step 1: minimal DateTimeTrigger
+
+Начнём с простейшего trigger — ждёт указанного momentum времени.
+
+```python
+from datetime import datetime, timezone
+import asyncio
+from airflow.triggers.base import BaseTrigger, TriggerEvent
+from typing import Any, AsyncIterator
+
+
+class DateTimeTrigger(BaseTrigger):
+    """Триггер, который засыпает до указанного момента UTC."""
+
+    def __init__(self, moment: datetime) -> None:
+        super().__init__()
+        if moment.tzinfo is None:
+            raise ValueError("moment must be timezone-aware")
+        self.moment = moment
+
+    def serialize(self) -> tuple[str, dict[str, Any]]:
+        return (
+            "my_package.triggers.DateTimeTrigger",
+            {"moment": self.moment.isoformat()},
+        )
+
+    async def run(self) -> AsyncIterator[TriggerEvent]:
+        while self.moment > datetime.now(tz=timezone.utc):
+            # КРИТИЧНО: await asyncio.sleep, не time.sleep
+            await asyncio.sleep(1)
+        yield TriggerEvent(self.moment.isoformat())
+```
+
+Препарируем каждую часть.
+
+### `__init__`
+
+```python
+def __init__(self, moment: datetime) -> None:
+    super().__init__()
+    if moment.tzinfo is None:
+        raise ValueError("moment must be timezone-aware")
+    self.moment = moment
+```
+
+- **Validate input on construction time** — fail fast при misconfiguration. Если caller передал naive datetime, мы сразу падаем; alternative — fail при serialize (поздно).
+- **Store как member** — `self.moment` будет восстановлен после deserialization.
+- **No I/O в __init__** — конструктор должен быть cheap. Reading config, opening connections — делать в `run()`.
+
+### `serialize()`
+
+```python
+def serialize(self) -> tuple[str, dict[str, Any]]:
+    return (
+        "my_package.triggers.DateTimeTrigger",
+        {"moment": self.moment.isoformat()},
+    )
+```
+
+- **classpath** — full Python import path. Triggerer process делает `importlib.import_module()` для restore. Должен быть accessible в Python path triggerer-а (важно для Docker images).
+- **kwargs** — JSON-serializable. Сложные объекты конвертируем в primitives:
+  - `datetime` → `isoformat()` string
+  - `Decimal` → `str()` 
+  - Custom class → `dict` representation
+
+После serialize Airflow делает:
+
+```python
+# JSON dumps в trigger.kwargs (JSONB column)
+{"moment": "2026-05-12T15:00:00+00:00"}
+```
+
+При adopt-е triggerer делает:
+
+```python
+# Deserialization
+import_module(classpath)
+cls = getattr(module, class_name)
+instance = cls(**kwargs_from_db)
+# Внимание: __init__ снова получит "moment" как string!
+# Нужно реконструировать обратно:
+```
+
+Это **частая ошибка**: serialize даёт string, но `__init__` ожидает datetime. Решение — handle both в `__init__`:
+
+```python
+def __init__(self, moment: datetime | str) -> None:
+    super().__init__()
+    if isinstance(moment, str):
+        moment = datetime.fromisoformat(moment)
+    if moment.tzinfo is None:
+        raise ValueError("...")
+    self.moment = moment
+```
+
+### `run()`
+
+```python
+async def run(self) -> AsyncIterator[TriggerEvent]:
+    while self.moment > datetime.now(tz=timezone.utc):
+        await asyncio.sleep(1)
+    yield TriggerEvent(self.moment.isoformat())
+```
+
+- **Async generator** — ключевое слово `async def` + `yield`. Это не coroutine, не regular generator. Это **async generator** — позволяет yield внутри await.
+- **Loop** — обычно `while condition: await asyncio.sleep`.
+- **`await asyncio.sleep(1)`** — НИКОГДА `time.sleep`. Это блокирует весь event loop (см. урок 02).
+- **yield TriggerEvent** — заканчивает trigger. После yield triggerer удаляет trigger row и пробуждает TI.
+
+**Payload TriggerEvent** может быть любым JSON-serializable объектом:
+
+```python
+yield TriggerEvent({
+    "status": "success",
+    "value": 42,
+    "details": {"timestamp": "...", "extra": "..."},
+})
+```
+
+Этот payload передастся в `execute_complete(event)` через `next_kwargs` в task_instance.
+
+---
+
+## Step 2: Adding state for resumability
+
+Что если triggerer перезапустится посреди ожидания? Trigger будет re-adopted другим triggerer-ом. `__init__` получит **те же kwargs** что и изначально — состояние ожидания сбросится:
+
+```
+T=0:   trigger created, moment=15:00:00
+T=10s: triggerer started waiting, now=14:00:10
+T=20s: triggerer crashes
+T=30s: another triggerer adopts, __init__ same kwargs
+       → re-init starts from now=14:00:30
+       → still waits until 15:00:00 (correct!)
+```
+
+Для `DateTimeTrigger` resumability «бесплатна» — мы сравниваем `moment > now()`, не ведём счётчик. Для других triggers нужно явно сделать state stateless или включить partial progress в serialize.
+
+Counter-example: polling trigger с retry budget:
+
+```python
+# BAD: counter теряется при restart triggerer
+class PollingTrigger(BaseTrigger):
+    def __init__(self, url, max_retries=10):
+        self.url = url
+        self.max_retries = max_retries
+        self.retries_done = 0  # ← это будет 0 при re-adopt
+
+    async def run(self):
+        while self.retries_done < self.max_retries:
+            ...
+            self.retries_done += 1
+
+    def serialize(self):
+        return "...", {"url": self.url, "max_retries": self.max_retries}
+        # retries_done НЕ сериализуется
+```
+
+Правильно: **stateless**, использовать time-based budget:
+
+```python
+class PollingTrigger(BaseTrigger):
+    def __init__(self, url, timeout: timedelta):
+        self.url = url
+        self.deadline = datetime.now(tz=timezone.utc) + timeout
+
+    async def run(self):
+        while datetime.now(tz=timezone.utc) < self.deadline:
+            ...
+            await asyncio.sleep(60)
+        yield TriggerEvent({"status": "timeout"})
+```
+
+`self.deadline` устанавливается в `__init__` (absolute time), serialize-ится, при re-adopt deadline остаётся правильный.
+
+---
+
+## Lifecycle полный walkthrough
+
+<DiagramContainer title="Lifecycle деferrable task с custom trigger" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="T=0: Worker execute()"
+        tooltip="Worker запускает execute() operator-а. Внутри: проверка готовности (например, check S3). Если не готово — вызов self.defer(trigger=DateTimeTrigger(moment), method_name='execute_complete')."
+      >
+        operator.execute() → defer
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="self.defer() raises TaskDeferred" />
+    <FlowRow>
+      <DataBox
+        label="T=10ms: Serialize"
+        tooltip="self.defer() вызывает trigger.serialize() → ('package.DateTimeTrigger', {'moment': '2026-05-12T15:00:00+00:00'}). Worker INSERT INTO trigger (classpath, kwargs) VALUES (?, ?). triggerer_id=NULL — trigger 'unowned', ждёт adoption."
+      >
+        INSERT trigger row
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="T=15ms: TI state update"
+        tooltip="UPDATE task_instance SET state='deferred', next_method='execute_complete', trigger_id=:trigger_id. Worker slot освобождается. Task в state=deferred — invisible для других scheduler operations, кроме adoption."
+      >
+        TI state=deferred
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="up to 1s tick" />
+    <FlowRow>
+      <DataBox
+        label="T=1s: Triggerer adopt"
+        tooltip="Triggerer tick. SELECT * FROM trigger WHERE triggerer_id IS NULL FOR UPDATE SKIP LOCKED LIMIT 100. Adopt batch. importlib.import_module(classpath), cls(**kwargs) → restore DateTimeTrigger object."
+      >
+        adopt + deserialize
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="asyncio.create_task" />
+    <FlowRow>
+      <DataBox
+        label="T=1s-15:00: run() executes"
+        tooltip="Triggerer создаёт asyncio.Task(trigger.run()). Event loop крутит async generator: проверяет moment > now, await asyncio.sleep(1). Тысячи других triggers крутятся параллельно — cooperative scheduling между ними. CPU usage ~0% потому что просто waits."
+      >
+        await asyncio.sleep loop
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="moment reached, yield TriggerEvent" />
+    <FlowRow>
+      <DataBox
+        label="T=15:00: emit event"
+        tooltip="Trigger yields TriggerEvent(payload). Triggerer обрабатывает: UPDATE task_instance SET state='scheduled', next_kwargs={'event': payload}, trigger_id=NULL. DELETE FROM trigger WHERE id=:id. Trigger лишается своей жизни."
+      >
+        TI=scheduled, kwargs=event
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="scheduler picks scheduled TI" />
+    <FlowRow>
+      <DataBox
+        label="T=15:00+5s: execute_complete"
+        tooltip="Scheduler видит TI state=scheduled с next_method. Создаёт TI run на worker. Worker вместо execute() вызывает getattr(operator, next_method)(context, event=next_kwargs['event']) — это execute_complete(context, event). Финальное завершение task."
+      >
+        worker.execute_complete(event)
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Use в operator-е
+
+DateTimeTrigger используется внутри operator через `self.defer()`:
+
+```python
+from airflow.models import BaseOperator
+from airflow.utils.context import Context
+
+
+class WaitUntilOperator(BaseOperator):
+    """Operator, который ждёт до указанного времени."""
+
+    def __init__(self, target_time: datetime, **kwargs):
+        super().__init__(**kwargs)
+        self.target_time = target_time
+
+    def execute(self, context: Context):
+        now = datetime.now(tz=timezone.utc)
+
+        # Если момент уже наступил — не deferring, return immediately
+        if now >= self.target_time:
+            return f"Time already passed: {self.target_time}"
+
+        # Defer до момента
+        self.defer(
+            trigger=DateTimeTrigger(moment=self.target_time),
+            method_name="execute_complete",
+        )
+
+    def execute_complete(self, context: Context, event=None):
+        """Called после yield TriggerEvent."""
+        return f"Reached moment: {event}"
+```
+
+Использование внутри `@dag` создаёт task с `target_time` параметром. При execution: если момент в будущем — defer; triggerer держит trigger; в нужный момент yield event; worker resumes execute_complete.
+
+При execution: 14:00 task starts → defer; 14:00-15:00 triggerer crapuет async wait; 15:00 yield event; 15:00:05 worker resumes execute_complete, returns.
+
+---
+
+## Multiple yields — multi-stage triggers
+
+Trigger может yield **несколько** events перед завершением. Use case: progress reporting.
+
+```python
+class BatchPollingTrigger(BaseTrigger):
+    """Polling с progress updates."""
+
+    async def run(self):
+        for batch_idx in range(10):
+            await asyncio.sleep(60)
+            # Intermediate progress (НЕ завершает trigger)
+            yield TriggerEvent({
+                "status": "progress",
+                "batch": batch_idx,
+                "completed_pct": (batch_idx + 1) * 10,
+            })
+
+        # Финальное event
+        yield TriggerEvent({"status": "complete"})
+```
+
+<Callout type="warning">
+В Airflow 2.x **первый yield завершает trigger** — TI пробуждается, runs execute_complete с первым event. Дальнейшие yields игнорируются (в 2.x). Multi-yield зарезервировано для будущих 3.x features (например, sub-progress reporting через UI). В 2.10/2.11 — yield один раз.
+</Callout>
+
+---
+
+## `__eq__` и deduplication
+
+Если два operator вызывают defer с **одинаковыми** trigger-ами — Airflow может deduplicate:
+
+```python
+def __eq__(self, other: object) -> bool:
+    return (
+        isinstance(other, DateTimeTrigger)
+        and self.moment == other.moment
+    )
+
+def __hash__(self) -> int:
+    return hash(("DateTimeTrigger", self.moment))
+```
+
+Это **optional**, но полезно если вы знаете, что одинаковые triggers могут создаваться часто. Без `__eq__` каждый defer создаёт отдельный row в trigger table.
+
+---
+
+## Production-grade trigger — checklist
+
+При написании custom trigger проверьте:
+
+1. **Все state JSON-serializable**. Datetime → isoformat, Decimal → str, set → list.
+2. **`__init__` принимает both raw and deserialized types**. `Union[datetime, str]`, проверка `isinstance`.
+3. **`serialize()` возвращает kwargs, которые `__init__` примет**. Идемпотентный round-trip.
+4. **Все sleeps — `await asyncio.sleep`**. Никаких `time.sleep`, `requests.get`, sync DB calls.
+5. **Resumability**: state не теряется при triggerer restart. Использовать absolute time / external state, не in-memory counters.
+6. **Error handling**: exceptions в run() обрабатываются — yield TriggerEvent с error info или re-raise (это failures trigger, task получит failed event).
+7. **Reasonable polling interval**: `await asyncio.sleep(1)` для precise timing, `await asyncio.sleep(60)` для external polls. Не `sleep(0)` (CPU thrash).
+8. **classpath доступен в triggerer image**. Custom trigger должен быть installed в triggerer Docker image.
+
+---
+
+## Production gotchas
+
+1. **JSON only, не pickle**. Airflow использует JSON для trigger kwargs (security + portability). Custom типы должны быть JSON-friendly.
+
+2. **`super().__init__()` обязателен**. BaseTrigger имеет internal state — пропуск вызовет AttributeError.
+
+3. **Imports внутри `run()`** — best practice для heavy deps (aiohttp, asyncpg). Отложенный import экономит memory тысяч triggers.
+
+4. **Testing через `pytest-asyncio`**:
+
+   ```python
+   @pytest.mark.asyncio
+   async def test_datetime_trigger():
+       trigger = DateTimeTrigger(moment=datetime.now(tz=timezone.utc))
+       events = [e async for e in trigger.run()]
+       assert len(events) == 1
+   ```
+
+5. **`self.log`** доступен из BaseTrigger — logs пишутся в triggerer log file, не в task log.
+
+6. **`TaskDeferred` маскируется bare except**. Если operator.execute() ловит `except Exception`, defer mechanism сломается. Используйте specific catches или re-raise TaskDeferred.
+
+---
+
+<KnowledgeCheck
+  question="Custom trigger PollingHttpTrigger делает: in run(): for i in range(100): response = requests.get(self.url); if response.ok: yield TriggerEvent(...); await asyncio.sleep(60). Какие 2 проблемы и как fix?"
+  answer="Проблема 1: requests.get — SYNC blocking call. Заблокирует весь asyncio loop на duration HTTP request (могут быть секунды). Тысячи других triggers замораживаются. Fix: использовать aiohttp: async with aiohttp.ClientSession() as session: async with session.get(self.url) as response: ... Проблема 2: counter range(100) не сериализуется — при triggerer restart re-adopt начнёт с i=0 заново. Если trigger ловит first response.ok после 50 iterations — restart перезапустит counter. Не критично для idempotent polls (просто повтор), но для time-based budget важно. Fix: использовать absolute deadline: self.deadline = datetime.now() + timeout (set в __init__, serialize), check while datetime.now() < self.deadline. Bonus issue: requests НЕ установлен в minimal Airflow triggerer image — нужен в triggerer Dockerfile."
+/>

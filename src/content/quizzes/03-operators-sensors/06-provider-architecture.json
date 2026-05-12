@@ -1,0 +1,60 @@
+{
+  "lessonSlug": "03-operators-sensors/06-provider-architecture",
+  "moduleId": "03-operators-sensors",
+  "_meta": { "idPrefix": "airflow-m03-06" },
+  "questions": [
+    {
+      "id": "airflow-m03-06-q1",
+      "type": "multiple-choice",
+      "question": "Как Airflow узнаёт о существовании provider package, чтобы он появился в `airflow providers list` и его operators были импортируемы?",
+      "options": [
+        { "id": "a", "text": "Через файл /etc/airflow/providers.yaml" },
+        { "id": "b", "text": "Через entry_points в pyproject.toml/setup.py пакета: `[project.entry-points.apache_airflow_provider] provider_info = 'airflow.providers.X.__init__:get_provider_info'`. При старте Airflow сканирует sys.path на пакеты с этим entry_point и регистрирует metadata в ProviderManager" },
+        { "id": "c", "text": "Через airflow.cfg [providers] секцию" },
+        { "id": "d", "text": "Автоматически через имя пакета apache-airflow-providers-*" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "entry_points — стандартный Python packaging mechanism. Airflow при старте scheduler/webserver вызывает `importlib.metadata.entry_points(group='apache_airflow_provider')`, для каждого entry_point загружает указанную функцию (обычно get_provider_info), берёт оттуда списки hooks, operators, sensors, connection-types и регистрирует в ProviderManager. Без entry_point Airflow не узнает о пакете, даже если он установлен — типичный bug при создании custom provider. Имя пакета (apache-airflow-providers-*) не требуется — это convention, не requirement.",
+      "studyHint": "Повторите урок 06 — раздел 'Entry_points в pyproject.toml'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-06-q2",
+      "type": "multiple-choice",
+      "question": "Установили `pip install apache-airflow-providers-snowflake` без constraints. После рестарта webserver падает с ImportError. Что вероятнее всего произошло?",
+      "options": [
+        { "id": "a", "text": "Пакет не существует" },
+        { "id": "b", "text": "Pip без constraints выбирает latest provider, который может требовать sqlalchemy 2.x, а core Airflow на 1.4 — конфликт transitive deps. Fix: pip install с --constraint URL для своей core версии (raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.10.txt)" },
+        { "id": "c", "text": "Webserver не поддерживает Snowflake" },
+        { "id": "d", "text": "Нужна перезагрузка metadata DB" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Constraints — критический механизм Airflow. Provider пакеты релизятся независимо от core, и pip resolver может затащить несовместимые версии deps (sqlalchemy 2.x, urllib3, pydantic, etc). Симптомы: ImportError на старте, странные TypeError в местах, где раньше работало. Constraint file (per Airflow version × Python version) фиксирует точные совместимые версии всех transitive deps. Главное правило: ВСЕГДА `pip install ... --constraint <constraint-url>` или фиксируйте provider версии в requirements.txt явно.",
+      "studyHint": "Повторите урок 06 — раздел 'Версионная совместимость'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m03-06-q3",
+      "type": "multiple-choice",
+      "question": "При вызове `hook.get_conn()` для S3Hook(aws_conn_id='aws_default'), в каком порядке Airflow ищет Connection?",
+      "options": [
+        { "id": "a", "text": "Только в metadata DB" },
+        { "id": "b", "text": "Порядок: (1) Environment variable AIRFLOW_CONN_AWS_DEFAULT (нет I/O, самый быстрый); (2) Custom secrets backend если настроен (Vault, AWS Secrets Manager, GCP Secret Manager) — HTTP запрос, кэшируется через use_cache=True; (3) Metadata DB SELECT FROM connection как fallback (password зашифрован Fernet)" },
+        { "id": "c", "text": "Только через Vault" },
+        { "id": "d", "text": "Случайный порядок" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "BaseHook.get_connection → Connection.get_connection_from_secrets обходит зарегистрированные secrets backends в порядке: EnvironmentVariablesBackend → MetastoreBackend → custom backends (Vault и т.п. через airflow.cfg [secrets]). Первый найденный — возвращается. Env var формат: AIRFLOW_CONN_<UPPER_CONN_ID>=connection://user:pass@host/?param=val. Metadata DB шифрует password Fernet key (FERNET_KEY env). Custom backend настраивается через [secrets] backend = airflow.providers.X.secrets.Y.Backend. Подробно — Module 10.",
+      "studyHint": "Повторите урок 06 — раздел 'Connection retrieval flow'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m03-06-q4",
+      "type": "true-false",
+      "question": "Custom provider должен быть установлен только в scheduler — остальные компоненты (worker, webserver, triggerer) получат код через scheduler-distributed serialized DAGs.",
+      "correctAnswer": false,
+      "explanation": "Provider должен быть установлен **во все** компоненты Airflow: scheduler, worker(s), webserver, triggerer. Причины: (1) Scheduler парсит DAGs и валидирует imports — без provider DAG падает с import error; (2) Workers выполняют tasks — execute() operator требует код provider; (3) Webserver рендерит UI, может вызывать hooks для UI field behaviour и Connection форм; (4) Triggerer запускает Trigger.run() — async версия operator deferrable. Самый частый bug — провайдер установлен в scheduler+worker, но забыли в triggerer → deferrable tasks падают с ImportError. Serialized DAG не содержит код, только structure (task names, deps, parameters) — каждый компонент сам импортирует Python модули.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

@@ -1,0 +1,103 @@
+{
+  "moduleId": "14-observability-openlineage",
+  "title": "Module 14 Exam — Observability и OpenLineage",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m14-exam",
+    "description": "7-question integrated exam for Module 14"
+  },
+  "questions": [
+    {
+      "id": "airflow-m14-exam-q1",
+      "type": "multiple-choice",
+      "question": "OTel в Airflow 2.10/2.11 — что включает 'unified observability stack'?",
+      "options": [
+        { "id": "a", "text": "Только metrics" },
+        { "id": "b", "text": "Metrics + traces + logs через single OTLP protocol. AIP-49 (stable с 2.10) предоставляет три pillars одновременно. Замена legacy StatsD (только metrics). Central exporter — OTel Collector — маршрутизирует в backends (Prometheus, Tempo, Loki) параллельно" },
+        { "id": "c", "text": "Только traces" },
+        { "id": "d", "text": "Replaces all monitoring tools" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OpenTelemetry = vendor-neutral standard для всех трёх pillars observability. AIP-49 в Airflow добавил OTel поддержку: metrics (с 2.7 experimental, 2.10 stable), traces (с 2.10), logs опционально (через OTel logs API). Single OTLP endpoint, Collector exports параллельно в backends. StatsD — только metrics, проприетарный текст-протокол. Migration с StatsD на OTel — главная observability модернизация в 2.10/2.11 LTS.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-exam-q2",
+      "type": "multiple-choice",
+      "question": "OpenLineage provider — главная фишка которая делает его game-changer?",
+      "options": [
+        { "id": "a", "text": "Pretty UI" },
+        { "id": "b", "text": "**Automatic emission** для standard operators БЕЗ изменений в DAG коде. PostgresOperator парсит SQL → извлекает source/target tables + column lineage. Policy/governance/data discovery получают полный data flow граф бесплатно. Это устраняет необходимость покупать expensive commercial lineage tools" },
+        { "id": "c", "text": "Open source" },
+        { "id": "d", "text": "Поддерживает много операторов" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Главная innovation OpenLineage в Airflow: lineage **emit-ится автоматически** для всех standard SQL operators. SQL parser (openlineage-sql Rust crate) reads SQL, extracts INSERT INTO targets, SELECT FROM sources, JOIN tables, GROUP BY columns. Result: full DAG → tables → columns lineage граф в backend (Marquez/DataHub). До OL это требовало either commercial tools (Atlan $100k+/year) или manual lineage code. С OL — free, automatic. Это standard с 2024+ — game-changer для compliance/governance.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-exam-q3",
+      "type": "multiple-choice",
+      "question": "Production gotcha: DB log handler в metadata DB. Признаки и fix?",
+      "options": [
+        { "id": "a", "text": "Это нормально, ничего не делать" },
+        { "id": "b", "text": "Признаки: metadata DB 100s GB, `log` table 70% объёма, scheduler tick медленный, backup часы. Fix: switch к S3/GCS remote logging в config, restart, batched cleanup `log` table (DELETE LIMIT 100k + VACUUM). После migration: DB shrinks 800GB → 50GB, scheduler ускоряется 60s → 5s" },
+        { "id": "c", "text": "Увеличить DB размер" },
+        { "id": "d", "text": "Add more replicas" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Самая частая production rescue для Airflow. DB log handler пишет каждую log line в `log` table → unbounded growth → scheduler lock contention с INSERTs → VACUUM застревает на huge table. Migration path: (1) airflow.cfg switch к remote_logging=True с S3/GCS; (2) restart all components; (3) batched cleanup old log entries (100k LIMIT, VACUUM каждые 10 batches); (4) S3 lifecycle policy для retention (30d hot, 90d archive, 365d delete). Expected: DB shrinks ~10x, scheduler ускоряется dramatically.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-exam-q4",
+      "type": "multiple-choice",
+      "question": "Custom OL extractor — главный принцип safety. Что НИКОГДА не делать?",
+      "options": [
+        { "id": "a", "text": "Не использовать DB" },
+        { "id": "b", "text": "**Никогда не raise exception**. Errors в extract() ломают task lifecycle (TI помечается failed несмотря на работающий код). Mandatory pattern: try/except вокруг всего body, log warning, return None. Принцип: 'observability never breaks production' — потеря lineage event > task failure" },
+        { "id": "c", "text": "Не использовать XCom" },
+        { "id": "d", "text": "Не делать HTTP calls" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical safety principle для всех observability code. OL extractor работает как Listener hook (on_task_instance_running). Exception → task lifecycle ломается → TI failed → user видит false failure. Pattern: ```def extract(self): try: return self._extract_impl() except Exception as e: self.log.warning(f'OL extract failed: {e}', exc_info=True) return None``` Это применимо также к OTel auto-instrumentation, custom plugins, listeners — observability never breaks production.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-exam-q5",
+      "type": "multiple-choice",
+      "question": "Distributed tracing workflow: alert 'scheduler slow'. Топ 5 шагов drill-down через OTel stack?",
+      "options": [
+        { "id": "a", "text": "Restart scheduler" },
+        { "id": "b", "text": "(1) Exemplar trace на metric panel — открыть slow trace в Tempo; (2) Span tree — найти dominant child span (`critical_section`); (3) Drill DB spans — какой SQL медленный; (4) `pg_stat_activity` за период — найти blocking transaction; (5) Action — kill blocking query, fix root cause. С traces 5-10 min, без — часы DB investigation" },
+        { "id": "c", "text": "Increase memory" },
+        { "id": "d", "text": "Scale workers" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Workflow showcases full observability triad: metric (signal) → exemplar (correlation) → trace (drill-down) → log (detail). Each step uses different OTel pillar. Tempo TraceQL поверх traces enables `{service.name='airflow-scheduler' && duration > 20s}` queries. Span tree показывает где время потеряно (parse, scheduling, critical section, DB). Это **главная ценность** distributed tracing — без него на debug проблем уходят часы.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-exam-q6",
+      "type": "multiple-choice",
+      "question": "Marquez backend для OpenLineage — alternatives в production?",
+      "options": [
+        { "id": "a", "text": "Только Marquez" },
+        { "id": "b", "text": "**Marquez** (Apache OSS, self-hosted), **DataHub** (LinkedIn OSS + metadata management), **Atlan** (commercial SaaS), **OpenMetadata** (modern UI), **AWS SageMaker Lineage** (AWS-native через MWAA), **Microsoft Purview** (Azure-native). Все принимают OL events — vendor-neutral standard позволяет переключать без изменений в Airflow" },
+        { "id": "c", "text": "Только commercial tools" },
+        { "id": "d", "text": "Marquez + DataHub только" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OpenLineage — это standard, не tool. Backends принимают OL events. Marquez — reference implementation (Apache project, free, basic UI). DataHub — крупнее scope (metadata + lineage + governance), free OSS. Atlan/Alation — commercial SaaS с polished UX (стоят $100k+/year на enterprise). OpenMetadata — modern. AWS/Azure native — для cloud-locked teams. Выбор: small team — Marquez или DataHub self-hosted. Enterprise governance — Atlan. AWS shop — SageMaker Lineage через MWAA.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-exam-q7",
+      "type": "true-false",
+      "question": "OTel cardinality control — best practice: dag_id, task_id, state в metric labels (low cardinality, aggregatable), но run_id, request_id — только в traces (где cardinality fine). Иначе Prometheus storage blow-up через unbounded series growth.",
+      "correctAnswer": true,
+      "explanation": "Prometheus time series count = product unique label combinations. dag_id (~10k) × task_id (~20) × state (~5) = ~1M series — manageable. Добавить run_id (UUID, новый каждый run) → series растёт unbounded — millions/day. **Это разрушает Prometheus**: storage explosion, slow queries, OOM. **Right approach:** high-cardinality (run_id, request_id, user_id) → в **traces** через span attributes. Tempo handle high cardinality by design (indexed by trace_id, not labels). Metrics — для aggregated trends, traces — для individual request investigation. Это fundamental separation в OTel design.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

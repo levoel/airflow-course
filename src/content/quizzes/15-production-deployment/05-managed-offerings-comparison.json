@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/05-managed-offerings-comparison",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-05" },
+  "questions": [
+    {
+      "id": "airflow-m15-05-q1",
+      "type": "multiple-choice",
+      "question": "AWS MWAA в 2026 поддерживает какой executor?",
+      "options": [
+        { "id": "a", "text": "Celery + Kubernetes" },
+        { "id": "b", "text": "Только CeleryExecutor. KubernetesExecutor НЕ поддерживается. Если нужен KubernetesPodOperator для heavy workloads — это major limitation" },
+        { "id": "c", "text": "Все три" },
+        { "id": "d", "text": "Только Local" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "MWAA — только CeleryExecutor. Это серьёзное ограничение для команд, нуждающихся в KubernetesPodOperator (Spark submissions, isolated ML training). Workarounds через external EKS — добавляют complexity. Cloud Composer и Astronomer Astro поддерживают и Celery, и Kubernetes (даже mixed CeleryKubernetesExecutor). Если KubernetesExecutor — must-have, MWAA не подходит.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m15-05-q2",
+      "type": "multiple-choice",
+      "question": "Multi-cloud стратегия — что выбрать?",
+      "options": [
+        { "id": "a", "text": "MWAA" },
+        { "id": "b", "text": "Cloud Composer" },
+        { "id": "c", "text": "Astronomer Astro — единственный managed Airflow с поддержкой AWS+GCP+Azure regions, unified control plane, shared RBAC" },
+        { "id": "d", "text": "Self-hosted на каждом cloud отдельно" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Astronomer — единственный umbrella для multi-cloud. MWAA tied к AWS, Composer к GCP, Azure MA к Azure. Self-host на каждом cloud работает, но даёт 3× operational overhead. Astro объединяет deployments в разных регионах под одним control plane с shared RBAC, unified UI, multi-tenant org structure. Pricing premium, но для multi-cloud companies — стоит того.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-05-q3",
+      "type": "multiple-choice",
+      "question": "Команда хочет быть на latest Airflow versions (2.11 → 3.x в течение года). Какой managed offering выбрать?",
+      "options": [
+        { "id": "a", "text": "MWAA — AWS rollout медленный, 3.x ожидается не раньше 2027" },
+        { "id": "b", "text": "Astronomer — обычно роллит новую Airflow версию в течение недели после release. Engineers Astronomer — major contributors в upstream" },
+        { "id": "c", "text": "Cloud Composer — Composer 2 на 2.x, Composer 3 еще беты" },
+        { "id": "d", "text": "Azure Managed Airflow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Astronomer = fastest rollout новых Airflow versions. MWAA исторически медленный (12+ months после release). Composer тоже не super fast. Astronomer engineers contribute upstream — они знают release раньше остальных. Если ваша стратегия — быть на latest (security fixes, new features, 3.x adoption ASAP) — Astro правильный выбор. Self-host тоже даёт control над сроками, но требует SRE.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m15-05-q4",
+      "type": "true-false",
+      "question": "Self-hosted Airflow на K8s всегда дешевле managed offerings.",
+      "correctAnswer": false,
+      "explanation": "Self-host выгоден ТОЛЬКО на large scale (>5000 DAGs, dedicated SRE team). TCO для medium (200 DAGs): self-host ~$5400/mo (включая 0.3 FTE SRE × $15k/mo = $4500), MWAA ~$1200/mo, Astro ~$2450/mo. Дешёвая сторона self-host (RDS, EKS) compensated by expensive часть — engineer time. Self-host выгодно на scale где human-hours amortize на много DAGs. Для startup / mid-size managed offerings экономически предпочтительнее.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

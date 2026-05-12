@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/03-helm-chart-deployment",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-03" },
+  "questions": [
+    {
+      "id": "airflow-m15-03-q1",
+      "type": "multiple-choice",
+      "question": "В Airflow 2.x gitSync sidecar — это:",
+      "options": [
+        { "id": "a", "text": "Replacement для PostgreSQL" },
+        { "id": "b", "text": "Sidecar контейнер в каждом Pod (webserver/scheduler/dag-processor/worker), который синхронизирует /opt/airflow/dags из Git repo каждые N секунд. Standard способ доставки DAGs в 2.x" },
+        { "id": "c", "text": "Replacement для Helm chart" },
+        { "id": "d", "text": "Доступно только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "gitSync sidecar — стандартный способ DAG delivery в 2.x. Каждый pod держит свою копию dags/ синхронизированной с Git. В 3.x заменяется на DAG Bundles (AIP-66) — pluggable abstraction для разных sources (Git/S3/HTTP). Альтернативы в 2.x: PVC (shared filesystem — не рекомендуется), baked into Docker image (immutable, но медленнее iteration).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m15-03-q2",
+      "type": "multiple-choice",
+      "question": "Production gotcha с gitSync: каждый pod использует 1.5+ GB RAM на git repo. Что делать?",
+      "options": [
+        { "id": "a", "text": "Принять — это normal" },
+        { "id": "b", "text": "gitSync.depth: 1 (shallow clone — только last commit), subPath: dags (sync только нужную папку), убрать binary blobs из истории через BFG Repo-Cleaner. Альтернативно — switch на baked image strategy" },
+        { "id": "c", "text": "Increase memory limit" },
+        { "id": "d", "text": "Использовать PVC" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Полная история коммитов + binary blobs могут раздувать repo до GB. Pod держит свою копию (overhead × N pods). Fixes: depth: 1 для shallow clone (~50-100 MB), subPath для частичной sync, BFG для cleanup истории. PVC — workaround но создаёт shared filesystem bottleneck. Baked image — best alternative когда DAGs меняются редко, но требует Docker rebuild на каждый PR.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-03-q3",
+      "type": "multiple-choice",
+      "question": "Для autoscaling Celery workers в Kubernetes лучше всего использовать:",
+      "options": [
+        { "id": "a", "text": "HPA по CPU usage" },
+        { "id": "b", "text": "KEDA с celery-queue trigger (или redis listLength) — autoscale на основе длины Redis queue, а не CPU. Точно знает когда нужны workers" },
+        { "id": "c", "text": "Manual replicas count" },
+        { "id": "d", "text": "Cluster Autoscaler" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "HPA по CPU не видит длину Celery queue — workers idle при пустой queue, но HPA не scale down. KEDA смотрит на actual workload — Redis list length / queue size. Production стандарт: minReplicaCount: 2, maxReplicaCount: 32+, trigger listLength: 10 tasks per worker. После KEDA добавьте Cluster Autoscaler чтобы scale K8s nodes когда workers требуют новые pods.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-03-q4",
+      "type": "true-false",
+      "question": "Astronomer Helm chart и official Apache Airflow Helm chart полностью compatible — values.yaml можно копировать из одного в другой.",
+      "correctAnswer": false,
+      "explanation": "Astronomer и Apache official charts имеют различную структуру values.yaml, разные defaults, разный набор features (Astro chart pre-configures Astro Runtime, Astro Observe, etc). Migration между ними non-trivial — нужно переписать values, проверить все features. Выбирайте сразу один и стойте на нём. Большинство on-prem production использует Apache official — он versioned одновременно с Airflow и имеет comprehensive values.yaml.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

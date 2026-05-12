@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "15-production-deployment/07-disaster-recovery",
+  "moduleId": "15-production-deployment",
+  "_meta": { "idPrefix": "airflow-m15-07" },
+  "questions": [
+    {
+      "id": "airflow-m15-07-q1",
+      "type": "multiple-choice",
+      "question": "Потеря Fernet key — что произойдёт?",
+      "options": [
+        { "id": "a", "text": "Ничего, Airflow генерирует новый автоматически" },
+        { "id": "b", "text": "Все connections и variables (encrypted columns) становятся unreadable — Fernet — симметричный AES-128. Без key нельзя decrypt. Critical recovery scenario — восстанавливать вручную из Vault / config repo" },
+        { "id": "c", "text": "Только UI ломается" },
+        { "id": "d", "text": "Restart fixes" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Fernet key — симметричный AES-128 key для шифрования connections.password, variable.val. Без key encrypted columns unreadable. Storage requirements: Vault path + replicated в backup region + cold offline copy (1Password Business). НЕ в Git, НЕ в Helm values plain text. При rotation — использовать airflow rotate-fernet-key команду, multi-key период через comma-separated keys (старый для decrypt, новый для new encryptions).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-07-q2",
+      "type": "multiple-choice",
+      "question": "Tier Silver targets для DR: RTO 4h, RPO 1h. Что это значит?",
+      "options": [
+        { "id": "a", "text": "Recover Time Object, Recover Point Out" },
+        { "id": "b", "text": "RTO 4h — максимум 4 часа downtime. RPO 1h — максимум 1 час данных можем потерять (continuous WAL archiving + hourly snapshots обеспечивают это)" },
+        { "id": "c", "text": "Названия SLA tiers" },
+        { "id": "d", "text": "Метрики performance" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "RTO (Recovery Time Objective) — макс время простоя после disaster, RPO (Recovery Point Objective) — максимум данных, которые можем потерять. Tiers: Bronze 24h/24h ($), Silver 4h/1h ($$), Gold 1h/5min ($$$), Platinum <15min/0 ($$$$). RPO 0 невозможен без synchronous multi-region replication (+5ms latency на каждый tick). Большинство production deployments — Silver: weekly pg_dump + RDS automated daily snapshots + WAL archiving.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m15-07-q3",
+      "type": "multiple-choice",
+      "question": "Quarterly chaos drill — что обязательно включить?",
+      "options": [
+        { "id": "a", "text": "Только load testing" },
+        { "id": "b", "text": "Kill scheduler (HA via row-locks test), PostgreSQL Multi-AZ failover, network partition, full DR drill (restore в DR region). Цель — измерить РЕАЛЬНЫЙ RTO, не теоретический" },
+        { "id": "c", "text": "Documentation review" },
+        { "id": "d", "text": "Only DB backup verification" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DR plan который не тестировался = wishful thinking. Quarterly chaos drills: (1) Kill scheduler pod — проверить что второй scheduler adopt-ит orphan TI через 30s; (2) RDS failover — проверить graceful reconnect SQLAlchemy + PgBouncer; (3) Network partition через chaos-mesh; (4) Annual full DR drill — restore в DR region, measure real RTO. Если documented 4h vs real 8h — improve automation. Без drills документация — fiction.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-07-q4",
+      "type": "true-false",
+      "question": "После RDS Multi-AZ failover (60-120s downtime) scheduler автоматически recovers без vmешательства человека.",
+      "correctAnswer": false,
+      "explanation": "Common gotcha. После RDS failover SQLAlchemy pool в scheduler держит stale connections к старой primary. Они dead, но pool не invalidate их сразу — продолжает hitting dead connections, TI stuck queued. Manual fix: kubectl rollout restart deployment/airflow-scheduler. Permanent fix: airflow.cfg `[database] sql_alchemy_pool_recycle=1800` + `sql_alchemy_pool_pre_ping=True`. Plus PgBouncer server_check_query='SELECT 1'. Без этих настроек failover ломает scheduler manually-recoverable way.",
+      "bloomLevel": "analytical"
+    }
+  ]
+}

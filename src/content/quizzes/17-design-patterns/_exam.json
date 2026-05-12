@@ -1,0 +1,89 @@
+{
+  "moduleId": "17-design-patterns",
+  "title": "Module 17 Exam — Design Patterns",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m17-exam",
+    "description": "6-question integrated exam for Module 17"
+  },
+  "questions": [
+    {
+      "id": "airflow-m17-exam-q1",
+      "type": "multiple-choice",
+      "question": "Production task INSERT INTO orders без conflict handling. Failed на 50%, retry succeeded. Duplicates appeared. Корректный fix?",
+      "options": [
+        { "id": "a", "text": "Add retries=0" },
+        { "id": "b", "text": "Replace на MERGE INTO orders USING (...) ON tgt.order_id = src.order_id WHEN MATCHED UPDATE / WHEN NOT MATCHED INSERT. Для Postgres < 15 — INSERT ... ON CONFLICT (order_id) DO UPDATE. Cleanup existing duplicates first (DELETE non-MIN). Add unique constraint для defense in depth" },
+        { "id": "c", "text": "Switch на Kafka" },
+        { "id": "d", "text": "Ничего не делать" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Non-idempotent INSERT — classic mistake. Fix: MERGE INTO (PG 15+, Snowflake, BigQuery) или INSERT ... ON CONFLICT (Postgres). Plus cleanup existing duplicates: DELETE WHERE NOT IN (SELECT MIN(...) GROUP BY id). Unique constraint предотвращает future duplicates на DB level. Add tests: airflow tasks test → запустить дважды → assert count неизменен. Rule: каждый INSERT в production должен think about retry scenario. MERGE — default pattern.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-exam-q2",
+      "type": "multiple-choice",
+      "question": "Production DAG factory генерирует 100 DAGs из YAML. Periodically DAGs пропадают из UI. Что в production-grade factory предотвращает это?",
+      "options": [
+        { "id": "a", "text": "Restart Airflow чаще" },
+        { "id": "b", "text": "Use HelloOperator" },
+        { "id": "c", "text": "(1) Eager validation — assert no duplicate dag_ids, validate каждый cfg fields, raise loudly; (2) NO top-level network calls (committed YAML); (3) Local variable captures (не closures over cfg); (4) globals() assignment explicit; (5) Tests: hypothesis property tests + mocked network → assert no calls; (6) Heavy imports lazy inside tasks" },
+        { "id": "d", "text": "Reduce до 10 DAGs" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Comprehensive checklist для reliable factory. Most common причины DAGs пропадают: (a) top-level network call с outages → import errors; (b) duplicate dag_ids silent overwrite; (c) heavy imports parse timeout. Все mitigations — еспонtional discipline + tests. Один день setup factory testing экономит недели incident response. 100+ DAGs — manageable scale при правильной discipline; 1000+ — rethink design.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-exam-q3",
+      "type": "multiple-choice",
+      "question": "Production spends $5k/month на orphan EMR clusters. Используется trigger_rule='all_done' для terminate. Лучшее решение?",
+      "options": [
+        { "id": "a", "text": "Manually terminate каждый день" },
+        { "id": "b", "text": "Setup/Teardown (2.7+, stable 2.10.5+): cluster.as_setup() >> jobs >> terminate.as_teardown(setups=cluster). Teardown failure → DagRun failed (alert triggered, not silent). Skip teardown if setup didn't run (defensive). Plus EMR age monitoring alert как defense in depth" },
+        { "id": "c", "text": "Switch на bare EC2" },
+        { "id": "d", "text": "Ничего" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "trigger_rule='all_done' — magic, не explicit. Terminate failure silent — DagRun success даже если cluster running, $$$ leak. Setup/Teardown — first-class abstraction: explicit semantic (as_setup/as_teardown), on_failure_fail_dagrun=True triggers alert, skip if setup didn't run. Production-stable в 2.10.5+. Defense in depth: EMR age alert (cluster > 24h running без active jobs). One day code change saves $5000/month + countless incident hours.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-exam-q4",
+      "type": "multiple-choice",
+      "question": "DAG с `datetime.now()` в task. Нужен backfill за 3 месяца. Что делать first?",
+      "options": [
+        { "id": "a", "text": "Run backfill immediately" },
+        { "id": "b", "text": "STOP — не backfill пока не fix code. Datetime.now() для каждой historical date вернёт wall-clock = current time → task обрабатывает CURRENT data, INSERT с historical execution_date metadata → массовая data corruption. Fix code first: replace datetime.now() на data_interval_start/end из context. Verify в staging. Run backfill с max_active_runs limit. Spot-check данные" },
+        { "id": "c", "text": "Increase retries" },
+        { "id": "d", "text": "Run в parallel" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Critical preflight check. Non-deterministic DAGs ломают backfill catastrophically. datetime.now() при backfill = wall-clock (when backfill running), not historical. Result: 90 days × identical data inserted with different execution_dates → DB chaos. Fix sequence: (1) Code fix — use data_interval_start; (2) Deploy + staging test; (3) Verify single date through airflow tasks test; (4) Run backfill с max_active_runs=5 limit; (5) Monitor + verify. Long-term: add static check (ruff/grep) для datetime.now() в dags/.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m17-exam-q5",
+      "type": "multiple-choice",
+      "question": "Approval workflow с 24h timeout в Airflow 2.x. Корректный sensor config?",
+      "options": [
+        { "id": "a", "text": "mode='poke', poke_interval=60s, retries=3" },
+        { "id": "b", "text": "mode='reschedule' (mandatory для long timeout — freeworker между pokes), poke_interval=300 (5 min balance: DB load vs feedback), timeout=86400 (24h), retries=0 (approval — not retry-able), notify approver только при FIRST poke (avoid spam, INSERT ON CONFLICT DO NOTHING)" },
+        { "id": "c", "text": "mode='poke', retries=10" },
+        { "id": "d", "text": "Использовать BashOperator" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production-grade approval sensor. mode='reschedule' — критично: poke mode keeps worker busy 24h × N concurrent = pool exhaustion. poke_interval=5min — balance DB load + responsiveness. timeout=24h reasonable для approval; expired → AirflowFailException → manual intervention. retries=0 — approval либо approved/rejected/expired, retry sensor nonsense. Notification только first poke (INSERT ON CONFLICT DO NOTHING — check new row inserted) — avoid 288 daily notifications в Slack.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-exam-q6",
+      "type": "true-false",
+      "question": "Listener API (модуль 12) лучше on_failure_callback для production alerting — global hook, runs across all DAGs, single source of truth, supports zombie events.",
+      "correctAnswer": true,
+      "explanation": "Listener API — production-стандарт для cross-cutting concerns в Airflow 2.5+. Преимущества: (1) Global — single plugin handles все DAGs, не нужно declare per-DAG; (2) Single source of truth — easier maintenance vs 50 callback functions; (3) More events — task lifecycle + scheduler events + zombie detection (callback не fired при worker died — zombie); (4) Plugin architecture — proper separation от DAG code. Callbacks — для DAG-specific business logic. Production typically uses Listener для alerting + callbacks для specific resource cleanup. Migration: easier с Listener — central plugin update vs 50 DAG modifications.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

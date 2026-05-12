@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/07-grafana-dashboards",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-07" },
+  "questions": [
+    {
+      "id": "airflow-m14-07-q1",
+      "type": "multiple-choice",
+      "question": "PromQL для scheduler.scheduler_loop_duration p95 per hostname. Какой правильный query?",
+      "options": [
+        { "id": "a", "text": "rate(airflow_scheduler_scheduler_loop_duration[5m])" },
+        { "id": "b", "text": "`histogram_quantile(0.95, sum(rate(airflow_scheduler_scheduler_loop_duration_bucket[5m])) by (le, hostname))` — histogram_quantile с _bucket suffix, rate over 5m window, sum по le (buckets) и hostname для per-scheduler breakdown" },
+        { "id": "c", "text": "avg(airflow_scheduler_scheduler_loop_duration)" },
+        { "id": "d", "text": "max(...)" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OTel histogram metrics в Prometheus: метрика name + `_bucket` suffix содержит cumulative bucket counts. histogram_quantile(percentile, bucket_metric) computes percentile. Wrap в rate() для time-based aggregation. sum() **обязательно по le** (bucket boundary) — это special label. Дополнительные labels (hostname) — для breakdown. Без _bucket suffix или без правильного sum() результат incorrect.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-07-q2",
+      "type": "multiple-choice",
+      "question": "Alert configuration: `for: 10m`. Зачем?",
+      "options": [
+        { "id": "a", "text": "Random parameter" },
+        { "id": "b", "text": "Фильтр transient noise: alert fires только если condition true 10 минут подряд. Без `for:` (или `for: 0s`) — false positives на короткие spikes (network blip, GC pause). Discipline: critical alerts `for: 2-5m`, warnings `for: 10-30m`" },
+        { "id": "c", "text": "Polling interval" },
+        { "id": "d", "text": "Retention period" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`for:` clause в Prometheus alert = required duration. Alert state goes: inactive → pending (condition met) → firing (condition met for `for:` duration). Без `for:` любая краткосрочная аномалия → immediate alert → false positives → alert fatigue → on-call ignores. Balance: too short = noise, too long = slow detection. Production: critical (page on-call) ~2-5m, warning (Slack) ~10-30m, info ~ 1h+.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-07-q3",
+      "type": "multiple-choice",
+      "question": "Топ 5 essential metrics для production scheduler health dashboard?",
+      "options": [
+        { "id": "a", "text": "CPU/RAM only" },
+        { "id": "b", "text": "(1) scheduler.scheduler_loop_duration p95, (2) dag_processing.total_parse_time, (3) dag_processing.import_errors, (4) executor.open_slots + queued_tasks, (5) DB connection pool usage. Эти 5 = canary для всех scheduler-related issues" },
+        { "id": "c", "text": "Только error count" },
+        { "id": "d", "text": "DAG run count" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Scheduler health = четыре аспекта: (1) Loop speed (loop_duration); (2) DAG parsing health (parse_time + import_errors — bad new DAG ломает parser); (3) Executor throughput (open_slots + queued_tasks — capacity bottleneck); (4) DB connectivity (pool usage — saturation = scheduler stuck). Эти metrics показывают 95% production issues. Все остальные (CPU, RAM, etc) — secondary, нужны для root cause analysis после signal от primary.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-07-q4",
+      "type": "true-false",
+      "question": "Runbook (action plan) обязателен для каждого alert. Без runbook on-call в 3 AM не знает что делать — открывает Google и теряет 30 минут на context-load. Production alert without runbook = техдолг.",
+      "correctAnswer": true,
+      "explanation": "Best practice: alert annotation `runbook` содержит step-by-step actions: (1) что проверить first (links на dashboards/queries); (2) common causes ranked by probability; (3) safe mitigation steps; (4) when to escalate. Это позволяет new on-call engineer reagировать в 3 AM без full context. Без runbook каждый incident = research from scratch → длинные MTTR. Best production playbook: runbook embedded в alert message (PagerDuty/Slack), links на dashboards с pre-filled queries, post-incident review обновляет runbook.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

@@ -1,0 +1,307 @@
+---
+title: "Capstone design — real-time orders ETL architecture"
+description: "Capstone проект: Real-time orders ETL — Postgres CDC → Kafka → Airflow (dataset-triggered) → Spark transformation → Iceberg → ClickHouse. Архитектура и обоснование решений"
+order: 2
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["Capstone", "Architecture", "CDC", "Kafka", "Iceberg", "ClickHouse"]
+---
+
+# Capstone design — real-time orders ETL architecture
+
+Этот модуль — capstone проект, объединяющий все killer-темы курса в реальный production pipeline. Это **dual purpose**: проверка усвоения материала + готовый template для production использования.
+
+В этом уроке — architecture design phase: что строим, почему именно так, какие компоненты выбраны, как они interact. Implementation phase (полный Python код) — в следующем уроке. K8s deployment — в 04. И финальные модули 05-09 — migration на 3.x.
+
+---
+
+## Бизнес-задача
+
+E-commerce платформа продаёт orders в реальном времени. Бизнес-команды требуют:
+
+1. **Real-time dashboards** в ClickHouse — orders, revenue, conversion rates с latency < 5 минут
+2. **Historical analytics** в Iceberg lakehouse — полная история, query через Trino/Spark SQL
+3. **Data lineage** — compliance team должна trace flow PII data
+4. **High reliability** — ETL должен work через RDS failover, K8s node restart, partial failures
+5. **Cost-effective** — < $10k/month infra при 1M orders/day
+
+Constraints:
+- Source — Postgres OLTP (production orders DB, нельзя query directly heavy)
+- Target dashboards — ClickHouse (для sub-second OLAP queries)
+- Lakehouse — Apache Iceberg (open format, future-proof)
+- Compute — Spark на Kubernetes (для transformations)
+- Orchestration — Airflow 2.10/2.11 (этот курс)
+
+---
+
+## High-level architecture
+
+<DiagramContainer title="Capstone — full pipeline architecture" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Postgres OLTP (orders DB)"
+        tooltip="Production source — orders, customers, line_items tables. RDS db.r6i.2xlarge Multi-AZ. ~1M orders/day, ~5M line_items/day. Чтения только через CDC stream — не heavy queries в OLTP."
+      >
+        RDS Postgres (production)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Debezium CDC (logical replication slot)" />
+    <FlowRow>
+      <DataBox
+        label="Kafka topics"
+        tooltip="3 topics: orders.public.orders, orders.public.line_items, orders.public.customers. 3 partitions each. Retention 7 days. Confluent Cloud managed Kafka."
+      >
+        Kafka (Confluent Cloud, 3 topics)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Dataset event triggers DAG" />
+    <FlowRow>
+      <DataBox
+        label="Airflow DAG (dataset-triggered)"
+        tooltip="Datasets (модуль 08): kafka_orders_dataset, kafka_line_items_dataset, kafka_customers_dataset. DAG triggers когда все 3 datasets обновлены. Scheduling — event-driven, не cron."
+      >
+        DAG: orders_etl_realtime
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Dynamic Task Mapping (per source)" />
+    <FlowRow>
+      <DataBox
+        label="3× consume_kafka tasks (mapped)"
+        tooltip="Dynamic Task Mapping (модуль 07): один task definition, mapped across 3 topics. consume_kafka.expand(topic=['orders', 'line_items', 'customers']). Каждый задача consumes свой topic в S3 staging."
+      >
+        consume_kafka.expand(topic=[...])
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="async sensor (deferrable)" />
+    <FlowRow>
+      <DataBox
+        label="wait_for_s3_staging (deferrable)"
+        tooltip="Deferrable sensor (модуль 09): S3KeySensorAsync waiting для consume_kafka выходных файлов. Не занимает worker slot — на triggerer asyncio. Поддерживает 1000+ concurrent waits."
+      >
+        S3KeySensorAsync (deferrable)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="K8s pod (heavy compute)" />
+    <FlowRow>
+      <DataBox
+        label="spark_transform (K8s executor)"
+        tooltip="Multiple Executors AIP-61 (2.10+): light tasks на CeleryExecutor, heavy Spark submit на KubernetesExecutor. Spark job reads S3 staging, performs joins/aggregations, writes к Iceberg."
+      >
+        SparkSubmitOperator (K8s exec)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Iceberg lakehouse" />
+    <FlowRow>
+      <DataBox
+        label="Iceberg tables"
+        tooltip="lakehouse.bronze.orders_raw (append), lakehouse.silver.orders_clean (MERGE INTO), lakehouse.gold.daily_revenue (aggregations). Partitioned by date. Glue Catalog для metastore."
+      >
+        Iceberg (Glue Catalog + S3)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="ClickHouse load (custom XCom)" />
+    <FlowRow>
+      <DataBox
+        label="clickhouse_load"
+        tooltip="Read Iceberg gold table (через PyIceberg), INSERT INTO ClickHouse через ClickHouseOperator. Custom XCom backend (модуль 06) для passing large dataframes между tasks — не через DB."
+      >
+        ClickHouseOperator
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Slack notify (deferrable)" />
+    <FlowRow>
+      <DataBox
+        label="notify_team"
+        tooltip="Final task — Slack notification с metrics (rows processed, duration, lineage URL в Marquez). OpenLineage events автоматически emit-ятся для всех tasks (модуль 14)."
+      >
+        SlackWebhookOperator + OL emission
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Component decisions
+
+### Why Postgres CDC через Debezium (не batch query)
+
+Альтернативы:
+- Batch query Postgres каждую минуту → load on OLTP, high latency
+- Postgres logical replication → no built-in routing
+- Debezium → CDC events в Kafka, decoupled, real-time
+
+Decision: **Debezium**. Industry-standard CDC, supports Postgres logical replication slot, emits well-structured events, integrates с Kafka.
+
+### Why Kafka между Debezium и Airflow
+
+- Buffer для latency mismatches (CDC может burst, Airflow scheduler batch)
+- Replay capability — Kafka retention 7 days, можно re-process если ETL bug
+- Multi-consumer — те же events могут потребляться другими консьюмерами (ML feature store, monitoring)
+- Decouples sources от consumers
+
+### Why Airflow Datasets для triggering (модуль 08)
+
+Альтернативы:
+- Cron schedule (every 5 minutes) → wasteful если no new data, lag если data more frequent
+- External trigger (webhook → Airflow API) → tightly coupled, complex auth
+- Datasets — declarative, native scheduling
+
+Decision: **Datasets**. DAG triggers когда все 3 source datasets обновлены. Sync с upstream без cron polling.
+
+### Why Dynamic Task Mapping для consume_kafka (модуль 07)
+
+3 Kafka topics → 3 separate consume tasks. Без mapping — duplicate code per topic. С mapping — `consume_kafka.expand(topic=[...])` — один task definition, 3 mapped TIs at runtime.
+
+Если topics растут (например 10 sources), mapping scales linearly без code change.
+
+### Why Deferrable Sensors (модуль 09)
+
+S3KeySensor (regular) занимает worker slot всё время waiting. Deferrable variant — на triggerer asyncio, releases worker. С 1000+ concurrent waits — критично.
+
+### Why Multiple Executors AIP-61 (2.10+)
+
+`spark_transform` — heavy task: Spark cluster submit, может занимать 30+ минут. Light tasks (consume_kafka, S3 sensors) — short, frequent.
+
+Multiple Executors позволяет mix: light на CeleryExecutor (fast scheduling overhead), heavy на KubernetesExecutor (per-task pod isolation, custom resources). One DAG — both executors.
+
+```python
+@task(executor="CeleryExecutor")
+def consume_kafka(): ...
+
+@task(executor="KubernetesExecutor")
+def spark_transform(): ...
+```
+
+### Why Iceberg lakehouse (не Hive / Delta)
+
+Iceberg gives:
+- Schema evolution без re-write
+- Hidden partitioning (automatic partition pruning)
+- Time travel queries
+- ACID guarantees
+- Open format — query через Spark, Trino, Athena, Snowflake, DuckDB
+- 2026 — de-facto стандарт для open lakehouse
+
+Delta Lake — viable alternative, но Iceberg более open (governance via Apache, не Databricks).
+
+### Why ClickHouse для dashboards
+
+- Sub-second OLAP queries on billions rows
+- MaterializedViews для realtime aggregations
+- Cost-effective vs Snowflake/BigQuery для high-cardinality dashboards
+- Open-source, hostable
+
+### Why custom XCom backend на S3 (модуль 06)
+
+Large dataframes между tasks (например, transform output → ClickHouse load) могут быть >> 48 KB lim XCom in DB. Custom XCom backend на S3 — pickled object stored на S3, only reference в XCom DB. Solves data size issue + improves DB performance.
+
+### Why OpenLineage (модуль 14)
+
+Compliance requirement. Marquez backend visualizes:
+```
+Postgres orders → Kafka → S3 staging → Iceberg bronze → silver → gold → ClickHouse → Dashboard
+```
+Full chain documented automatically. Critical для GDPR compliance ("где flow PII?").
+
+### Why Vault Secrets Backend (модуль 10)
+
+Production-grade. Connection passwords (RDS, Kafka, ClickHouse), API keys (Slack webhook) хранятся в Vault, не в Airflow DB. Cache TTL 60s для performance.
+
+### Why 2 schedulers + 2 triggerers (HA, модуль 15)
+
+Production-grade HA. Multi-region deployment не нужен для этого scale, но within-AZ redundancy обязательна. Scheduler HA через row-locks (модуль 04), Triggerer HA через assignment.
+
+---
+
+## Capacity planning
+
+Throughput:
+- 1M orders/day × 5 line_items/order = 5M line_items/day
+- 6M total events/day = ~70 events/second average, peak ~500 events/second
+- DAG runs ~every 5-10 minutes (dataset triggers) = ~250 runs/day
+
+Sizing:
+- **Airflow**: 2 schedulers, 2 webservers, 2 triggerers, 1 DAG processor, 4 Celery workers (light tasks). KubernetesExecutor для Spark.
+- **Kafka**: 3 topics × 3 partitions = small Confluent Cloud cluster
+- **Spark на K8s**: ephemeral cluster per run, 4 executors × m5.xlarge = ~$2-5 per run × 250 = $500-1250/month
+- **RDS Postgres** (Airflow metadata): db.m6i.xlarge Multi-AZ — ~$400/month
+- **ClickHouse**: managed Altinity/Aiven — ~$1000/month для medium cluster
+- **S3**: staging + Iceberg ~500 GB — ~$15/month
+- **Confluent Cloud Kafka**: ~$200/month (Standard tier)
+
+Total: **~$3000-5000/month** infra + Airflow team time.
+
+---
+
+## What this DAG demonstrates
+
+Чек-лист modules covered:
+
+| Module | Feature | Used в capstone |
+|---|---|---|
+| 04 — Scheduler internals | HA scheduler | 2 schedulers, row-locks |
+| 05 — Executors | Multiple Executors (AIP-61) | Celery + K8s mixed |
+| 06 — XCom | Custom XCom backend | S3 для large dataframes |
+| 07 — Dynamic Task Mapping | `.expand()` | consume_kafka per topic |
+| 08 — Datasets | dataset-triggered scheduling | 3 datasets trigger DAG |
+| 09 — Deferrable | Async sensors | S3KeySensorAsync |
+| 10 — Secrets | Vault backend | RDS/Kafka/CH credentials |
+| 11 — Pools | Resource pools | Spark pool, K8s pool |
+| 14 — OpenLineage | Auto-emission | Marquez полный lineage |
+| 15 — Production deploy | Helm, PgBouncer, HA | Production-grade infra |
+| 17 — Patterns | Idempotency, error handling | MERGE INTO, callbacks |
+
+---
+
+## What we explicitly NOT use
+
+| Feature | Why not |
+|---|---|
+| SubDAG operator | Deprecated (модуль 02) — заменён на TaskGroup |
+| Variable.get в top-level | Anti-pattern (модуль 02 quiz) — used inside tasks only |
+| trigger_rule='all_done' для cleanup | Modern Setup/Teardown lieferanten cleaner semantic |
+| Cron schedule | Datasets event-driven более responsive |
+| Heavy parsing in DAG body | Lazy imports inside tasks |
+| Single scheduler | HA mandatory для production |
+
+---
+
+## Production checklist
+
+Before deploying capstone DAG в production:
+
+- [ ] All tasks idempotent (модуль 17.02) — MERGE INTO везде
+- [ ] Backfill-safe — datetime.now() replaced на data_interval (модуль 17.05)
+- [ ] catchup=False (модуль 17.05)
+- [ ] max_active_runs=3 (resource control)
+- [ ] OpenLineage emission verified в Marquez
+- [ ] DAG validity tests passing (модуль 16.02)
+- [ ] Unit tests для custom XCom backend (модуль 16.03)
+- [ ] Integration test через airflow dags test (модуль 16.04)
+- [ ] Helm chart deployed с values reviewed (модуль 15.03)
+- [ ] PostgreSQL tuned (модуль 15.04)
+- [ ] Vault secrets configured (модуль 10)
+- [ ] Slack alerting через Listener API (модуль 17.08)
+- [ ] Documentation: README с architecture diagram
+
+---
+
+## Migration considerations к 3.x
+
+Capstone designed для smooth migration на 3.x:
+- TaskFlow API — single line change imports
+- Datasets → Assets — rename API но same concept
+- Standalone DAG Processor — already used (3.x mandatory)
+- No SubDAGs, no Flask-AppBuilder direct integration
+- Test SDK — ready для AIP-72 boundary
+
+Migration playbook — модуль 18.09. К моменту migration этот DAG будет работать almost без code changes.
+
+---
+
+<KnowledgeCheck
+  question="Capstone использует Datasets для DAG triggering, а не cron schedule. В каких сценариях event-driven scheduling даёт явное преимущество над cron, и какие у него tradeoffs?"
+  answer="Event-driven (Datasets) лучше cron когда: (1) **Variable upstream frequency** — если source data поступает irregular (CDC, file uploads), cron 'every 5 min' либо wastes runs (no new data), либо lags (data comes faster). Datasets — runs только когда data actually arrived. (2) **Multi-source dependencies** — capstone требует ALL 3 datasets (orders, line_items, customers) обновлены before DAG runs. Cron не может express это — нужен manual sensor logic. Datasets natively handle multi-dataset trigger. (3) **Loose coupling** между producer и consumer DAGs — producer не знает что consumer существует, datasets — interface. (4) **Compliance/audit** — dataset events captured в DB (модуль 08), can trace 'this run triggered by dataset X update at time Y'. Cron — no such audit. (5) **Cost efficiency** — high-frequency cron (every minute) — много idle runs, scheduler overhead. Datasets — exactly N runs needed. Tradeoffs cron has over datasets: (a) **Predictable timing** — cron 'every day at 6am' — exact, dataset 'when data arrives' — variable timing (might run at unexpected hours); (b) **Simpler debugging** — cron schedule deterministic, datasets require understanding upstream producer behavior; (c) **Better для time-based SLA** — 'daily report ready by 9am' easier с cron + checks vs dataset chain; (d) **Backfill semantics simpler** — cron has explicit data_interval, dataset triggers don't have natural interval (use data_interval_start от triggering event); (e) **External world doesn't have datasets** — если schedule connected к external event (open market hours, business calendar), cron + custom Timetable cleaner. **Hybrid pattern**: cron-scheduled DAG которая ALSO produces dataset events, downstream consumers chained via datasets. Best of both — predictable rhythm + decoupled downstream. Production: capstone использует datasets потому что CDC inherently event-driven; daily revenue reports cron-scheduled. Choose tool to match data nature."
+/>

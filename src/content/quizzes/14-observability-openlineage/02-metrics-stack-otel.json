@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/02-metrics-stack-otel",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-02" },
+  "questions": [
+    {
+      "id": "airflow-m14-02-q1",
+      "type": "multiple-choice",
+      "question": "AIP-49 (OpenTelemetry support) стабилизирован в какой версии Airflow?",
+      "options": [
+        { "id": "a", "text": "1.10.x" },
+        { "id": "b", "text": "2.10 — это main release с production-ready OTel stack: metrics, traces, logs. До этого был experimental в 2.7-2.9. В 3.x — default replacement для StatsD" },
+        { "id": "c", "text": "2.4" },
+        { "id": "d", "text": "Только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "AIP-49 разрабатывался итеративно: experimental metrics в 2.7, traces в 2.9, stable в 2.10. В 2.10/2.11 LTS — это **preferred** stack для observability. StatsD остаётся для backward compatibility, но в 3.x будет deprecated. Для greenfield deployments — начинайте с OTel.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-02-q2",
+      "type": "multiple-choice",
+      "question": "Параллельный запуск StatsD и OTel в Airflow 2.10. Зачем?",
+      "options": [
+        { "id": "a", "text": "Backup observability" },
+        { "id": "b", "text": "Gradual migration: оба `statsd_on=True` и `otel_on=True` одновременно. Старые dashboards/alerts продолжают работать на StatsD, новые строятся на OTel. После validation выключить StatsD" },
+        { "id": "c", "text": "Performance — double metrics" },
+        { "id": "d", "text": "Так нельзя делать" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production migration со StatsD на OTel — рискованная operation. Параллельный rollout позволяет: (1) старые Grafana dashboards/alerts продолжают функционировать (без 'observability downtime' во время migration); (2) команда строит новые OTel-based dashboards, validates accuracy; (3) после validation — отключить StatsD. Cost: double metric traffic (минимальный), double Collector load. Это feature, специально supported в 2.10+.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-02-q3",
+      "type": "multiple-choice",
+      "question": "Cardinality blow-up в OTel metrics — main risk. Какие labels избегать?",
+      "options": [
+        { "id": "a", "text": "dag_id" },
+        { "id": "b", "text": "Высоко-уникальные labels: run_id (UUID каждый run), task_instance_id, timestamps, user_id. Каждое уникальное combination = новая time series в Prometheus. Безопасные labels: dag_id, task_id, state, pool — low cardinality" },
+        { "id": "c", "text": "Все labels кроме metric_name" },
+        { "id": "d", "text": "Только string labels" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Prometheus time series count = product of unique label combinations. dag_id (~10k) × task_id (~20) × state (~5) = 1M series — manageable. Добавить run_id (UUID, unbounded growth) → series растёт каждый day. 100M series → Prometheus OOM, slow queries, expensive storage. **Best practice:** high-cardinality data (run_id, request_id) → в OTel **traces** (где cardinality fine). В metrics — только aggregatable labels.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-02-q4",
+      "type": "true-false",
+      "question": "OTel Collector — обязательный middleware между Airflow и backends (Prometheus/Tempo/Loki). Airflow эмитит в один OTLP endpoint, Collector маршрутизирует в нужные exporters параллельно.",
+      "correctAnswer": true,
+      "explanation": "OTel Collector — это центральный 'router' для observability data. Airflow конфигурится с одним endpoint Collector. Collector делает: (1) reception (OTLP gRPC/HTTP), (2) processing (batching, filtering, sampling, attributes), (3) export в multiple backends параллельно (Prometheus, Tempo, Loki, Datadog, custom). Это даёт vendor-neutrality — переключение backend не требует изменений в Airflow. Альтернатива (без Collector) — каждый component sends напрямую в backend, теряется централизованный control.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

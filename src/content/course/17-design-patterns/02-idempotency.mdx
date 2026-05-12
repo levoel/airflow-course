@@ -1,0 +1,457 @@
+---
+title: "Idempotency — MERGE INTO, atomic writes, deterministic paths"
+description: "Идемпотентность тасков — MERGE INTO vs INSERT, atomic writes через tmp+rename, deterministic file paths с ds, правила idempotent design"
+order: 2
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["Idempotency", "MERGE", "Atomic Writes", "Deterministic Paths", "Design Patterns"]
+---
+
+# Idempotency — MERGE INTO, atomic writes, deterministic paths
+
+Идемпотентность — это золотое правило production Airflow. **Задача должна быть переzapuskaema без побочных эффектов**. Это не academic concept, а практическое требование: tasks падают, retries срабатывают, manual reruns случаются ежедневно. Если task не идемпотентен — вместо ETL получается мусорная свалка с дубликатами и inconsistent state.
+
+Этот урок — конкретные техники для idempotent tasks: `MERGE INTO` вместо `INSERT`, atomic writes через tmp+rename, deterministic file paths на основе `{{ ds }}`, правила design которые автоматически делают tasks идемпотентными.
+
+---
+
+## Что значит «идемпотентный»
+
+Math definition: функция `f` идемпотентна если `f(f(x)) == f(x)`. Для Airflow tasks:
+
+```
+Запуск task для одного DagRun → результат R
+Повторный запуск того же task для того же DagRun → результат тот же R (или no-op)
+```
+
+Например, идемпотентная загрузка orders для 2026-05-12:
+- Первый запуск: 100 orders за 2026-05-12 загружены
+- Второй запуск (после failure / manual): те же 100 orders, **без дубликатов**, без missing rows
+
+Не-идемпотентный пример:
+
+```python
+# ❌ ПЛОХО — INSERT создаёт дубликаты при повторе
+@task
+def load_orders(date: str):
+    hook = PostgresHook(...)
+    hook.run(f"INSERT INTO orders SELECT * FROM staging WHERE ds = '{date}'")
+```
+
+Каждый retry → INSERT снова → 200 rows вместо 100.
+
+Идемпотентный:
+
+```python
+# ✅ ХОРОШО — MERGE по primary key, повтор не создаёт дубликатов
+@task
+def load_orders(date: str):
+    hook = PostgresHook(...)
+    hook.run(f"""
+    MERGE INTO orders tgt
+    USING (SELECT * FROM staging WHERE ds = '{date}') src
+      ON tgt.order_id = src.order_id
+    WHEN MATCHED THEN UPDATE SET ...
+    WHEN NOT MATCHED THEN INSERT ...
+    """)
+```
+
+---
+
+## Технология 1: MERGE INTO
+
+`MERGE INTO` (известный как UPSERT) — SQL standard для idempotent upserts. Поддерживается:
+
+| DB | Синтаксис |
+|---|---|
+| PostgreSQL 15+ | MERGE INTO (нативно) |
+| PostgreSQL < 15 | INSERT ... ON CONFLICT (UPSERT) |
+| Snowflake | MERGE INTO |
+| BigQuery | MERGE |
+| ClickHouse | ALTER TABLE ... UPDATE/INSERT |
+| Iceberg | MERGE INTO (Spark SQL) |
+
+### Postgres ON CONFLICT pattern
+
+```sql
+INSERT INTO orders (order_id, customer_id, amount, ds)
+SELECT order_id, customer_id, amount, ds
+FROM staging.orders_raw
+WHERE ds = '2026-05-12'
+ON CONFLICT (order_id)
+DO UPDATE SET
+    customer_id = EXCLUDED.customer_id,
+    amount = EXCLUDED.amount,
+    ds = EXCLUDED.ds,
+    updated_at = now();
+```
+
+`ON CONFLICT (order_id) DO UPDATE` — если row с этим order_id уже существует, update; иначе insert. **Идемпотентно**: повторный запуск даст тот же финальный state.
+
+### Snowflake MERGE INTO
+
+```sql
+MERGE INTO prod.orders tgt
+USING (
+    SELECT order_id, customer_id, amount, ds
+    FROM staging.orders_raw
+    WHERE ds = '2026-05-12'
+) src
+ON tgt.order_id = src.order_id
+WHEN MATCHED THEN UPDATE SET
+    customer_id = src.customer_id,
+    amount = src.amount,
+    updated_at = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED THEN INSERT (order_id, customer_id, amount, ds, updated_at)
+    VALUES (src.order_id, src.customer_id, src.amount, src.ds, CURRENT_TIMESTAMP());
+```
+
+### Patterns для composite keys
+
+```sql
+-- Composite key (order_id, line_item_id)
+MERGE INTO order_items tgt
+USING staging_order_items src
+ON tgt.order_id = src.order_id AND tgt.line_item_id = src.line_item_id
+WHEN MATCHED THEN UPDATE SET ...
+WHEN NOT MATCHED THEN INSERT ...;
+```
+
+---
+
+## Технология 2: DELETE + INSERT (если MERGE недоступен)
+
+Для databases без MERGE — atomic DELETE + INSERT в transaction:
+
+```python
+@task
+def reload_orders_partition(date: str):
+    hook = PostgresHook(...)
+    sql = f"""
+    BEGIN;
+    DELETE FROM orders WHERE ds = '{date}';
+    INSERT INTO orders SELECT * FROM staging.orders_raw WHERE ds = '{date}';
+    COMMIT;
+    """
+    hook.run(sql)
+```
+
+**Идемпотентно**: при retry старая partition удаляется + новая insertеsa. Финальный state identical.
+
+**Caveat**: lock на orders table между DELETE и INSERT. Для concurrent reads — может быть проблема. В production используйте partitioning (DROP partition + load) или MERGE.
+
+---
+
+## Технология 3: Atomic writes — tmp + rename
+
+Для файлов на S3/GCS/HDFS pattern «write to tmp, then rename»:
+
+```python
+@task
+def write_csv_atomic(s3_path: str, data: list[dict]):
+    """Atomic write: write to .tmp first, then rename."""
+    import boto3
+    s3 = boto3.client("s3")
+
+    bucket = s3_path.split("/")[2]
+    key = "/".join(s3_path.split("/")[3:])
+
+    tmp_key = f"{key}.tmp"
+    final_key = key
+
+    # 1. Write CSV в tmp location
+    csv_content = render_csv(data)
+    s3.put_object(Bucket=bucket, Key=tmp_key, Body=csv_content)
+
+    # 2. Atomic rename (S3: copy + delete, GCS: native rename)
+    s3.copy_object(
+        Bucket=bucket,
+        CopySource={"Bucket": bucket, "Key": tmp_key},
+        Key=final_key,
+    )
+    s3.delete_object(Bucket=bucket, Key=tmp_key)
+```
+
+**Почему это idempotent**: пока tmp не renamed, downstream consumers видят либо старый файл, либо новый — не partially-written состояние. При retry tmp перезаписывается, final обновляется — final state deterministic.
+
+<Callout type="warning">
+На S3 нет true atomic rename — это copy + delete. Между copy и delete есть короткое окно с обоими файлами. Для true atomic — используйте S3 versioning (старая версия hidden) или GCS native rename. На HDFS — `rename` атомарен.
+</Callout>
+
+### Spark output committers
+
+Spark v2 output committer уже делает tmp + rename автоматически. Spark v1 — не делает (был issue на S3 с partial outputs). Включить v2:
+
+```yaml
+spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version: 2
+```
+
+В Airflow SparkSubmitOperator:
+
+```python
+SparkSubmitOperator(
+    task_id="transform",
+    conf={
+        "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version": "2",
+        # Better: использовать S3A directly committers
+        "spark.hadoop.fs.s3a.committer.name": "directory",
+    },
+)
+```
+
+---
+
+## Технология 4: Deterministic paths с {{ ds }}
+
+Используйте data_interval / `ds` в путях:
+
+```python
+# ✅ ХОРОШО — deterministic
+@task
+def write_orders():
+    from airflow.operators.python import get_current_context
+    ds = get_current_context()["ds"]
+    path = f"s3://datalake/orders/dt={ds}/data.parquet"
+    write(path, data)
+
+# ❌ ПЛОХО — non-deterministic
+@task
+def write_orders():
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")  # Меняется каждый run!
+    path = f"s3://datalake/orders/{timestamp}.parquet"
+    write(path, data)
+```
+
+С deterministic path:
+- Backfill за прошлую дату → точно тот же путь
+- Retry → перезаписывается тот же файл (idempotent)
+- Downstream consumers видят стабильную схему путей
+
+С `datetime.now()` каждый retry — новый путь, старые orphan files накапливаются как мусор.
+
+### Partition strategy
+
+В data lake используйте partitioning по `ds`:
+
+```
+s3://datalake/orders/
+    dt=2026-05-10/
+        part-00000.parquet
+        part-00001.parquet
+    dt=2026-05-11/
+        part-00000.parquet
+    dt=2026-05-12/
+        part-00000.parquet
+```
+
+Idempotent reload partition:
+
+```python
+@task
+def reload_partition(ds: str, data: list):
+    import boto3
+    s3 = boto3.client("s3")
+    prefix = f"orders/dt={ds}/"
+
+    # 1. Delete старая partition
+    objects = s3.list_objects_v2(Bucket="datalake", Prefix=prefix).get("Contents", [])
+    for obj in objects:
+        s3.delete_object(Bucket="datalake", Key=obj["Key"])
+
+    # 2. Write новая partition
+    write_parquet(f"s3://datalake/{prefix}part-00000.parquet", data)
+```
+
+При retry старая partition удаляется + новая пишется. Final state deterministic.
+
+---
+
+## Правила idempotent task design
+
+Чтобы task был idempotent by construction:
+
+### Rule 1 — Read-only operations always idempotent
+
+```python
+@task
+def fetch_count() -> int:
+    return PostgresHook().get_first("SELECT count(*) FROM orders")[0]
+```
+
+`SELECT` идемпотентен trivially. Read-only tasks — safest.
+
+### Rule 2 — Writes должны быть deterministic per data_interval
+
+```python
+# Idempotent: операция определена data_interval, не временем execution
+@task
+def aggregate_daily_revenue(data_interval_start: datetime, data_interval_end: datetime):
+    sql = f"""
+    INSERT INTO daily_revenue
+    SELECT date_trunc('day', created_at) AS dt, sum(amount)
+    FROM orders
+    WHERE created_at >= '{data_interval_start}' AND created_at < '{data_interval_end}'
+    GROUP BY 1
+    ON CONFLICT (dt) DO UPDATE SET amount = EXCLUDED.amount;
+    """
+    PostgresHook().run(sql)
+```
+
+Каждый run обрабатывает свой data_interval, ON CONFLICT обеспечивает idempotency.
+
+### Rule 3 — External calls должны быть retry-safe
+
+```python
+@task
+def send_notification_idempotent(order_id: str):
+    """Использует idempotency_key — Twilio/Stripe/Slack support этого."""
+    response = requests.post(
+        "https://api.twilio.com/...",
+        headers={"Idempotency-Key": f"order-{order_id}"},
+        json={"message": f"Order {order_id} shipped"},
+    )
+```
+
+Idempotency keys — стандарт у serious APIs. Tw lo, Stripe, Square, AWS SQS — все поддерживают. Если API не поддерживает — рассмотреть alternative или add tracking table:
+
+```python
+@task
+def send_with_tracking(order_id: str):
+    """Track sent в DB — skip if already sent."""
+    hook = PostgresHook()
+    already_sent = hook.get_first(
+        f"SELECT 1 FROM sent_notifications WHERE order_id = '{order_id}'"
+    )
+    if already_sent:
+        return "already-sent"
+
+    send_to_api(order_id)
+    hook.run(f"INSERT INTO sent_notifications VALUES ('{order_id}', now())")
+```
+
+### Rule 4 — Avoid `datetime.now()` and other non-deterministic
+
+```python
+# ❌ ПЛОХО
+@task
+def write_report():
+    report_date = datetime.now().strftime("%Y%m%d")
+    write(f"report_{report_date}.csv", data)
+
+# ✅ ХОРОШО
+@task
+def write_report(**context):
+    ds = context["ds"]
+    write(f"report_{ds.replace('-', '')}.csv", data)
+```
+
+### Rule 5 — Audit trail для observability
+
+Idempotent + observable: добавьте audit table
+
+```sql
+CREATE TABLE etl_audit (
+    dag_id VARCHAR,
+    task_id VARCHAR,
+    run_id VARCHAR,
+    ds DATE,
+    rows_processed INT,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    PRIMARY KEY (dag_id, task_id, run_id)
+);
+```
+
+```python
+@task
+def load_with_audit(ds: str):
+    hook = PostgresHook()
+    started = datetime.utcnow()
+
+    # Idempotent insert into audit
+    hook.run(f"""
+    INSERT INTO etl_audit VALUES (
+        '{{{{ dag.dag_id }}}}', 'load', '{{{{ run_id }}}}', '{ds}', 0, '{started}', NULL
+    ) ON CONFLICT (dag_id, task_id, run_id) DO UPDATE SET started_at = EXCLUDED.started_at;
+    """)
+
+    # Реальная работа (MERGE)
+    rows = run_merge(ds)
+
+    # Update audit
+    hook.run(f"""
+    UPDATE etl_audit SET rows_processed = {rows}, completed_at = now()
+    WHERE dag_id = '{{{{ dag.dag_id }}}}' AND task_id = 'load' AND run_id = '{{{{ run_id }}}}';
+    """)
+```
+
+---
+
+## Идемпотентность Setup/Teardown
+
+Setup/Teardown (модуль 02) — особый случай. Setup создаёт ephemeral resource, teardown удаляет.
+
+```python
+@task
+def create_cluster() -> str:
+    """Setup — create EMR cluster."""
+    cluster_id = boto3.client("emr").run_job_flow(
+        Name=f"airflow-{{{{ ds }}}}",  # deterministic name
+        ...
+    )["JobFlowId"]
+    return cluster_id
+
+@task
+def terminate_cluster(cluster_id: str):
+    """Teardown — delete EMR cluster."""
+    boto3.client("emr").terminate_job_flows(JobFlowIds=[cluster_id])
+
+# В DAG
+create = create_cluster.as_setup()
+teardown = terminate_cluster.as_teardown(setups=create)
+```
+
+**Idempotent gotcha**: повторный `create_cluster.execute()` создаёт **новый** cluster. Старый orphan! Mitigations:
+- Tag cluster с `dag_id={{ dag_id }} run_id={{ run_id }}` — at retry, найти existing с тем же tag и reuse, не создавать new
+- Cleanup task с trigger_rule='all_done' — удалить any cluster с tag
+
+```python
+@task
+def create_cluster_idempotent(**context) -> str:
+    """Find existing or create new."""
+    tag = f"airflow-{context['run_id']}"
+    existing = find_cluster_by_tag(tag)
+    if existing:
+        return existing  # Reuse — idempotent
+
+    cluster_id = boto3.client("emr").run_job_flow(
+        Name=tag,
+        Tags=[{"Key": "AirflowRun", "Value": tag}],
+        ...
+    )["JobFlowId"]
+    return cluster_id
+```
+
+---
+
+## Production gotchas
+
+**MERGE с computed columns**. Если target table имеет `updated_at = now()` trigger или computed columns, MERGE может give different results между runs (timestamp меняется). Это OK — но не считайте row-by-row identical между retries.
+
+**ON CONFLICT с partial indexes**. PostgreSQL `ON CONFLICT (col1, col2)` требует unique constraint на (col1, col2). Без него — `error: there is no unique or exclusion constraint matching`. Создайте constraint первым.
+
+**Snowflake MERGE — slow для большой target table**. MERGE сканирует target — на 100M rows это медленно. Лучше: stream INSERT в `daily_partition` table, потом periodic MERGE в master.
+
+**S3 eventual consistency**. PUT-after-PUT now consistent (since Dec 2020), но LIST-after-PUT может lag. Не полагайтесь на `list_objects` сразу после `put_object`.
+
+**Idempotent != correct**. Idempotent guarantee "повтор даёт тот же state", но не "state правильный". Bug в SQL даст consistently wrong result. Idempotency защищает от retries, не от bugs.
+
+**Lambdas и serverless — idempotent often requires extra work**. AWS Lambda invocations могут duplicate (at-least-once delivery от SQS). Use idempotency keys.
+
+---
+
+<KnowledgeCheck
+  question="Production DAG load_orders делает INSERT INTO orders SELECT FROM staging. Один раз task failed на 50% completion (network blip), retry succeeded. Через неделю QA замечают дубликаты в orders. Что произошло и как fix без data migration?"
+  answer="Classic non-idempotent INSERT issue. Failed task на 50% — uncommitted transaction rolled back, OR commit happened за batch chunks (если streaming insert). Retry от Airflow — task запустился полностью, добавил 100% rows. Net result: ~50% duplicates. Fixes (по приоритету): (1) **Immediate fix (cleanup data)**: `DELETE FROM orders WHERE (order_id, ds) NOT IN (SELECT MIN(order_id), ds FROM orders GROUP BY order_id, ds)` — оставляет только первую копию. Verify count = expected. (2) **Long-term fix code change**: replace INSERT на MERGE INTO с unique key (PostgreSQL ON CONFLICT (order_id) DO UPDATE — preserves first version, updates на retry). Code change minimal — wrap existing SELECT в ON CONFLICT clause. (3) **Add unique constraint** на (order_id) для prevent future duplicates на DB level. Если duplicates существуют — `CREATE UNIQUE INDEX CONCURRENTLY` (без блокировки) — provides safety net. (4) **Audit trail** — add etl_audit table с (dag_id, run_id, ds, rows_processed). Permits detection 'duplicate run' пораньше — alert если COUNT(*) > expected. (5) **Test для регрессии**: integration test через airflow tasks test — запустить дважды, assert count(orders WHERE ds='X') не меняется. Lesson learned: каждый INSERT в production должен иметь plan для retry scenario. MERGE/UPSERT — default pattern. Pure INSERT — только для append-only logs (даже там — duplicate detection downstream). Идемпотентность — это не nice-to-have, это foundation of reliable ETL."
+/>

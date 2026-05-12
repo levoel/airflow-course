@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "05-executors/02-local-executor",
+  "moduleId": "05-executors",
+  "_meta": { "idPrefix": "airflow-m05-02" },
+  "questions": [
+    {
+      "id": "airflow-m05-02-q1",
+      "type": "multiple-choice",
+      "question": "Где живёт LocalExecutor с точки зрения процессов?",
+      "options": [
+        { "id": "a", "text": "В отдельном process (как Celery worker)" },
+        { "id": "b", "text": "Внутри scheduler-процесса; на enqueue forkает N worker processes, которые в свою очередь запускают subprocess `airflow tasks run`" },
+        { "id": "c", "text": "В K8s pod" },
+        { "id": "d", "text": "В Redis" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "LocalExecutor — instance внутри scheduler-процесса. На каждый enqueue делает put в multiprocessing.Queue. N forked worker processes (по parallelism) подбирают и запускают subprocess.check_call(['airflow', 'tasks', 'run', ...]). Итого процессов на ноде: scheduler(1) + workers(N) + subprocesses(до N). На parallelism=32 — 64+ Python процесса.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-02-q2",
+      "type": "multiple-choice",
+      "question": "На ноде 8 CPU / 16 GB RAM настроили `parallelism=64`. Scheduler OOM. Почему?",
+      "options": [
+        { "id": "a", "text": "Слишком много CPU" },
+        { "id": "b", "text": "Каждый worker ~200 MB + subprocess ~250 MB → 64 × 450 = ~29 GB > 16 GB RAM. Плюс scheduler, DAG parsing, webserver. Reduce parallelism до 16-24" },
+        { "id": "c", "text": "Это bug в Airflow" },
+        { "id": "d", "text": "Postgres не справляется" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Каждый LocalExecutor worker процесс + его subprocess занимают ~400-500 MB RES (bare Airflow). При parallelism=64 это требует ~29 GB только на executor footprint, плюс scheduler ~500 MB, plus DAG parser, plus webserver. На 16 GB машине превышено в 2x. Формула: parallelism ≈ min(2 × CPU, RAM_GB × 2). Также DB connections (default max_connections=100) хитятся — нужен PgBouncer.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-02-q3",
+      "type": "multiple-choice",
+      "question": "Зачем worker процесс LocalExecutor запускает subprocess `airflow tasks run` вместо прямого вызова user callable?",
+      "options": [
+        { "id": "a", "text": "Для скорости" },
+        { "id": "b", "text": "Isolation от user code crashes — exception в task убивает только subprocess, не worker и не scheduler; также re-import DAG даёт свежий state" },
+        { "id": "c", "text": "Это legacy" },
+        { "id": "d", "text": "Чтобы было совместимо с CeleryExecutor" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Subprocess isolation — если user callable делает segfault, infinite loop, или другой crash — subprocess умирает, worker подбирает следующий task. Без subprocess — crash в user code мог бы убить worker. Bonus — subprocess делает fresh DAG import (нет globals contamination между tasks). Trade-off — ~1-2s overhead на task startup (Python interpreter + DAG parse).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m05-02-q4",
+      "type": "true-false",
+      "question": "SequentialExecutor можно использовать в production для small deployments — он медленнее LocalExecutor, но даёт лучшую durability через SQLite.",
+      "correctAnswer": false,
+      "explanation": "SequentialExecutor категорически НЕ для production. Это вырожденный LocalExecutor с parallelism=1 — выполняет tasks последовательно, блокируется на первой long task. Совместим только с SQLite (которая сама не для production — single-writer). Оставлен в 2.x только для `airflow standalone` smoke-tests и CI. Удалён в 3.0. Production — LocalExecutor + PostgreSQL (минимум) или Celery/K8s.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

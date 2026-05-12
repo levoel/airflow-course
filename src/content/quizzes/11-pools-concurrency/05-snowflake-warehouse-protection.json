@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "11-pools-concurrency/05-snowflake-warehouse-protection",
+  "moduleId": "11-pools-concurrency",
+  "_meta": { "idPrefix": "airflow-m11-05" },
+  "questions": [
+    {
+      "id": "airflow-m11-05-q1",
+      "type": "multiple-choice",
+      "question": "У Snowflake warehouse L (8 credits) MAX_CONCURRENCY_LEVEL=8. Один pool slots=8 для всех queries — что не так?",
+      "options": [
+        { "id": "a", "text": "Всё ок, это правильно" },
+        { "id": "b", "text": "Lightweight read queries весят ~0.1 credit, можно 16-50 параллельных. Heavy ETL — ~1-2 credit, max 4 параллельных. Один pool — компромисс: либо упираемся на read, либо положим warehouse heavy. Split на snowflake_l_read (16) + snowflake_l_etl (4) — production pattern" },
+        { "id": "c", "text": "Это всегда лучше" },
+        { "id": "d", "text": "Pool slots должен быть всегда 1" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Split per query class — главный production pattern. Read queries — много lightweight параллельных (warehouse сам priority queue), ETL — max 4 чтобы не положить. Если single pool=8: read упирается (хотим 16+), если single pool=16: ETL положит warehouse. Split даёт isolation: read саtuрация не влияет на ETL.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-05-q2",
+      "type": "multiple-choice",
+      "question": "RDS Postgres за PgBouncer (pool_size=20 для DB 'orders'). Сколько slots ставить на Airflow pool 'rds_orders'?",
+      "options": [
+        { "id": "a", "text": "100 — пусть Airflow throughput не ограничен" },
+        { "id": "b", "text": "20 — sync с PgBouncer pool_size, иначе TI висит на acquire connection. Можно split — rds_orders_writes=6 + rds_orders_reads=14 (через replica) — для isolation read/write" },
+        { "id": "c", "text": "1 — sequential safer" },
+        { "id": "d", "text": "Это не важно" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Airflow pool слотов === PgBouncer pool_size. Если Airflow раздаёт больше — TI получит connection error 'no available connections'. Split read/write: writes на primary (6 slots), reads через replica (14 slots) — isolation для read latency и protection от lock contention writes.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m11-05-q3",
+      "type": "multiple-choice",
+      "question": "Cost control — почему pool slots=4 (predictable) лучше unlimited concurrency (быстрее backfill)?",
+      "options": [
+        { "id": "a", "text": "Pool всегда быстрее" },
+        { "id": "b", "text": "Predictability vs raw speed trade-off. С pool=4 на Snowflake L: stable 1 cluster $24/hour. Без pool: auto-scale multi-cluster 4×$24=$96/hour spike. Cost variance уходит, on-call предсказуемее, no surprises на bill. Производственный default — predictability" },
+        { "id": "c", "text": "Pool не влияет на cost" },
+        { "id": "d", "text": "Pool делает быстрее" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Pool — это economic trade-off. Без pool 100 queries × 10min = ~30 min realtime $96. С pool=4: 250min realtime $96 (тот же total cost). НО: cost variance, peak load predictable, no surprise multi-cluster auto-scale. Production почти всегда выбирает predictability.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m11-05-q4",
+      "type": "true-false",
+      "question": "Pool — это полная защита внешнего resource: если у warehouse есть Airflow pool с slots=8, никто другой не может его использовать больше 8 раз параллельно.",
+      "correctAnswer": false,
+      "explanation": "Pool ограничивает только Airflow scheduling. Если та же Snowflake warehouse используется из dbt Cloud, BI tool (Looker), ad-hoc users через SnowSQL — они не видят Airflow pool. Pool это часть cost strategy, не серебряная пуля. Comprehensive resource protection требует Snowflake-side RESOURCE_MONITOR (warehouse-level credit limit) + Airflow pools + ограничения других consumers.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

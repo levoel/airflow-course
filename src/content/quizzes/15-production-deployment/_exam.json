@@ -1,0 +1,89 @@
+{
+  "moduleId": "15-production-deployment",
+  "title": "Module 15 Exam — Production Deployment",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m15-exam",
+    "description": "6-question integrated exam for Module 15"
+  },
+  "questions": [
+    {
+      "id": "airflow-m15-exam-q1",
+      "type": "multiple-choice",
+      "question": "Production sizing для medium Airflow (200 DAGs, 30k TI/day). Какая конфигурация оптимальна?",
+      "options": [
+        { "id": "a", "text": "1 scheduler, 1 webserver, 1 worker, RDS db.t3.medium" },
+        { "id": "b", "text": "10 schedulers для maximum throughput" },
+        { "id": "c", "text": "2 schedulers + 1 standalone DAG processor + 2 triggerers + 2-3 webservers + 4-12 workers (KEDA autoscale) + db.m6i.xlarge Multi-AZ + PgBouncer pool=50" },
+        { "id": "d", "text": "Без HA для cost saving" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Medium deployment baseline: 2 schedulers (HA via row-locks), 1 standalone DAG processor (separate parsing from scheduling), 2 triggerers (HA для deferrable), 2-3 webservers (stateless), 4-12 workers с KEDA autoscaling по Celery queue length. RDS db.m6i.xlarge (~4 vCPU, 16 GB) Multi-AZ для critical workloads. PgBouncer mandatory с pool_size=50 — без него scheduler tick исчерпывает PG connections. 10 schedulers НЕ имеют смысла (модуль 04 critical section serialized).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-exam-q2",
+      "type": "multiple-choice",
+      "question": "После upgrade Airflow 2.10 → 2.11 webserver UI открывается за 15s (раньше 1-2s). pg_stat_statements top — SELECT FROM dag_run WHERE state. Что делать?",
+      "options": [
+        { "id": "a", "text": "Rollback upgrade" },
+        { "id": "b", "text": "Add больше webservers" },
+        { "id": "c", "text": "Diagnose: проверить idx_dag_run_state_dag_id + n_dead_tup. Apply: agressive autovacuum (scale_factor=0.05), airflow db clean --keep-last 30, pg_partman partition dag_run monthly + retention. Долгосрочно — VACUUM FULL maintenance window" },
+        { "id": "d", "text": "Перезапустить scheduler" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Slow query на dag_run = распухшая таблица или missing indexes. Steps: (1) CREATE INDEX CONCURRENTLY если missing; (2) check n_dead_tup, run VACUUM ANALYZE если высокий; (3) ALTER TABLE dag_run SET (autovacuum_vacuum_scale_factor=0.05); (4) airflow db clean --keep-last 30; (5) Долгосрочно — pg_partman partition по start_date monthly с retention 90 days. Rollback — крайнее средство. Add webservers не поможет — bottleneck в DB.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m15-exam-q3",
+      "type": "multiple-choice",
+      "question": "Multi-cloud (AWS + GCP), нужен KubernetesPodOperator, требование быть на latest Airflow 2.11 + быстро 3.x. Что выбрать?",
+      "options": [
+        { "id": "a", "text": "MWAA — нет K8s executor + slow rollout" },
+        { "id": "b", "text": "Cloud Composer — single cloud" },
+        { "id": "c", "text": "Astronomer Astro — единственный multi-cloud, поддерживает CeleryKubernetesExecutor (mixed), rollout new versions через ~1 неделю после release" },
+        { "id": "d", "text": "Self-host везде" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Только Astronomer удовлетворяет all требованиям: multi-cloud (AWS+GCP+Azure regions), CeleryKubernetesExecutor mixed (light на Celery, heavy на K8s), fastest new version rollout (engineers Astronomer = major Airflow contributors). MWAA — only Celery, slow rollout. Composer — GCP only. Self-host работает но требует 3× SRE для трёх clouds — экономически невыгодно. Astro premium ($1500-3000/mo) compensated отсутствием SRE overhead.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m15-exam-q4",
+      "type": "multiple-choice",
+      "question": "Fernet key rotation в production без downtime — корректная процедура?",
+      "options": [
+        { "id": "a", "text": "Просто заменить key и restart" },
+        { "id": "b", "text": "(1) Сгенерировать new key; (2) Set multi-key через comma-separated (новый,старый) — старый decrypts, новый new encrypts; (3) Rolling restart components; (4) airflow rotate-fernet-key (re-encrypt всё новым); (5) Verify connections list; (6) Remove старый key; (7) Restart" },
+        { "id": "c", "text": "Drop database и recreate" },
+        { "id": "d", "text": "Невозможно без downtime" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Airflow поддерживает multi-key через comma-separated в [core] fernet_key. Старый key используется для decrypt existing data, новый — для new encryptions. После restart components: airflow rotate-fernet-key команда (2.4+) делает SELECT всех encrypted columns + decrypt старым + encrypt новым + UPDATE. После завершения проверить connections readable, потом убрать старый key из multi-key. КРИТИЧЕСКАЯ ошибка — удалить старый key ДО rotate-fernet-key завершён.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-exam-q5",
+      "type": "multiple-choice",
+      "question": "Quarterly chaos drill — kill scheduler pod. Что должно случиться?",
+      "options": [
+        { "id": "a", "text": "Все DagRuns failе" },
+        { "id": "b", "text": "Cluster полностью down" },
+        { "id": "c", "text": "Через 30s (scheduler_health_check_threshold) второй scheduler запускает adopt_or_reset_orphaned_tasks, забирает осиротевшие TI. Новый pod respawned через Deployment. Никаких потерянных tasks. Verify через SELECT count FROM ti WHERE queued_dttm < now() - 5min = 0" },
+        { "id": "d", "text": "Нужен manual recovery" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "HA scheduler через row-level locks (модуль 04). При смерти scheduler-1: latest_heartbeat в job table перестаёт обновляться. Через 30s scheduler-2 в housekeeping phase делает adopt_or_reset_orphaned_tasks — UPDATE job SET state='failed' WHERE latest_heartbeat < now() - 30s, плюс reset orphan TI в scheduled. Все TI продолжают processing. Если chaos drill показал manual recovery нужен — это сигнал misconfiguration (replicas=1, anti-affinity wrong, scheduler_health_check_threshold не set).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m15-exam-q6",
+      "type": "true-false",
+      "question": "Airflow 2.11 LTS — последний LTS в 2.x ветке. Поддержка patches и security fixes до Q3 2027. Production deployments в 2026 могут оставаться на 2.11 без необходимости миграции на 3.x.",
+      "correctAnswer": true,
+      "explanation": "2.11 — последний LTS в 2.x ветке. Security fixes и patches до ~Q3 2027 (2-year LTS период). Production deployments могут спокойно остаться на 2.11 — migration на 3.x — это major architectural shift (Task SDK, FastAPI, FAB removal — модуль 18), не косметический upgrade. Большинство 2026-deployments на 2.10/2.11. Спешка не нужна. Migration на 3.x — planned event с staging testing минимум 2 недели.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

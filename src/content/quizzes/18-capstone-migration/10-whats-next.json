@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/10-whats-next",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-10" },
+  "questions": [
+    {
+      "id": "airflow-m18-10-q1",
+      "type": "multiple-choice",
+      "question": "Какие resources наиболее useful для continuous Airflow learning?",
+      "options": [
+        { "id": "a", "text": "Только official docs" },
+        { "id": "b", "text": "Layered: (1) Official docs — primary reference; (2) Apache Airflow Slack (~50k members) — fastest community Q&A; (3) Astronomer Academy — free courses + certification; (4) Airflow Summit recordings — annual conference talks; (5) AIP documents — architectural decisions context; (6) GitHub release notes — каждый release" },
+        { "id": "c", "text": "YouTube videos only" },
+        { "id": "d", "text": "Books только" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Multi-source learning: official docs (canonical reference), Slack community (real-time help, ~50k members в 2026), Astronomer Academy (structured courses + cert valued в hiring), Airflow Summit (annual deep-dives, YouTube), AIPs (architectural decisions у/why), release notes (каждые ~6 months major changes). No single source sufficient. Books less effective (outdated quickly), but 'Data Pipelines with Apache Airflow' (Manning) — solid foundation.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-10-q2",
+      "type": "multiple-choice",
+      "question": "Дagster vs Airflow — main philosophical difference?",
+      "options": [
+        { "id": "a", "text": "Только syntax" },
+        { "id": "b", "text": "Dagster — asset-first (software-defined assets с type signatures, schema validation, materialization). Airflow — task-first (workflows как graphs of tasks). Same problem different mental model. Dagster better для analytics engineering / ML; Airflow better для general-purpose batch ETL" },
+        { "id": "c", "text": "Performance" },
+        { "id": "d", "text": "Cloud-only" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Dagster asset-first paradigm: каждый asset = function producing data, with declared inputs/outputs, types, schema. UI shows materializations (asset → asset graph). Airflow task-first: workflow = graph of operations. Dagster strengths: type safety, dbt integration, ML pipelines, analytics. Airflow strengths: broader ecosystem (3000+ providers), batch ETL maturity, larger community. Right tool depends on team focus — both valid choices в 2026.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-10-q3",
+      "type": "multiple-choice",
+      "question": "Junior engineer asks: 'Все в 2026 — должен focus на 2.x или прямо 3.x?'",
+      "options": [
+        { "id": "a", "text": "Только 3.x" },
+        { "id": "b", "text": "2.x first, then 3.x. Production reality 2026: 90%+ deployments на 2.x. Job interviews test 2.x. 3.x evolutionary — concepts identical (DAGs, tasks). Skip 2.x = miss context production code актively maintained. Migration knowledge sought after. Plan: 2.x foundations 6 months, then 3.x transition next 3 months" },
+        { "id": "c", "text": "Skip both, use Dagster" },
+        { "id": "d", "text": "Только 2.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Pragmatic recommendation: focus 2.x foundations first. Reasons: (1) Production reality — 90% deployments на 2.x в 2026; (2) Job market — tests 2.x knowledge; (3) 3.x evolutionary — TaskFlow, Datasets, scheduler concepts identical; (4) 2.11 LTS supported до 2027; (5) Understanding 'why 3.x' requires 2.x context. Plan: 2.x deep (6 months) → 3.x transition (3 months). Migration knowledge valuable — companies hire engineers who understand BOTH versions.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m18-10-q4",
+      "type": "true-false",
+      "question": "Senior Airflow engineer должен know альтернативы (Dagster, Prefect, Temporal, Argo) даже если стоит на Airflow в работе.",
+      "correctAnswer": true,
+      "explanation": "Architectural breadth distinguishes senior engineers. Knowing alternatives: (1) Make better decisions ('Airflow vs Dagster для этого ML pipeline'); (2) Recognize Airflow's strengths/weaknesses honestly; (3) Avoid 'hammer-nail' fallacy (every problem looks like cron); (4) Interview discussions value perspective; (5) Migration projects sometimes require evaluation other tools. Senior signal — 'I know when NOT to use Airflow'. Doesn't mean expert in all — strong Airflow + working knowledge alternatives.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

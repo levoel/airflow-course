@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "10-connections-secrets/02-connections-fundamentals",
+  "moduleId": "10-connections-secrets",
+  "_meta": { "idPrefix": "airflow-m10-02" },
+  "questions": [
+    {
+      "id": "airflow-m10-02-q1",
+      "type": "multiple-choice",
+      "question": "Какие именно поля Connection шифруются Fernet в metadata DB?",
+      "options": [
+        { "id": "a", "text": "Все поля" },
+        { "id": "b", "text": "Только password" },
+        { "id": "c", "text": "password и extra (JSON) — остальные fields (host, login, port, schema) хранятся plaintext" },
+        { "id": "d", "text": "Только conn_type" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Fernet шифрует только два столбца: password и extra. Это column-level encryption. Остальные fields — host, login, port, schema, conn_type, description — plaintext в DB. Это значит: имея read-only access к metadata DB, злоумышленник видит host, login, port, schema всех connections. Защита: TLS to DB, network policies, RBAC на DB level, audit логи запросов.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m10-02-q2",
+      "type": "multiple-choice",
+      "question": "Password содержит символ @ — какая проблема и решение для AIRFLOW_CONN_* URI?",
+      "options": [
+        { "id": "a", "text": "Не работает в Python 3.x" },
+        { "id": "b", "text": "URI parser ломается: 'user:p@ss@host' → 'p' password, 'ss@host' host. Fix: URL-encode password (urllib.parse.quote_plus → '%40'). В UI этой проблемы нет — password отдельное поле формы" },
+        { "id": "c", "text": "Это Airflow bug" },
+        { "id": "d", "text": "Нужно изменить Postgres" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Special chars в password ломают URI parsing. Encode перед использованием в AIRFLOW_CONN_*: quote_plus('p@ss/word#1') = 'p%40ss%2Fword%231'. Символы, требующие encoding: @ / : # ? & = + space. Через UI password — отдельное form field, парсинг не нужен. Через CLI: --conn-uri с encoded password, или используйте --conn-password + другие individual fields.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m10-02-q3",
+      "type": "multiple-choice",
+      "question": "BaseHook.get_connection(conn_id) — как именно разрешается connection?",
+      "options": [
+        { "id": "a", "text": "Только из metadata DB" },
+        { "id": "b", "text": "Через Connection.get_connection_from_secrets, который запускает lookup chain: Secrets Backend → AIRFLOW_CONN_<NAME> env → metadata DB. Первый non-None wins" },
+        { "id": "c", "text": "Каждый Hook сам реализует lookup" },
+        { "id": "d", "text": "Только через ENV vars" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "BaseHook.get_connection — classmethod, делегирующий Connection.get_connection_from_secrets(conn_id). Эта функция iterates по secrets_backend_list: (1) configured Backend (Vault/AWS SM/GCP SM), (2) ENV var AIRFLOW_CONN_<KEY>, (3) metadata DB. Первый stage, возвращающий не-None Connection object, wins. None means 'not found, try next'. Hook получает Connection object с уже расшифрованным password (Fernet применяется в DB stage automatically через property descriptor).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m10-02-q4",
+      "type": "true-false",
+      "question": "В Airflow 2.10/2.11 Test Connection feature в UI by default DISABLED — нужно явно установить `[core] test_connection = Enabled` в airflow.cfg для активации.",
+      "correctAnswer": true,
+      "explanation": "После CVE про SSRF (Server-Side Request Forgery) через misuse Test Connection — Airflow disabled feature by default. Опции: 'Disabled' (полностью блокировать), 'Hidden' (default — button hidden, API endpoint disabled), 'Enabled' (full feature). Production: оставлять Hidden / Disabled. Webserver обычно не должен иметь network access к target системам (e.g. internal Postgres), это leak surface. Тестирование connections — лучше делать через worker job или CLI airflow connections test <id>.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

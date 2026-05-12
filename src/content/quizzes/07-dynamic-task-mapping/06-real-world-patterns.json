@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "07-dynamic-task-mapping/06-real-world-patterns",
+  "moduleId": "07-dynamic-task-mapping",
+  "_meta": { "idPrefix": "airflow-m07-06" },
+  "questions": [
+    {
+      "id": "airflow-m07-06-q1",
+      "type": "multiple-choice",
+      "question": "Production DAG обрабатывает 200-500 S3 files daily. Какие 3 обязательных элемента pattern?",
+      "options": [
+        { "id": "a", "text": "Просто .expand() и всё" },
+        { "id": "b", "text": "(1) list_files с sorted (deterministic map_index) + validation non-empty; (2) process_file с max_active_tis_per_dag=8-16 (concurrency limit для downstream service/DB pool) + retries с retry_delay (S3 transient errors); (3) summarize с trigger_rule='all_done' для resilience к partial failures + validates failure rate threshold + sends metrics" },
+        { "id": "c", "text": "Cartesian expand по всем dimensions" },
+        { "id": "d", "text": "Один task с loop" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production pattern: (1) **list_files**: sorted (consistent map_index across runs), validates non-empty (fail fast если пусто), returns list[dict] с метаданными; (2) **process_file**: max_active_tis_per_dag=8-16 (rate limit downstream services, не overwhelm), retries=3 + retry_delay=300s (S3 transient errors), потенциально pool для cross-DAG resource; (3) **summarize**: trigger_rule='all_done' runs даже с partial failures, aggregates, validates failure rate < 10% (fail DAG если выше), sends success/failure metrics в monitoring. Plus: max_active_runs=2 для backfill safety, Custom XCom Backend если каждая mapped TI пишет large XCom.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-06-q2",
+      "type": "multiple-choice",
+      "question": "Mapped task с retry=3 — что произойдёт при transient error в одном из 500 mapped TI?",
+      "options": [
+        { "id": "a", "text": "Весь DAG fails immediately" },
+        { "id": "b", "text": "Эта mapped TI имеет own try_number 1..3. Failed → state=up_for_retry → ждёт retry_delay → retry с new try_number → если success — TI success, downstream not blocked. Other 499 mapped TI продолжают independently. Если все 3 retry fails — TI permanently failed, downstream поведение зависит от trigger_rule" },
+        { "id": "c", "text": "Все 500 retry" },
+        { "id": "d", "text": "Retry не работает в mapping" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Каждая mapped TI имеет independent retry lifecycle. Failure → up_for_retry → wait retry_delay → re-run с try_number+1. Other 499 mapped TI вообще не знают о failed sibling, продолжают свою работу. Это огромное преимущество vs batch (где 1 failure = весь batch retry, redo 500 items). Если все retries исчерпаны — TI failed, downstream поведение зависит от trigger_rule: default all_success → downstream skipped, all_done → downstream runs anyway получая None для failed TI.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m07-06-q3",
+      "type": "multiple-choice",
+      "question": "DAG с catchup=True, start_date год назад, .expand() с 1000 mapped TI/run. Что произойдёт после deploy?",
+      "options": [
+        { "id": "a", "text": "Нормально, Airflow handles automatically" },
+        { "id": "b", "text": "Catastrophe: 365 days × 1000 mapped TI = 365k scheduled TI immediately. Scheduler death, DB overload, executor backlog. Mitigation: max_active_runs=2-3 (limits concurrent DagRun), max_active_tis_per_dag=20 (limits per-task concurrency), catchup=False (skip backfill) или explicit backfill через CLI с rate limit" },
+        { "id": "c", "text": "Airflow auto-throttle" },
+        { "id": "d", "text": "Только 1 run в день" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Common production incident. Catchup=True с large mapping = scheduler death. 365 days × 1000 = 365k TI создаются в scheduler tick за минуты. DB overload (INSERT bulk), task_instance table grows GB, executor backlog. Mitigation: (1) **max_active_runs=2-3** ограничивает сколько DagRun-ов одновременно; (2) **max_active_tis_per_dag=20** intra-DAG limit; (3) **catchup=False** — skip backfill полностью, наиболее safe; (4) если backfill нужен — manual через `airflow dags backfill` с явным date range, smaller batches.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m07-06-q4",
+      "type": "true-false",
+      "question": "trigger_rule='all_done' на aggregator task — общий production pattern, позволяет aggregate даже когда некоторые mapped TI failed (получает None для failed) + validate failure rate в aggregator с threshold (fail DAG если > 10%) — это намного лучше чем default 'all_success' где 1 failed mapped блокирует всю processing.",
+      "correctAnswer": true,
+      "explanation": "Да, золотой production pattern. Default all_success — 1 failed из 500 mapped TI → aggregator skipped → весь DAG считается partially failed, нет visibility. all_done — aggregator runs независимо, получает list[N | None] (None для failed TI). Внутри aggregator: count successes/failures, validate threshold (fail DAG если > X% failed), send metrics, log details. Это даёт: (1) partial success visibility, (2) graceful degradation, (3) actionable failure analytics, (4) configurable tolerance (95% success acceptable?). Pattern усиливается метриками — push к Prometheus/Datadog для alerting на failure rate trends.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

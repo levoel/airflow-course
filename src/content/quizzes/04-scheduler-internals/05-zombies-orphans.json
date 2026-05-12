@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "04-scheduler-internals/05-zombies-orphans",
+  "moduleId": "04-scheduler-internals",
+  "_meta": { "idPrefix": "airflow-m04-05" },
+  "questions": [
+    {
+      "id": "airflow-m04-05-q1",
+      "type": "multiple-choice",
+      "question": "Разница между zombie task и orphan task?",
+      "options": [
+        { "id": "a", "text": "Они одно и то же" },
+        { "id": "b", "text": "Zombie — TI в state=running, но worker мёртв (LocalTaskJob heartbeat прокис). Orphan — TI в queued/running/deferred, но scheduler-owner мёртв (SchedulerJob heartbeat прокис). Разные виды heartbeat, разный recovery" },
+        { "id": "c", "text": "Zombie — failed tasks; orphan — paused tasks" },
+        { "id": "d", "text": "Zombie — UI терм; orphan — internal term" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Zombie и orphan — разные failure modes с разным mechanism detection. Zombie: worker (LocalTaskJob) died, heartbeat в job table не обновляется. Threshold scheduler_zombie_task_threshold (300s). Detection: scheduler фаза 4 → mark failed (or up_for_retry). Orphan: scheduler сам died, его TIs остались assigned. Threshold scheduler_health_check_threshold (30s). Detection: другой scheduler в фазе 4 → executor.try_adopt_task_instances → adopt OR reset to scheduled. В production часто смешиваются — pod crash убивает оба, но code path в Airflow разный.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m04-05-q2",
+      "type": "multiple-choice",
+      "question": "CeleryExecutor.try_adopt_task_instances — что делает?",
+      "options": [
+        { "id": "a", "text": "Запускает task заново" },
+        { "id": "b", "text": "Re-attach к существующим Celery tasks по external_executor_id (UUID). Probe Celery через AsyncResult — если task ещё PENDING/STARTED в Redis, scheduler продолжает tracking без перезапуска. Если task RFFD — reset state=scheduled" },
+        { "id": "c", "text": "Просто mark failed" },
+        { "id": "d", "text": "Игнорирует orphans" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "CeleryExecutor использует external_executor_id (Celery task UUID), записанный в task_instance row. Новый scheduler при adoption: AsyncResult(uuid, app=app).state — если PENDING/STARTED, task жива в Celery broker. Adopt — добавляет в self.running, ставит task_adoption_timeout (600s default). Если broker не имеет task / RFFD / REVOKED — не adopt, scheduler reset state=scheduled, TI попадёт в re-enqueue. K8sExecutor аналогично — re-attach к существующим pods по labels. LocalExecutor не имеет adoption (in-process).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m04-05-q3",
+      "type": "multiple-choice",
+      "question": "Production GC pause 45s в scheduler — последствия?",
+      "options": [
+        { "id": "a", "text": "Нет последствий, scheduler автоматически восстанавливается" },
+        { "id": "b", "text": "GC pause > scheduler_health_check_threshold (30s) → другой scheduler считает мёртвым, orphan-ит TIs. После GC resume — original scheduler возвращается, его TIs уже reset / adopted другим. Возможно double execution — оригинальная Celery task всё ещё running" },
+        { "id": "c", "text": "Scheduler автоматически перезапускается" },
+        { "id": "d", "text": "Все TIs cancel-ятся" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это самый dangerous failure mode — двойная активность. Mitigation: (1) increase scheduler_health_check_threshold до 60-120s для tolerance. (2) PgBouncer pooling — heartbeat не страдает от connection storm. (3) Tune Python GC (gc.set_threshold, или PyPy). (4) **Idempotent tasks как absolute requirement** — потому что double execution неизбежен иногда. (5) Monitoring GC pauses на scheduler-host. K8s executor лучше Celery для critical workloads — pod failure detection быстрее (через watch API), меньше окно для double execution.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m04-05-q4",
+      "type": "true-false",
+      "question": "После reset deferred TI в scheduled (при triggerer crash) operator.execute() продолжится с того места, где defer был вызван.",
+      "correctAnswer": false,
+      "explanation": "Нет. При reset state=scheduled (triggerer dead, не adoptable) — next_method обнуляется. Когда TI снова попадёт в worker, execute() вызывается с НАЧАЛА, не resume_from_deferred. Operator может снова defer или завершить — но state, который был в local variables до defer, потерян. Это критично для deferrable operators — design execute() так, чтобы был idempotent: сохранять progress в XCom или external store, не в local variables. Production fix: minimum 2 triggerer replicas, чтобы adoption работала через Trigger.assign_unassigned вместо reset.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

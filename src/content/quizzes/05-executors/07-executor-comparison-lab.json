@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "05-executors/07-executor-comparison-lab",
+  "moduleId": "05-executors",
+  "_meta": { "idPrefix": "airflow-m05-07" },
+  "questions": [
+    {
+      "id": "airflow-m05-07-q1",
+      "type": "multiple-choice",
+      "question": "Benchmark: одинаковый DAG (20 short × 2s + 5 medium × 30s). Local: 210s. Celery: 215s. K8s: 480s. Почему K8s так медленный?",
+      "options": [
+        { "id": "a", "text": "Bug" },
+        { "id": "b", "text": "Cold start ~15s на каждый pod (image pull + K8s scheduling + Python startup). 25 tasks × 15s = 375s overhead. Для коротких tasks (2s) overhead 750%. K8s правильный для long tasks (>5 min) где overhead амортизируется" },
+        { "id": "c", "text": "K8s медленнее по design" },
+        { "id": "d", "text": "Сеть медленная" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "K8s pod cold start = ~5-30s (image pull dominates ~5-20s, plus K8s scheduling 0.1-5s, plus Python warmup 1-3s, plus DAG parse 2-5s). На 25 short tasks × 15s = 6 минут wasted only на startup. На task длительностью >5 min — cold start <10% overhead, acceptable. Для коротких tasks — Celery/Local. Решение mixed workloads — Multiple Executors (AIP-61): short→Celery, heavy→K8s.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m05-07-q2",
+      "type": "multiple-choice",
+      "question": "Какие cloud cost components специфичны для KubernetesExecutor deployment?",
+      "options": [
+        { "id": "a", "text": "Только compute" },
+        { "id": "b", "text": "(1) EKS/GKE control plane (~$70/mo); (2) Always-on nodes для system pods + scheduler; (3) Worker pods compute (variable — Spot хорошо вписывается); (4) Per-pod storage/logging (S3/CloudWatch ingestion costs); (5) Network egress если cross-AZ" },
+        { "id": "c", "text": "Только storage" },
+        { "id": "d", "text": "Только network" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "K8s deployment имеет fixed overhead: control plane (EKS $0.10/h, GKE similar), minimum nodes для kube-system + airflow pods, image pulls (ECR — egress если cross-region), per-pod logs. Worker pods себе хорошо — Spot/Preemptible instances dramatically снижают cost. Для idle deployments K8s дороже Local (control plane всегда платится), но при high load — efficient (zero idle workers). Multiple Executors (Celery + K8s) — самая дорогая опция (~$480/mo medium load).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m05-07-q3",
+      "type": "multiple-choice",
+      "question": "Decision framework: 5000 short SQL tasks/day + 50 ML GPU tasks/day + 200 ad-hoc varying. Какой executor?",
+      "options": [
+        { "id": "a", "text": "Pure CeleryExecutor" },
+        { "id": "b", "text": "Multiple Executors (AIP-61, 2.10+) — CeleryExecutor (default, для SQL и short ad-hoc) + KubernetesExecutor (для ML GPU и long ad-hoc через `@task(executor='K8s')`)" },
+        { "id": "c", "text": "Pure KubernetesExecutor" },
+        { "id": "d", "text": "LocalExecutor" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Mixed workload — Multiple Executors. Reasoning: (1) 5000 short SQL/day — Celery (low latency 1.5s startup, scaling через KEDA, ~3.5/min avg + bursts); (2) 50 ML GPU/day — K8s с pod_override для GPU resource, custom CUDA image; cold start 15s ~5% overhead на 5min task acceptable; (3) Ad-hoc routing по resource needs — `executor='K8s'` для long/heavy, default Celery для short. Pure Celery — нет GPU, конфликты deps. Pure K8s — 5000 × 15s = 21h/day wasted на startup. AIP-61 = best of both worlds.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m05-07-q4",
+      "type": "true-false",
+      "question": "LocalExecutor benchmark на single-node быстрее Celery/K8s — поэтому это правильный выбор для production high-throughput pipelines.",
+      "correctAnswer": false,
+      "explanation": "LocalExecutor выглядит быстрее на single-node benchmark, потому что нет network overhead (broker, K8s API). Но он НЕ масштабируется горизонтально — потолок ~100 short tasks/min на нормальном железе. На multi-node benchmark Local не может — workers все на одной ноде. Celery — workers на N нодах, throughput линейно растёт. K8s — pods распределяются автоматически. Production high-throughput — Celery (или Multiple Executors). Local — для dev и small (<100 tasks/min) single-node deployments.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

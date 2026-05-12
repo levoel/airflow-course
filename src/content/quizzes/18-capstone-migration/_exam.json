@@ -1,0 +1,89 @@
+{
+  "moduleId": "18-capstone-migration",
+  "title": "Module 18 Final Exam — Capstone + Migration 2→3",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m18-exam",
+    "description": "6-question integrated final exam — capstone architecture + migration playbook"
+  },
+  "questions": [
+    {
+      "id": "airflow-m18-exam-q1",
+      "type": "multiple-choice",
+      "question": "Capstone architecture: Postgres CDC → Kafka → Airflow → Spark → Iceberg → ClickHouse. Какие Airflow features используются критично?",
+      "options": [
+        { "id": "a", "text": "Только базовые TaskFlow @task" },
+        { "id": "b", "text": "Datasets (event-driven trigger от 3 Kafka topics), Dynamic Task Mapping (consume_kafka.expand per topic), Deferrable Sensors (S3KeySensorAsync long waits), Multiple Executors (Celery + K8s mixed), Custom XCom backend (S3 для large dataframes), OpenLineage (auto-emission через inlets/outlets), HA scheduler + triggerer, Vault Secrets Backend, Setup/Teardown для ephemeral Spark cluster" },
+        { "id": "c", "text": "Только Custom XCom" },
+        { "id": "d", "text": "Cron scheduling sufficient" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Capstone демонстрирует full breadth Airflow 2.x: 8+ killer features в одном production-grade pipeline. Datasets event-driven (модуль 08), Dynamic Mapping (модуль 07), Deferrable (модуль 09), Multiple Executors (модуль 05, AIP-61), Custom XCom (модуль 06), OpenLineage (модуль 14), HA (модуль 04, 15), Secrets (модуль 10). Each feature solves specific real problem. Capstone serves как production template — designed для smooth 3.x migration (модуль 18.07-09).",
+      "bloomLevel": "synthesizing"
+    },
+    {
+      "id": "airflow-m18-exam-q2",
+      "type": "multiple-choice",
+      "question": "Самое фундаментальное изменение в 3.x — AIP-72 Task SDK. Что это и какой impact на migration?",
+      "options": [
+        { "id": "a", "text": "Только UI changes" },
+        { "id": "b", "text": "Performance optimization" },
+        { "id": "c", "text": "Tasks communicate с Airflow через REST API, НЕ direct SQLAlchemy session к metadata DB. Worker не имеет direct DB access. Security (malicious DAG не может drop tables), future-proof (schema can change), multi-team isolation. Migration impact: imports rename airflow.decorators → airflow.sdk (ruff AIR301 auto-fix). Variable/Connection lookups через API now — slight performance overhead, cache aggressively" },
+        { "id": "d", "text": "Replaces всех executors" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "AIP-72 Task SDK — самое important architectural change в 3.x. 2.x workers имеют direct SQLAlchemy session (security risk + DB schema coupling). 3.x — Task SDK как REST API client. Benefits: security boundary, multi-team isolation, future-proof. Migration: ruff AIR301 auto-rename imports, slight latency increase на Variable/Connection (cache helps). Custom code с `airflow.utils.db.create_session()` direct usage — manual rewrite через Hooks.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-exam-q3",
+      "type": "multiple-choice",
+      "question": "Production migration playbook к 3.x. Какая sequence steps?",
+      "options": [
+        { "id": "a", "text": "Immediately upgrade Helm chart" },
+        { "id": "b", "text": "(1) 6-12 months preparation: upgrade к 2.11 LTS, ruff AIR301/302 фиксы, staging environment running 3.x; (2) Migration day Saturday: backup DB, pause DAGs, wait in-flight, Helm upgrade с migrate disabled, airflow db migrate manual, wait healthy, smoke test, unpause critical first потом all gradually; (3) Post: 30-day backup retention, monitor closely; (4) Rollback plan tested in staging" },
+        { "id": "c", "text": "Just run airflow db upgrade" },
+        { "id": "d", "text": "Switch к Dagster" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Major version migration — strategic event, не reactive. 6-12 months prep: code modernization (ruff fixes), staging soak (2-3 weeks), team training. Migration day (Saturday morning best): backup → pause → wait → Helm → migrate → verify → unpause. 30-day backup retention позволяет rollback if subtle issues surface. Rollback procedure tested в staging — knowing exact steps if production needs revert. Communicate constantly с stakeholders.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-exam-q4",
+      "type": "multiple-choice",
+      "question": "В 2026 production team на 2.10. Когда migrate к 3.x — какой optimal timeline?",
+      "options": [
+        { "id": "a", "text": "Immediately в 2026" },
+        { "id": "b", "text": "Never" },
+        { "id": "c", "text": "Q1-Q2 2027. Reasoning: (1) 2.11 LTS support до Q3 2027 — no rush; (2) 3.x maturity — 3.0 (2025) had bugs, 3.2 (mid 2026) stable; (3) Ecosystem caught up (providers, tools); (4) Sufficient time для prep (ruff fixes, staging soak); (5) Before 2.11 EOL. Spешка не нужна — major version upgrade — strategic planning event" },
+        { "id": "d", "text": "Q4 2027" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Recommended migration window 2026 deployments на 2.x — Q1-Q2 2027. Reasoning: (1) 2.11 LTS support до ~Q3 2027 — рrushes нет; (2) 3.x maturity — by Q2 2026 3.2 (Multi-Team AIP-67) released, ecosystem catching up, providers updated; (3) Sufficient time для preparation — 6-12 months ruff fixes, staging testing; (4) Avoid 2.11 EOL crunch. Earlier migration (Q4 2026) acceptable если нужны 3.x features (HITL, DAG Versioning, Multi-Team). Later (Q4 2027) — risk hitting 2.11 EOL without time для smooth migration.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m18-exam-q5",
+      "type": "multiple-choice",
+      "question": "Capstone production deployment: 2 schedulers + 2 triggerers + 2 webservers + 1 dag-processor + KEDA workers + Multiple Executors + PgBouncer + External Secrets. Что dies без значимого impact?",
+      "options": [
+        { "id": "a", "text": "PostgreSQL" },
+        { "id": "b", "text": "Один scheduler — другой через 30s adopt-ит orphan TI через row-locks (модуль 04). Один webserver — LB routes к другим (stateless). Один triggerer — другой через 30s reassigns triggers. Один worker — KEDA spawns replacement, in-flight tasks retry. PgBouncer instance — другой instance продолжает. External Secrets pod — secrets уже synced, no impact" },
+        { "id": "c", "text": "Все необходимо" },
+        { "id": "d", "text": "DAG Processor critical" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Production HA — каждый critical component duplicated. Scheduler HA через row-locks (модуль 04), triggerer HA через assignment, webserver stateless (LB routes). Single points of failure: PostgreSQL (Multi-AZ failover ~60-120s — модуль 15.07), Redis broker (cluster mode survives), Vault (HA cluster). DAG Processor одна replica acceptable — DAGs continue работать на cached serialized_dag если processor down briefly. Capstone deployment survives node failure, AZ failure (если multi-AZ), individual pod failures. Это production-grade resilience.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-exam-q6",
+      "type": "true-false",
+      "question": "Этот курс covered Airflow 2.10/2.11 LTS deeply. Senior engineer должен также know альтернативы (Dagster, Prefect, Temporal, Argo) даже если работает только с Airflow.",
+      "correctAnswer": true,
+      "explanation": "Architectural breadth — sign senior engineer. Knowing альтернативы: (1) Better tool choice decisions ('Airflow vs Dagster для аналитики', 'Airflow vs Temporal для business processes'); (2) Honest assessment Airflow's strengths/weaknesses; (3) Avoid 'hammer-nail' fallacy; (4) Interview discussions value perspective; (5) Migration evaluations sometimes need alternatives. Senior signal — 'I know когда NOT use Airflow'. Доesn't mean expert all — strong Airflow + working knowledge alternatives. This course module 18.10 surveys Dagster (asset-first), Prefect 3 (dynamic), Temporal (durable execution), Argo (K8s-native).",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

@@ -1,0 +1,446 @@
+---
+title: "UI plugins через Flask blueprints — AppBuilder views, menu, REST endpoints"
+description: "Flask blueprints в plugin, FAB AppBuilder views для menu, custom REST endpoints, limitations 2.x, forward look на React в 3.1+"
+order: 6
+difficulty: "advanced"
+estimatedTime: 26
+topics: ["UI Plugins", "Flask", "AppBuilder", "Blueprints", "REST API"]
+---
+
+# UI plugins через Flask blueprints — AppBuilder views
+
+В Airflow 2.x webserver построен на **Flask + Flask-AppBuilder (FAB)**. Это значит UI расширяется через стандартные Flask blueprints и FAB views. Можно добавить **menu items, custom HTML pages, REST endpoints, JSON APIs** — все в Python. Этот урок покажет паттерны: простой Flask blueprint для REST endpoint, FAB AppBuilder view с custom HTML, регистрация в menu, доступ к Airflow metadata DB из view. И финально — почему всё это **deprecated в 3.x в пользу React-based UI** через `react_apps`.
+
+В 2.10/2.11 LTS Flask/FAB — основной механизм. Migration на React начнётся при upgrade на 3.x.
+
+---
+
+## Архитектура webserver в 2.x
+
+```
+airflow webserver
+├── Flask app (airflow.www.app.create_app)
+│   ├── Flask-AppBuilder (RBAC + UI framework)
+│   │   ├── Built-in views: DAG list, graph, gantt, logs
+│   │   ├── REST API (airflow/api/v1)
+│   │   └── Auth manager (FAB / OIDC / custom)
+│   └── Plugin blueprints (registered)
+│       ├── Custom REST endpoints
+│       └── Custom UI views (AppBuilder)
+```
+
+Plugin может зарегистрировать:
+1. **`flask_blueprints`** — для REST endpoints, static files
+2. **`appbuilder_views`** — для UI pages с menu integration
+3. **`appbuilder_menu_items`** — просто menu link на внешний URL
+4. **`global_operator_extra_links`** — extra links на task detail page
+
+---
+
+## Pattern 1: Simple Flask blueprint — REST endpoint
+
+Допустим, хочется endpoint `/myorg/v1/health-check` для internal monitoring.
+
+```python
+# my_org_provider/web/blueprints.py
+from flask import Blueprint, jsonify, request
+from airflow.www.app import csrf
+
+bp = Blueprint(
+    "my_org",
+    __name__,
+    url_prefix="/myorg",
+)
+
+
+@bp.route("/v1/health-check", methods=["GET"])
+def health_check():
+    """Simple health check returning Airflow metadata DB connectivity."""
+    from airflow.utils.session import create_session
+    from sqlalchemy import text
+    try:
+        with create_session() as session:
+            session.execute(text("SELECT 1"))
+        return jsonify({"status": "ok", "db": "connected"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@bp.route("/v1/dag-stats/<dag_id>", methods=["GET"])
+def dag_stats(dag_id: str):
+    """Return last 24h stats for DAG."""
+    from airflow.utils.session import create_session
+    from airflow.models import DagRun
+    from datetime import datetime, timedelta
+
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+    with create_session() as session:
+        runs = (
+            session.query(DagRun)
+            .filter(DagRun.dag_id == dag_id, DagRun.start_date >= cutoff)
+            .all()
+        )
+        success = sum(1 for r in runs if r.state == "success")
+        failed = sum(1 for r in runs if r.state == "failed")
+        running = sum(1 for r in runs if r.state == "running")
+
+    return jsonify({
+        "dag_id": dag_id,
+        "window_hours": 24,
+        "success": success,
+        "failed": failed,
+        "running": running,
+    })
+
+
+@bp.route("/v1/trigger-dag/<dag_id>", methods=["POST"])
+@csrf.exempt  # for external triggers
+def trigger_dag(dag_id: str):
+    """Trigger a DAG run, simplified."""
+    from airflow.api.common.trigger_dag import trigger_dag as _trigger
+    conf = request.get_json() or {}
+    dag_run = _trigger(dag_id=dag_id, conf=conf)
+    return jsonify({"run_id": dag_run.run_id, "state": dag_run.state}), 201
+```
+
+Регистрация в AirflowPlugin:
+
+```python
+# $AIRFLOW_HOME/plugins/my_org_web_plugin.py
+from airflow.plugins_manager import AirflowPlugin
+from my_org_provider.web.blueprints import bp
+
+class MyOrgWebPlugin(AirflowPlugin):
+    name = "my_org_web"
+    flask_blueprints = [bp]
+```
+
+После restart webserver — endpoints доступны:
+- `GET http://airflow:8080/myorg/v1/health-check`
+- `GET http://airflow:8080/myorg/v1/dag-stats/my_dag`
+
+---
+
+## Pattern 2: AppBuilder View — HTML page с menu integration
+
+Custom page с собственным URL и menu item. Использует FAB framework для **auth + RBAC integration** — кто видит, кто может посещать.
+
+```python
+# my_org_provider/web/views.py
+from flask_appbuilder import expose, BaseView as AppBuilderBaseView
+from flask import render_template
+from airflow.security import permissions
+from airflow.www.auth import has_access
+
+
+class MyOrgDashboardView(AppBuilderBaseView):
+    """Custom dashboard view."""
+
+    default_view = "index"
+    route_base = "/myorg/dashboard"
+
+    @expose("/")
+    @has_access([(permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG)])
+    def index(self):
+        """Main dashboard page."""
+        from airflow.utils.session import create_session
+        from airflow.models import DagModel
+
+        with create_session() as session:
+            total_dags = session.query(DagModel).count()
+            active_dags = session.query(DagModel).filter(DagModel.is_active == True).count()
+            paused_dags = session.query(DagModel).filter(DagModel.is_paused == True).count()
+
+        return self.render_template(
+            "my_org_dashboard.html",
+            total_dags=total_dags,
+            active_dags=active_dags,
+            paused_dags=paused_dags,
+        )
+
+    @expose("/stats")
+    @has_access([(permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG)])
+    def stats(self):
+        """Stats page."""
+        return self.render_template("my_org_stats.html")
+
+
+# View instance — нужен для appbuilder_views registration
+my_org_dashboard_view = MyOrgDashboardView()
+```
+
+Template `my_org_provider/web/templates/my_org_dashboard.html`:
+
+```html
+{% extends "airflow/main.html" %}
+
+{% block title %}My Org Dashboard{% endblock %}
+
+{% block content %}
+<div class="container">
+  <h1>My Org Dashboard</h1>
+
+  <div class="row">
+    <div class="col-md-4">
+      <div class="card">
+        <h3>Total DAGs</h3>
+        <p style="font-size: 2em;">{{ total_dags }}</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card">
+        <h3>Active</h3>
+        <p style="font-size: 2em; color: green;">{{ active_dags }}</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card">
+        <h3>Paused</h3>
+        <p style="font-size: 2em; color: orange;">{{ paused_dags }}</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+```
+
+Регистрация:
+
+```python
+# $AIRFLOW_HOME/plugins/my_org_web_plugin.py
+from airflow.plugins_manager import AirflowPlugin
+from my_org_provider.web.views import my_org_dashboard_view
+
+class MyOrgWebPlugin(AirflowPlugin):
+    name = "my_org_web"
+
+    # Регистрация view + menu
+    appbuilder_views = [
+        {
+            "name": "My Org Dashboard",     # menu item label
+            "category": "My Org",            # menu category (новый top-level menu)
+            "view": my_org_dashboard_view,
+        },
+        {
+            "name": "Stats",
+            "category": "My Org",
+            "view": my_org_dashboard_view,
+            "href": "/myorg/dashboard/stats",
+        }
+    ]
+```
+
+После webserver restart:
+- Top-level menu **My Org** появляется в navbar
+- Под ним **My Org Dashboard** и **Stats** items
+- Доступно только пользователям с permissions `CAN_READ` на `DAG`
+
+---
+
+## Pattern 3: Templates directory
+
+Чтобы Flask находил `.html` template, нужно его положить в правильную папку. Default — `<plugin>/templates/<your_template>.html`.
+
+```
+my_org_provider/
+├── __init__.py
+├── web/
+│   ├── __init__.py
+│   ├── views.py
+│   ├── blueprints.py
+│   └── templates/
+│       └── my_org_dashboard.html
+```
+
+Если templates не в default path — указать в Blueprint:
+
+```python
+bp = Blueprint(
+    "my_org",
+    __name__,
+    template_folder="/path/to/templates",
+    static_folder="/path/to/static",
+)
+```
+
+Для AppBuilder View Airflow autodetect-ит templates рядом с view module.
+
+---
+
+## Pattern 4: Menu item без view (just link)
+
+Если хочется просто link в menu на external URL:
+
+```python
+class MyOrgPlugin(AirflowPlugin):
+    name = "my_org"
+    appbuilder_menu_items = [
+        {
+            "name": "Grafana",
+            "category": "Monitoring",
+            "href": "https://grafana.your-corp.com/d/airflow",
+        },
+        {
+            "name": "Internal Wiki",
+            "category": "Help",
+            "href": "https://wiki.your-corp.com/airflow",
+        },
+    ]
+```
+
+---
+
+## Pattern 5: Operator extra links
+
+Добавить link на task instance detail page (на DAG graph view → click task):
+
+```python
+from airflow.models.baseoperator import BaseOperatorLink
+
+class GrafanaTaskLink(BaseOperatorLink):
+    name = "View in Grafana"
+
+    def get_link(self, operator, *, ti_key):
+        # ti_key has dag_id, task_id, run_id, try_number
+        return (
+            f"https://grafana.your-corp.com/d/airflow-task"
+            f"?var-dag_id={ti_key.dag_id}"
+            f"&var-task_id={ti_key.task_id}"
+            f"&var-run_id={ti_key.run_id}"
+        )
+
+
+class MyOrgPlugin(AirflowPlugin):
+    name = "my_org"
+    global_operator_extra_links = [GrafanaTaskLink()]
+```
+
+После restart — на каждом task instance в UI появляется кнопка "View in Grafana" с заполненными params.
+
+---
+
+## Authentication и authorization
+
+FAB views поддерживают standard Airflow permissions:
+
+```python
+from airflow.security import permissions
+from airflow.www.auth import has_access
+
+class AdminView(AppBuilderBaseView):
+    @expose("/admin")
+    @has_access([
+        (permissions.ACTION_CAN_READ, permissions.RESOURCE_CONFIG),
+        (permissions.ACTION_CAN_EDIT, permissions.RESOURCE_CONFIG),
+    ])
+    def admin(self):
+        # User must have CAN_READ AND CAN_EDIT on CONFIG resource
+        ...
+```
+
+Resources в `airflow.security.permissions`:
+- `RESOURCE_DAG`, `RESOURCE_TASK_INSTANCE`, `RESOURCE_CONNECTION`, `RESOURCE_POOL`, `RESOURCE_VARIABLE`, ...
+
+Actions:
+- `ACTION_CAN_READ`, `ACTION_CAN_CREATE`, `ACTION_CAN_EDIT`, `ACTION_CAN_DELETE`
+
+Если user без needed permissions — Flask returns 403.
+
+---
+
+## Limitations of plugin UI в 2.x
+
+<DiagramContainer title="Что можно и нельзя через UI plugins в 2.x" color="cyan">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Можно: separate menu + pages"
+        tooltip="Top-level menu categories, view pages с HTML. Inherit base template айrflow/main.html — получаете navbar, sidebar. Стилизация через Bootstrap classes."
+      >
+        appbuilder_views
+      </DataBox>
+      <DataBox
+        label="Можно: REST endpoints"
+        tooltip="Flask blueprints с url_prefix. JSON responses, request handling. Можно использовать airflow.utils.session для DB queries. CSRF protection через Flask-WTF."
+      >
+        flask_blueprints
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="что нет в 2.x" />
+    <FlowRow>
+      <DataBox
+        label="Нельзя: модификация existing pages"
+        tooltip="DAG list, graph view, gantt chart — все hard-coded. Нельзя добавить custom column в DAG list через plugin. Только новые pages, не modification."
+      >
+        no DAG list customize
+      </DataBox>
+      <DataBox
+        label="Нельзя: React component injection"
+        tooltip="Webserver 2.x — server-rendered Flask templates с server-side state. Не можно сделать interactive React widget. Только server-side rendered HTML."
+      >
+        no React widgets
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="forward look 3.x" />
+    <FlowRow>
+      <DataBox
+        label="3.1+: React plugin API"
+        tooltip="Airflow 3.x переходит на React frontend (TypeScript + Vite). 3.1+ introduces `react_apps` plugin category — можно загрузить React component в Airflow UI как micro-frontend. Flask UI legacy."
+      >
+        react_apps (3.1+)
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+В 2.10/2.11:
+- Flask + FAB — единственный путь UI customization
+- React injection невозможна
+- DAG list / graph view не customizable через plugin
+
+---
+
+## Migration look-ahead: React plugins в 3.1+
+
+В Airflow 3.0 переход на React UI. В 3.1+ planned **`react_apps`** plugin category:
+
+```python
+# Hypothetical в 3.1+ — may differ
+class MyOrgUIPlugin(AirflowPlugin):
+    name = "my_org_ui"
+    react_apps = [
+        {
+            "name": "My Dashboard",
+            "url_route": "/myorg/dashboard",
+            "bundle_url": "/static/plugins/my_org/dashboard.js",
+            "entry_component": "MyDashboard",
+        }
+    ]
+```
+
+Plugin поставляет JS bundle, Airflow UI монтирует React component. Гораздо больше интерактивности, но requires React + TypeScript skills.
+
+**В 2.x не пытайтесь сделать SPA-style customization** — это против архитектуры. Если нужны interactive widgets — внешний tool (Grafana, Metabase, internal app) + iframe / link из Airflow UI.
+
+---
+
+## Production gotchas
+
+**1. Blueprint route conflicts.** Если url_prefix совпадает с built-in Airflow routes (`/api/v1`, `/dag`) — Flask использует first registered. Префиксируйте свои routes уникально (`/myorg/v1/...`).
+
+**2. Templates не находятся.** Если template_folder не задан — Flask ищет в `<plugin>/templates`. Если ставите не там — `TemplateNotFound`. Debug: `app.jinja_env.list_templates()` показывает loaded templates.
+
+**3. DB queries в view — performance overhead.** Каждый request → SQLAlchemy query. Кешируйте result (Flask-Cache), или используйте API client side с pagination.
+
+**4. CSRF token для POST requests.** Flask-WTF включён по default. POST endpoints либо `@csrf.exempt`, либо token в form. Это часто конфьюзит при добавлении REST API.
+
+**5. Webserver restart обязателен.** Plugin loaded once on startup. Дев цикл: код-change → kill webserver → start → test. Hot reload в 2.x нет.
+
+**6. RBAC permissions нужны.** Default — user без permissions не увидит ваш menu item. Добавьте permissions в roles через `airflow roles add-perms` или через UI Roles management.
+
+---
+
+<KnowledgeCheck
+  question="Хочется добавить кастомный 'Cost dashboard' с графиком Snowflake credits per DAG за последние 7 дней. В Airflow 2.x — реалистично через plugins?"
+  answer="Да реалистично, но с ограничениями. Подход: (1) AppBuilder view + Flask blueprint pattern. View `CostDashboardView(AppBuilderBaseView)` с `/cost-dashboard` route. Template `cost_dashboard.html` extends `airflow/main.html`. (2) Backend query — SQLAlchemy session к metadata DB + queries к Snowflake `INFORMATION_SCHEMA.QUERY_HISTORY` для credit usage by tag/query (можно через SnowflakeHook). (3) Frontend визуализация — chart.js или plotly через CDN <script>, server-side render data в JSON блоке (`<script>window.chartData = {{ data | tojson }}</script>`), then JS picks up. Server-rendered + light JS charts. (4) Menu integration через `appbuilder_views=[{'name': 'Cost', 'category': 'Monitoring', 'view': cost_view}]`. (5) Permissions: `@has_access([(permissions.ACTION_CAN_READ, permissions.RESOURCE_DAG)])`. ОГРАНИЧЕНИЯ: (a) Interactive UI (filters, drill-down) ограничен — нет React, всё через server reload или AJAX к REST endpoint; (b) Real-time updates через WebSocket не работают standard; (c) Стилизация ограничена Bootstrap classes базового template. ALTERNATIVE для production: вынести dashboard в Grafana / Metabase (внешний tool), а в Airflow UI plugin сделать только link через `appbuilder_menu_items` на Grafana panel с предзаполненными filters. Это часто лучше — Grafana предлагает богатые viz, Airflow UI остаётся lean. В Airflow 3.1+ когда React plugins появятся — можно сделать full SPA dashboard внутри Airflow UI."
+/>

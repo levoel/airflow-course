@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "16-testing-dags/06-dag-factory-testing",
+  "moduleId": "16-testing-dags",
+  "_meta": { "idPrefix": "airflow-m16-06" },
+  "questions": [
+    {
+      "id": "airflow-m16-06-q1",
+      "type": "multiple-choice",
+      "question": "DAG factory генерирует 30 DAGs из YAML config. Critical edge case для test:",
+      "options": [
+        { "id": "a", "text": "Только happy path" },
+        { "id": "b", "text": "Edge cases: empty config (= []), malformed YAML, duplicate dag_ids, missing required fields, не-list config (dict вместо list). + property-based test через hypothesis с random configs. + assertion что generate_dags deterministic" },
+        { "id": "c", "text": "Только performance" },
+        { "id": "d", "text": "Только schedule formats" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Factory pattern multiplies blast radius — один bug ломает все 30 DAGs. Must-test edge cases: empty list (returns {}), malformed YAML (raises), duplicate IDs (last-wins or raise — explicit decision), missing required fields (informative error mentioning dag_id), non-list config. Property-based testing через hypothesis находит unexpected combinations. Deterministic test: generate_dags() called 100 раз → identical output set. Это catches mutable state bugs (shared dicts, network calls).",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m16-06-q2",
+      "type": "multiple-choice",
+      "question": "В factory `def make_dag(cfg, args={'retries': 3})` — что плохо?",
+      "options": [
+        { "id": "a", "text": "Ничего" },
+        { "id": "b", "text": "Mutable default argument — args создаётся ОДИН раз при function definition, shared между calls. Mutation в одном call видна в next. Classic Python gotcha. Fix: args=None в signature, `args = args or {}` внутри" },
+        { "id": "c", "text": "Слишком быстро" },
+        { "id": "d", "text": "Несовместимо с TaskFlow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Python evaluates default values при function definition (once), не при каждом call. `def f(x={})` — все calls share same dict. Если первый call mutate x — second call видит mutated state. В factory: shared args mutated по DAG → cross-contamination. Fix: `def make_dag(cfg, args=None): args = args or {}` — new dict per call. Hypothesis-based property tests часто catch это — multiple iterations показывают state leak.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m16-06-q3",
+      "type": "multiple-choice",
+      "question": "Factory делает `requests.get('https://config-api/...')` в top-level — почему это catastrophe?",
+      "options": [
+        { "id": "a", "text": "Slow" },
+        { "id": "b", "text": "Top-level код выполняется на каждом DAG parse (~30s). Network call → нагрузка на config API, замедление scheduler tick, выход API недоступен → import error → DAGs пропадают. Fix: bake config в Git (committed YAML)" },
+        { "id": "c", "text": "Security risk" },
+        { "id": "d", "text": "Bug в Airflow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagFileProcessor parses files каждые min_file_process_interval (default 30s). Top-level network call = 30+ network calls per minute. Проблемы: (1) Load на config API; (2) Slow scheduler tick — parse blocks; (3) API outage = DAGs вышли из UI (import error); (4) Cost (API calls). Solution: config как committed YAML в Git — version controlled, no runtime dependency, fast parsing. Test для catch: mock requests.get + reload module + assert call_count == 0.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m16-06-q4",
+      "type": "true-false",
+      "question": "Factory должна assign generated DAGs в globals() — иначе они не появятся в Airflow UI.",
+      "correctAnswer": true,
+      "explanation": "Airflow находит DAGs только в module-level globals (DagFileProcessor scans `globals()` looking for DAG instances). Если factory возвращает dict, но не делает `globals()[dag_id] = dag` — DAGs invisible to scheduler. Pattern: `for dag_id, dag in generate_dags().items(): globals()[dag_id] = dag` at top-level. Альтернативно — return DAGs из function которая called at module level: `dag = generate_dag(cfg)`. Это quirky Python — Airflow design choice for parser simplicity.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "08-datasets-assets/03-dataset-alias",
+  "moduleId": "08-datasets-assets",
+  "_meta": { "idPrefix": "airflow-m08-03" },
+  "questions": [
+    {
+      "id": "airflow-m08-03-q1",
+      "type": "multiple-choice",
+      "question": "Главная проблема, которую решает DatasetAlias (2.9+)?",
+      "options": [
+        { "id": "a", "text": "Performance optimization для datasets с миллионами events" },
+        { "id": "b", "text": "URI зависит от runtime data (execution_date, tenant_id, computed paths) — нельзя статически объявить на parse time" },
+        { "id": "c", "text": "Backwards-compatibility с pre-2.4 sensors" },
+        { "id": "d", "text": "Cross-instance dataset sharing" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Regular Dataset требует static URI на parse time. DatasetAlias — placeholder с именем alias на parse time, конкретный Dataset(uri) эмитится в runtime через context['outlet_events'][alias].add(Dataset(uri)). Use cases: partitioned outputs (date в URI), multi-tenant (tenant_id в URI), conditional output paths. Performance, compat, cross-instance — другие задачи (никак не решены alias-ом).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m08-03-q2",
+      "type": "multiple-choice",
+      "question": "DAG объявляет outlets=[DatasetAlias('my-alias')]. Task завершается success, но НЕ вызывает context['outlet_events'][alias].add(...). Consumer subscribed на 'my-alias'. Что происходит?",
+      "options": [
+        { "id": "a", "text": "Consumer запускается с empty triggering_dataset_events" },
+        { "id": "b", "text": "Consumer НЕ запускается — alias declaration это intent, без runtime .add() никакой dataset_event row не создаётся, queue остаётся пустой" },
+        { "id": "c", "text": "Эмитируется default Dataset с URI = alias name" },
+        { "id": "d", "text": "Task fails из-за missing .add() call" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это типичный silent bug. outlets=[DatasetAlias] объявляет intent на parse time, но реальное emission требует явного .add() в runtime. Если забыли — task success, logs clean, но downstream не triggered. Защита: assertion в task / unit test проверяющий что после run alias имеет registered concrete dataset. В 3.x с @asset decorator return value автоматически эмитится — этот класс ошибок исчезает.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m08-03-q3",
+      "type": "multiple-choice",
+      "question": "DatasetAlias 'multi-tenant' имеет 5 concrete datasets, эмитируемых одной mapped task за один run. Consumer schedule=[multi-tenant]. Сколько DagRuns создастся?",
+      "options": [
+        { "id": "a", "text": "5 (один на каждый concrete dataset)" },
+        { "id": "b", "text": "1 — несколько dataset events под одним alias эмитируются в одной transaction, scheduler создаёт один DagRun (queue idempotent через PK)" },
+        { "id": "c", "text": "0 — alias semantics не triggered multi-emission" },
+        { "id": "d", "text": "Зависит от max_active_runs_per_dag" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Alias-эмитированные events добавляют queue rows для consumer, но PRIMARY KEY (dataset_id, target_dag_id) делает их idempotent относительно дублирующих datasets. ПЕРВЫЙ event satisfies alias condition (OR semantics между concrete datasets), scheduler создаёт DagRun на следующем tick и очищает queue. Если эмитятся 5 разных datasets с разными dataset_id под одним alias — это 5 queue rows для consumer, но они все relate к alias subscription, scheduler видит alias as satisfied и создаёт один DagRun. Чтобы один run на каждый dataset — нужны отдельные DAG-и или processing в task.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m08-03-q4",
+      "type": "true-false",
+      "question": "DatasetAlias и DatasetAll/DatasetAny решают одну и ту же проблему — conditional dataset triggering.",
+      "correctAnswer": false,
+      "explanation": "Они решают РАЗНЫЕ проблемы. DatasetAlias — runtime URI dynamism (URI не известен на parse time). DatasetAll/DatasetAny — boolean composition статически известных datasets (AND/OR logic). Они ortogonal и могут комбинироваться: schedule=DatasetAll(static_ds, alias_ds). Путаница — типичная для junior engineers; правильный ментальный модель: alias про 'unknown URI', All/Any про 'how many of known datasets trigger'.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

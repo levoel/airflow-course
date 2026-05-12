@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "13-rest-api-cli/03-api-authentication",
+  "moduleId": "13-rest-api-cli",
+  "_meta": { "idPrefix": "airflow-m13-03" },
+  "questions": [
+    {
+      "id": "airflow-m13-03-q1",
+      "type": "multiple-choice",
+      "question": "`basic_auth` на каждый request делает bcrypt verify пароля. CPU cost на bcrypt cost=12 ~80-120ms. Что это значит для high-volume integration?",
+      "options": [
+        { "id": "a", "text": "Ничего, modern CPU справится" },
+        { "id": "b", "text": "Bottleneck на webserver CPU. На 50 RPS — 4-6 vCPU-seconds/sec, gunicorn workers захлёбываются, UI users получают высокий latency. Fix: JWT (sub-ms verify), session cookie, или выделенный API webserver" },
+        { "id": "c", "text": "Только проблема для очень слабого hardware" },
+        { "id": "d", "text": "Bcrypt cost можно отключить" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Bcrypt дорогой по design (защита от brute-force). На 4 vCPU webserver ~30-50 RPS auth-heavy запросов исчерпывают CPU. UI пользователи получают slow response, потому что gunicorn workers заняты bcrypt. **Fixes:** (1) JWT через custom backend — signature verify ~1-5ms; (2) Session cookie для UI (auto-cached); (3) Отдельный API webserver pool; (4) Cache successful auth в Redis на 60s через custom backend. Снижать bcrypt cost <10 — небезопасно.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m13-03-q2",
+      "type": "multiple-choice",
+      "question": "Какие auth backends входят в стандартный Airflow 2.10/2.11?",
+      "options": [
+        { "id": "a", "text": "Только basic_auth" },
+        { "id": "b", "text": "basic_auth, session, kerberos_auth (через FAB provider) + custom backends через Python module. JWT и OAuth — НЕ из коробки, нужны custom impl или MWAA/Cloud auth manager" },
+        { "id": "c", "text": "Полный OAuth2 + JWT + SAML" },
+        { "id": "d", "text": "Только session cookie" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Из коробки в Airflow 2.x: basic_auth (DB users), session (cookie от FAB login), kerberos_auth (SPNEGO/AD), deny_all (для disable API), default (anonymous — НЕ использовать в prod). JWT, OAuth, SAML — через **custom backend** (Python module в PYTHONPATH с функциями requires_authentication / init_app). AWS provides aws_auth_manager для MWAA. В 3.x появится больше OOTB поддержки.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m13-03-q3",
+      "type": "multiple-choice",
+      "question": "FAB DAG-level permissions: что это и зачем?",
+      "options": [
+        { "id": "a", "text": "Permission на DAG editing в UI" },
+        { "id": "b", "text": "Permissions на конкретный DAG через resource `DAG:my_dag_id`. Позволяет multi-tenant: team_a service account видит только `DAG:team_a_*`. Critical для shared Airflow в больших организациях" },
+        { "id": "c", "text": "Только для Admin role" },
+        { "id": "d", "text": "Deprecated в 2.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "FAB поддерживает per-DAG permissions через resources с name `DAG:<dag_id>`. Это enable multi-tenant Airflow: разные команды/teams делят одну install, но видят/триггерят только свои DAGs. CI service account для team A получает role с `can_read`/`can_edit` на `DAG:team_a_*`, не видит DAGs других команд. Настраивается через `airflow roles add-perms`.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m13-03-q4",
+      "type": "true-false",
+      "question": "При custom JWT backend нужно вручную обрабатывать auto-provisioning users: при первом успешном JWT для нового user — создать FAB user и присвоить role на основе JWT claims. Без этого user авторизован, но Public role не даёт никаких permissions.",
+      "correctAnswer": true,
+      "explanation": "JWT verification — это auth (кто это), но Airflow требует FAB user record для authorization (что можно). Custom backend должен: (1) verify JWT signature; (2) find_user(username) — если нет, add_user с правильным role. Role mapping из JWT claims (например, claim `groups: ['airflow-admin']` → Admin role). Без auto-provisioning user получает Public role = 'authenticated but unauthorized', все API calls возвращают 403. Production pattern: явная mapping table JWT_GROUP → AIRFLOW_ROLE.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

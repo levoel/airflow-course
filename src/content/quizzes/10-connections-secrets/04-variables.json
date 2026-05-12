@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "10-connections-secrets/04-variables",
+  "moduleId": "10-connections-secrets",
+  "_meta": { "idPrefix": "airflow-m10-04" },
+  "questions": [
+    {
+      "id": "airflow-m10-04-q1",
+      "type": "multiple-choice",
+      "question": "Variable.get('x') lookup order в Airflow 2.10/2.11?",
+      "options": [
+        { "id": "a", "text": "Только metadata DB" },
+        { "id": "b", "text": "Secrets Backend (если настроен) → AIRFLOW_VAR_X env → metadata DB. Strict order, первый non-None wins, никаких merge" },
+        { "id": "c", "text": "Сначала env, потом DB" },
+        { "id": "d", "text": "Random" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Lookup chain hard-coded в Airflow internals: (1) configured Secrets Backend, (2) os.environ.get('AIRFLOW_VAR_<KEY_UPPER>'), (3) SELECT FROM variable. Первый стейдж с non-None returns wins. Если Secrets Backend not configured — skip stage 1. Если ENV var не set — skip stage 2. Если ничего не найдено — default_var (если передан) или AirflowConfigException. Это identical с Connection lookup order — единый pattern.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m10-04-q2",
+      "type": "multiple-choice",
+      "question": "Top-level Variable.get в DAG-файле — проблема и фикс?",
+      "options": [
+        { "id": "a", "text": "Не работает" },
+        { "id": "b", "text": "Variable.get выполняется на каждом DAG parse (min_file_process_interval=30s default). Для 100 DAGs × Vault backend = высокая нагрузка → potential overload. Fix: (1) move внутрь @task callable, (2) enable [secrets] use_cache=True, (3) use Jinja templates {{ var.value.x }}, (4) ENV vars для static config" },
+        { "id": "c", "text": "Bug Airflow" },
+        { "id": "d", "text": "Use threading" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Any code в DAG file top-level выполняется при каждом DAG parse — каждые 30s по default. Для Variable.get это значит SQL query (DB backend) или HTTP request (Vault/Secrets Manager) каждые 30s × N DAGs × parsing_processes. Может easily reach hundreds of RPS на secrets backend → overload, timeouts, broken DAGs. Fixes: (1) Move внутрь @task — lazy evaluation, выполняется только при run. (2) [secrets] use_cache=True — per-process cache TTL 900s default. (3) Jinja templating в operator kwargs — {{ var.value.x }} resolves только при render task (runtime). (4) ENV vars AIRFLOW_VAR_X — in-memory, instant lookup, NO backend load.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m10-04-q3",
+      "type": "multiple-choice",
+      "question": "use_cache=True для secrets backend — что cached и где?",
+      "options": [
+        { "id": "a", "text": "Cached в metadata DB" },
+        { "id": "b", "text": "Per-process in-memory cache (scheduler/worker/triggerer каждый свой), TTL по cache_ttl_seconds (default 900s = 15 min). Изменения Variable в backend НЕ invalidate cache на других процессах — нужен restart или TTL expire" },
+        { "id": "c", "text": "Redis cache" },
+        { "id": "d", "text": "Centralized cache" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cache is per-process, in-memory (Python dict). Каждый scheduler/worker/triggerer pod имеет независимый cache. Trade-offs: (+) очень cheap, без external dependencies, snижает backend load в десятки раз. (-) Не consistent между процессами — после vault kv put обновлённое value не подхватывается до TTL expire или process restart. (-) Memory overhead minimal (несколько MB на pod максимум). Tune cache_ttl_seconds: больше = меньше backend load + дольше propagation rotation. Production typical: 300-900s.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m10-04-q4",
+      "type": "true-false",
+      "question": "AIRFLOW_VAR_MY_KEY env variable supports JSON strings — Airflow автоматически парсит value через json.loads, если Variable.get(...,deserialize_json=True).",
+      "correctAnswer": true,
+      "explanation": "ENV var stored as raw string. Variable.get('my_key', deserialize_json=True) → fetches via lookup chain → если ENV var contains JSON-formatted string, json.loads применяется → returns Python dict/list. Example: export AIRFLOW_VAR_ETL_CONFIG='{\"batch_size\": 1000}'; Variable.get('etl_config', deserialize_json=True) → returns {'batch_size': 1000}. Useful pattern для config bundling — один env var с structured config вместо множества scalar ENVs.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

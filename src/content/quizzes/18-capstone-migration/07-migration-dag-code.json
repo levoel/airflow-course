@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/07-migration-dag-code",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-07" },
+  "questions": [
+    {
+      "id": "airflow-m18-07-q1",
+      "type": "multiple-choice",
+      "question": "TaskFlow DAG migration к 3.x — главный change в imports?",
+      "options": [
+        { "id": "a", "text": "from airflow.providers.standard.decorators import dag" },
+        { "id": "b", "text": "from airflow.decorators import dag, task → from airflow.sdk import dag, task. Plus from airflow.models import Variable → from airflow.sdk import Variable. Ruff AIR301 auto-fix" },
+        { "id": "c", "text": "from airflow.api import dag" },
+        { "id": "d", "text": "Imports remain unchanged" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Главное изменение — airflow.sdk namespace (AIP-72 Task SDK). Старый airflow.decorators / airflow.models — deprecated в 3.x. Auto-fix через ruff AIR301. Тоже Variable, Connection — `from airflow.sdk import Variable`. Под капотом Task SDK делает REST API call к Airflow API server вместо direct DB query. Application-level — same syntax, different transport.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-07-q2",
+      "type": "multiple-choice",
+      "question": "Datasets → Assets в 3.x — что меняется?",
+      "options": [
+        { "id": "a", "text": "Только rename" },
+        { "id": "b", "text": "from airflow import Dataset → from airflow.sdk import asset (lowercase — function/decorator, не class). schedule=[dataset1, dataset2] → schedule=AssetAny(asset1, asset2) для explicit semantics. Asset events first-class с metadata facets. Multi-asset triggers улучшены. Auto-fix partial — basic cases" },
+        { "id": "c", "text": "Никаких changes" },
+        { "id": "d", "text": "Removed feature" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Datasets → Assets — semantic rename (AIP-74/75). `from airflow.sdk import asset` (lowercase function). Improvements: AssetAny / AssetAll / AssetAnyEvent / AssetExpression — explicit multi-asset semantics (previously implicit ALL). Asset events first-class — facets, lineage. Migration: ruff handles basic rename. Advanced patterns (custom dataset URI schemes) may need manual review. Concept identical — same data-aware scheduling.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-07-q3",
+      "type": "multiple-choice",
+      "question": "SLA в 3.x removed (AIP-89) — что использовать вместо?",
+      "options": [
+        { "id": "a", "text": "Custom retry logic" },
+        { "id": "b", "text": "Listener API duration monitoring + external alerting (Prometheus rules, Datadog monitors на task duration metrics). Configure thresholds в plugin или external system, alert когда duration > threshold. Often лучше — centralized rules не embedded в DAG code" },
+        { "id": "c", "text": "TimeoutException" },
+        { "id": "d", "text": "Дополнительные tasks" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "SLA removed because (a) implementation было quirky (sla_miss_callback не reliable), (b) better via observability tooling. Replacements: (1) Listener API hookimpl on_task_instance_completed — measure duration, compare к threshold, alert; (2) External monitoring rules — Prometheus/Datadog уже track task duration metrics, define alert rules там; (3) Custom Airflow callback (on_failure_callback с timeout check). External often лучше — single source of truth для все DAGs, not embedded.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-07-q4",
+      "type": "true-false",
+      "question": "Custom XCom backend (S3XComBackend) требует rewrite для 3.x compatibility.",
+      "correctAnswer": false,
+      "explanation": "Custom XCom backend API stable между 2.x и 3.x. BaseXCom interface (serialize_value, deserialize_value) — same. Capstone S3XComBackend works в 3.x без changes. Configuration через airflow.cfg [core] xcom_backend — identical. Migration к 3.x preserves XCom abstraction. Это intentional — Airflow APIs designed для backward compat в most cases. Major changes (Task SDK, FastAPI) — infrastructure level, не affect user-facing APIs typically.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

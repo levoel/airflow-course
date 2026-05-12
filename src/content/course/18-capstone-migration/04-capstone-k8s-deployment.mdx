@@ -1,0 +1,441 @@
+---
+title: "Capstone K8s deployment — Helm, HA, Multiple Executors"
+description: "Production deployment capstone на Kubernetes: Helm chart с 2 scheduler + 2 triggerer, Multiple Executors AIP-61, KEDA autoscaling, GitOps через ArgoCD"
+order: 4
+difficulty: "advanced"
+estimatedTime: 24
+topics: ["Deployment", "Kubernetes", "Helm", "HA", "Multiple Executors", "AIP-61"]
+---
+
+# Capstone K8s deployment — Helm, HA, Multiple Executors
+
+DAG код готов (предыдущий урок). Теперь production deployment: Helm chart с HA setup (2 scheduler + 2 triggerer), Multiple Executors (Celery + Kubernetes mixed), KEDA для autoscaling, GitOps через ArgoCD. Этот урок — концентрация модуля 15 (Production deployment) applied к capstone.
+
+---
+
+## Architecture deployment (recap)
+
+```
+Kubernetes cluster (EKS us-east-1)
+└─ Namespace: airflow
+   ├─ Webserver × 2 (HA, behind ALB)
+   ├─ Scheduler × 2 (HA via row-locks — модуль 04)
+   ├─ Triggerer × 2 (HA для deferrable — модуль 09)
+   ├─ DAG Processor × 1 (standalone — preview к 3.x)
+   ├─ Celery worker pool × 4 (light tasks — autoscaled by KEDA)
+   ├─ K8s Executor pods (per-task для heavy work — модуль 05)
+   ├─ PgBouncer × 2 (transaction mode — модуль 15.04)
+   └─ External Secrets (Vault sync)
+
+External:
+├─ RDS PostgreSQL 15 Multi-AZ (db.m6i.xlarge)
+├─ ElastiCache Redis cluster (3 nodes)
+├─ Vault (HCP Vault или Bank-Vaults на K8s)
+└─ Marquez (OpenLineage backend, отдельный deployment)
+```
+
+---
+
+## Helm values для capstone
+
+```yaml
+# values-capstone-prod.yaml
+airflowVersion: "2.10.5"
+
+# ─────────────────────────────────────────────────────────────
+# Multiple Executors AIP-61 (2.10+) — модуль 05
+# ─────────────────────────────────────────────────────────────
+executor: "CeleryExecutor,KubernetesExecutor"
+
+# Default image
+defaultAirflowRepository: registry.example.com/airflow
+defaultAirflowTag: "2.10.5-capstone-${GIT_SHA}"  # Bake DAGs + custom XCom backend
+
+# ─────────────────────────────────────────────────────────────
+# Configuration via env vars (instead config.yaml — easier rotation)
+# ─────────────────────────────────────────────────────────────
+config:
+  core:
+    xcom_backend: "plugins.xcom_backends.s3_xcom_backend.S3XComBackend"
+    load_examples: "False"
+    expose_config: "False"
+  webserver:
+    secure_cookie: "True"
+    base_url: "https://airflow.example.com"
+  openlineage:
+    transport: '{"type":"http","url":"http://marquez.observability.svc:5000"}'
+    namespace: "production-capstone"
+  secrets:
+    backend: "airflow.providers.hashicorp.secrets.vault.VaultBackend"
+    backend_kwargs: |
+      {"url":"https://vault.internal:8200","mount_point":"airflow",
+       "auth_type":"kubernetes","kubernetes_role":"airflow",
+       "use_cache":true,"cache_ttl_seconds":60}
+
+# ─────────────────────────────────────────────────────────────
+# Webserver — HA, behind ALB
+# ─────────────────────────────────────────────────────────────
+webserver:
+  replicas: 3
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 2Gi }
+  defaultUser:
+    enabled: false  # Disable admin/admin — модуль 15.08
+  service:
+    type: ClusterIP
+
+ingress:
+  web:
+    enabled: true
+    ingressClassName: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - name: airflow.example.com
+        tls:
+          enabled: true
+          secretName: airflow-tls
+
+# ─────────────────────────────────────────────────────────────
+# Scheduler HA (модуль 04, 15.02)
+# ─────────────────────────────────────────────────────────────
+scheduler:
+  replicas: 2  # HA через row-locks на slot_pool
+  resources:
+    requests: { cpu: 1000m, memory: 2Gi }
+    limits: { cpu: 4000m, memory: 8Gi }
+  # Anti-affinity — разнесть schedulers по different nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: component
+                  operator: In
+                  values: [scheduler]
+            topologyKey: kubernetes.io/hostname
+
+# ─────────────────────────────────────────────────────────────
+# DAG Processor standalone (preview к 3.x mandatory)
+# ─────────────────────────────────────────────────────────────
+dagProcessor:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 4Gi }
+
+# ─────────────────────────────────────────────────────────────
+# Triggerer HA (модуль 09) — обязательно для capstone deferrable sensors
+# ─────────────────────────────────────────────────────────────
+triggerer:
+  enabled: true
+  replicas: 2  # HA
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 1000m, memory: 2Gi }
+  # Autoscale based on active triggers count
+  keda:
+    enabled: false  # Manual scale 2 для предсказуемости
+
+# ─────────────────────────────────────────────────────────────
+# Celery workers (light tasks) — KEDA autoscale
+# ─────────────────────────────────────────────────────────────
+workers:
+  replicas: 2  # Min replicas
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: 2000m, memory: 4Gi }
+  keda:
+    enabled: true
+    minReplicaCount: 2
+    maxReplicaCount: 16
+    pollingInterval: 30  # seconds
+    cooldownPeriod: 300  # seconds
+    advanced:
+      # Trigger scale based on Celery queue length
+      triggers:
+        - type: redis
+          metadata:
+            addressFromEnv: REDIS_HOST
+            listName: default
+            listLength: "10"
+
+# ─────────────────────────────────────────────────────────────
+# Kubernetes Executor для Spark submission tasks
+# ─────────────────────────────────────────────────────────────
+kubernetesExecutor:
+  enabled: true
+  # Default pod template для K8s tasks
+  pod_template: |
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      labels:
+        component: kubernetes-executor-worker
+    spec:
+      serviceAccountName: airflow-worker
+      containers:
+        - name: base
+          image: registry.example.com/airflow:2.10.5-capstone
+          imagePullPolicy: IfNotPresent
+
+# ─────────────────────────────────────────────────────────────
+# PgBouncer (transaction mode) — модуль 15.04
+# ─────────────────────────────────────────────────────────────
+pgbouncer:
+  enabled: true
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+  configSecretName: pgbouncer-config-secret  # contains pgbouncer.ini
+
+# ─────────────────────────────────────────────────────────────
+# External DB connection
+# ─────────────────────────────────────────────────────────────
+data:
+  metadataConnection:
+    user: airflow_scheduler  # Per-component user — модуль 15.08
+    pass: ""
+    protocol: postgresql
+    host: pgbouncer.airflow.svc.cluster.local
+    port: 6432
+    db: airflow
+    sslmode: require
+
+# ─────────────────────────────────────────────────────────────
+# External Redis (managed ElastiCache)
+# ─────────────────────────────────────────────────────────────
+redis:
+  enabled: false  # External — не Bitnami subchart
+data:
+  brokerUrl: ""  # из External Secrets
+
+# ─────────────────────────────────────────────────────────────
+# DAG delivery — baked into image (DAGs committed в Git, build CI)
+# ─────────────────────────────────────────────────────────────
+dags:
+  gitSync:
+    enabled: false  # DAGs baked в image — atomic, no sidecar
+  persistence:
+    enabled: false
+
+# ─────────────────────────────────────────────────────────────
+# Network policies (модуль 15.08)
+# ─────────────────────────────────────────────────────────────
+networkPolicies:
+  enabled: true
+```
+
+---
+
+## External Secrets для credentials
+
+```yaml
+# externalsecrets/airflow-vault-secrets.yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: vault-backend
+spec:
+  provider:
+    vault:
+      server: "https://vault.internal:8200"
+      path: "secret"
+      version: "v2"
+      auth:
+        kubernetes:
+          mountPath: "kubernetes"
+          role: "airflow"
+
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: airflow-db-password
+  namespace: airflow
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: airflow-db-password
+    creationPolicy: Owner
+  data:
+    - secretKey: password
+      remoteRef:
+        key: airflow/rds
+        property: password
+    - secretKey: redis-url
+      remoteRef:
+        key: airflow/redis
+        property: url
+    - secretKey: fernet-key
+      remoteRef:
+        key: airflow/fernet
+        property: key
+```
+
+---
+
+## Multiple Executors deep dive
+
+Capstone использует CeleryExecutor + KubernetesExecutor одновременно. Какая task куда идёт:
+
+```python
+@task(executor="CeleryExecutor")
+def consume_kafka(): ...  # Light — short-lived, frequent
+
+@task(executor="KubernetesExecutor")
+def spark_transform(): ...  # Heavy — own pod, custom resources
+```
+
+В airflow.cfg:
+
+```ini
+[core]
+executor = airflow.providers.celery.executors.celery_executor.CeleryExecutor,airflow.providers.cncf.kubernetes.executors.kubernetes_executor.KubernetesExecutor
+```
+
+Scheduler routes tasks based на `executor` parameter. Default — first listed (Celery). Override per-task через decorator parameter.
+
+**Что это даёт:**
+
+| Task type | Executor | Behavior |
+|---|---|---|
+| Light (consume_kafka, verify_staging, notify) | Celery | Submit to Redis queue, picked up by worker |
+| Heavy (spark_transform) | Kubernetes | Spawn own pod с custom resources |
+
+Без AIP-61 (pre-2.10) — нужен либо weird hack (KubernetesPodOperator inside CeleryExecutor task — overhead), либо separate Airflow deployments per executor type. AIP-61 unified это в один cluster.
+
+---
+
+## KEDA autoscaling для Celery workers
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: airflow-worker
+  namespace: airflow
+spec:
+  scaleTargetRef:
+    name: airflow-worker
+  minReplicaCount: 2
+  maxReplicaCount: 16
+  pollingInterval: 30
+  cooldownPeriod: 300
+  triggers:
+    - type: redis
+      metadata:
+        addressFromEnv: REDIS_HOST
+        listName: default       # default queue
+        listLength: "10"        # 10 tasks per worker
+        databaseIndex: "0"
+```
+
+Behavior:
+- Idle (no Celery tasks queued): 2 workers (min)
+- 100 tasks queued: scale to 10 workers (100/10 = 10)
+- 200+ tasks queued: max 16 workers
+- После 300s idle — scale down к min
+
+Cost saving — pay только за actual workload.
+
+---
+
+## ArgoCD для GitOps deployment
+
+```yaml
+# argocd/airflow-prod-app.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: airflow-prod
+  namespace: argocd
+spec:
+  project: data-platform
+  source:
+    repoURL: https://github.com/example/airflow-helm
+    path: charts/airflow
+    targetRevision: HEAD
+    helm:
+      valueFiles:
+        - values-capstone-prod.yaml
+      parameters:
+        - name: defaultAirflowTag
+          value: "2.10.5-capstone-{{ .Values.gitSha }}"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: airflow
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+```
+
+GitOps flow:
+1. PR merged в main с code changes
+2. CI builds Docker image, pushes к registry с tag = git SHA
+3. CI updates `values-capstone-prod.yaml` с new tag (через Argo CD Image Updater или manual PR)
+4. ArgoCD detects change, syncs к cluster
+5. Helm upgrade triggers rolling restart
+6. Health checks verify deployment
+
+---
+
+## Production checklist
+
+Перед production launch capstone deployment:
+
+- [ ] Helm chart versioned (chart 1.15+ для Airflow 2.10.5)
+- [ ] 2 schedulers + 2 triggerers + 2 webservers configured
+- [ ] PgBouncer transaction mode running
+- [ ] External Secrets sync working (Vault → K8s Secret)
+- [ ] DAG processor standalone (preview к 3.x)
+- [ ] Multiple Executors `CeleryExecutor,KubernetesExecutor` configured
+- [ ] KEDA ScaledObject for workers
+- [ ] Network policies applied (модуль 15.08)
+- [ ] Per-component DB users (модуль 15.08)
+- [ ] OpenLineage transport к Marquez verified
+- [ ] Slack alerting через Listener API
+- [ ] Backup metadata DB scheduled (модуль 15.07)
+- [ ] DR plan tested (модуль 15.07)
+- [ ] Monitoring dashboard (Grafana) configured
+- [ ] DAG validity tests в CI passing
+- [ ] Integration tests на staging passing
+- [ ] Documentation: README с architecture diagram + runbook
+
+---
+
+## Production gotchas в этом deployment
+
+**`defaultAirflowTag` с git SHA — immutable deployments**. Don't reuse same tag для different code — Helm не detect change. Use git SHA для guaranteed uniqueness.
+
+**Worker pod template должен включать XCom backend dependencies**. Если XCom backend (S3XComBackend) использует boto3, image должен have boto3. Bake в Dockerfile.
+
+**`expose_config: False` mandatory**. Default Helm chart exposes /admin/configurations — security leak.
+
+**PgBouncer config через ConfigMap**. Не commit credentials в Helm values plain text. ConfigMap mounted в PgBouncer pod via init container.
+
+**Anti-affinity для scheduler**. Без anti-affinity Helm может schedule оба scheduler pods на same node — if node dies, both lost. Add podAntiAffinity (см. values выше).
+
+**RDS connection limits**. Per Multiple Executors + KEDA scale 2-16 workers + 2 scheduler + 2 webserver — needs PgBouncer pool ~80-100 connections (см. модуль 15.04 formula).
+
+**Helm chart version vs Airflow version mapping** — check chart NOTES.txt. Chart 1.15.0 → Airflow 2.10.5 by default; override через defaultAirflowTag.
+
+---
+
+<KnowledgeCheck
+  question="Capstone deployment использует Multiple Executors (AIP-61) — CeleryExecutor + KubernetesExecutor одновременно. В каких сценариях это даёт meaningful advantage vs single executor, и какие операционные complexities добавляет?"
+  answer="Multiple Executors (AIP-61, 2.10+) — significant feature для mixed workloads. Advantages для capstone scenario: (1) **Resource optimization** — light tasks (consume_kafka, notify_team) на Celery: persistent worker pool, fast scheduling overhead (<1s), reuse Python interpreter. Heavy tasks (spark_transform) на K8s: own pod с custom resources (4 CPU, 8 GB), isolated, ephemeral. Without mixed — либо все на Celery (workers OOM при spark_transform), либо все на K8s (10s overhead per task для consume_kafka — slow). (2) **Cost efficiency** — Celery workers always-on (cheap idle), K8s pods spawn только когда нужно. (3) **Custom resources per task** — spark_transform может request GPU, while consume_kafka uses cheap CPU-only nodes. (4) **Isolation для heavy tasks** — spark_transform crash не убивает other tasks (Celery worker crash affects всё на worker). (5) **Migration path** — start migration к KubernetesExecutor gradually — move tasks один-за-другим. **Operational complexities**: (1) **Debugging more complex** — task could be на Celery (check Celery worker logs) или K8s (check pod logs) — двойной debug path. (2) **Resource limits config** — нужны и Celery worker resources + K8s executor_config. Misconfig either — silent slow tasks. (3) **Routing decisions** — каждый task должен иметь explicit `executor=` parameter или fallback на first listed. Review code в PR — easy to forget. (4) **Network policies double** — both Celery workers и K8s pods нуждаются в network access. Maintain both NetworkPolicies. (5) **Monitoring split** — Celery queue metrics + K8s pod metrics. Grafana dashboard более complex. (6) **Pool semantics** — pools работают across executors, но slot accounting может быть confusing если одна pool shared. (7) **Failures могут быть executor-specific** — Celery broker outage affects Celery tasks, не K8s. K8s API outage affects K8s tasks, не Celery. Different monitoring paths. **When to use**: meaningful если у вас clear mix of light + heavy workloads (capstone case). Если все tasks similar size — single executor cleaner. **When not**: tiny deployments (< 50 DAGs) — overhead не оправдан, use single executor. **Migration к 3.x**: AIP-61 поддерживается, но 3.x будет add даже больше executor options (Edge Executor AIP-69 для edge compute). Multiple Executors becomes more powerful в 3.x — capstone setup future-proof."
+/>

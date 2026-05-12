@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "14-observability-openlineage/04-custom-extractors",
+  "moduleId": "14-observability-openlineage",
+  "_meta": { "idPrefix": "airflow-m14-04" },
+  "questions": [
+    {
+      "id": "airflow-m14-04-q1",
+      "type": "multiple-choice",
+      "question": "Custom extractor наследуется от BaseExtractor. Какие методы критичны?",
+      "options": [
+        { "id": "a", "text": "Только __init__" },
+        { "id": "b", "text": "`get_operator_classnames()` — class method, возвращает список full paths operators. `extract()` — вызывается ДО execute(), возвращает OperatorLineage с inputs/outputs из operator metadata. Опционально `extract_on_complete()` — после execute, для runtime data (row count, actual schema)" },
+        { "id": "c", "text": "Только extract" },
+        { "id": "d", "text": "init_app и close" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "`get_operator_classnames()` — диспатчер: provider знает какой extractor использовать для какого operator. `extract()` — pre-execute analysis: source/target из operator's args, SQL parsing. `extract_on_complete()` — post-execute: row counts, validated schemas, actual partitions. Оба могут возвращать None (если нечего extract). Errors в extract() — wrap try/except, никогда не raise (ломает task lifecycle).",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m14-04-q2",
+      "type": "multiple-choice",
+      "question": "Расскажите три способа регистрации custom extractor",
+      "options": [
+        { "id": "a", "text": "Только через airflow.cfg" },
+        { "id": "b", "text": "(1) Config `[openlineage] extractors = path.to.MyExtractor` — простейший. (2) **Entry points в pyproject.toml** (`[project.entry-points.\"airflow.providers.openlineage.extractors\"]`) — preferred для distributed (автоматический discovery после pip install). (3) Programmatic `OpenLineageAdapter.add_extractor()` — только для testing" },
+        { "id": "c", "text": "Только plugin folder" },
+        { "id": "d", "text": "Через UI" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Entry points — production-grade pattern. В вашем internal Python package (например 'my-company-airflow') в pyproject.toml объявляете entry points для OL extractors. После `pip install my-company-airflow` extractors автоматически discovered Airflow OL provider — нет config edits, нет manual paths. Config method работает но требует airflow.cfg updates на каждом deployment. Programmatic — для dev/tests.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m14-04-q3",
+      "type": "multiple-choice",
+      "question": "Главный принцип safety для extract(): что НИКОГДА не делать?",
+      "options": [
+        { "id": "a", "text": "Не использовать DB queries" },
+        { "id": "b", "text": "**Никогда не raise exception**. Errors в extract() ломают task lifecycle (TI помечается failed). Wrap всё в try/except, log warning, return None. Принцип: 'observability never breaks production'. Потеря lineage event > task failure" },
+        { "id": "c", "text": "Не использовать XCom" },
+        { "id": "d", "text": "Не trust user input" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "OL extractor работает как часть Listener API hooks (on_task_instance_running). Listener exception → task lifecycle ломается → TI помечается failed несмотря на работающую логику task. Это catastrophic — observability tooling ломает production. Mandatory pattern: try/except вокруг всего body, log как warning, return None при exception. Потеря одного lineage event acceptable. Также: NO side effects в extract (HTTP calls, DB writes), keep it pure — иначе непредсказуемые failures.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m14-04-q4",
+      "type": "true-false",
+      "question": "Для PythonOperator с известными статичными inputs/outputs проще всего использовать `inlets`/`outlets` параметры на task definition. OL provider автоматически конвертирует их в OL inputs/outputs facets без необходимости писать custom extractor.",
+      "correctAnswer": true,
+      "explanation": "`inlets=[Dataset('s3://raw/orders/')], outlets=[Dataset('postgres://wh/analytics.orders')]` на task definition — простейший способ декларировать lineage для PythonOperator/Decorator tasks. OL provider встроен parse этих attrs и emit как OL inputs/outputs. Работает для статичных datasets (известны при DAG parse time). Для динамических (target table вычисляется в runtime) — нужен custom extractor с extract_on_complete(). Best practice: inlets/outlets для simple cases, custom extractor для complex logic.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "18-capstone-migration/03-capstone-implementation",
+  "moduleId": "18-capstone-migration",
+  "_meta": { "idPrefix": "airflow-m18-03" },
+  "questions": [
+    {
+      "id": "airflow-m18-03-q1",
+      "type": "multiple-choice",
+      "question": "Custom XCom backend (S3) — когда оправдан?",
+      "options": [
+        { "id": "a", "text": "Всегда" },
+        { "id": "b", "text": "Когда XCom values > 48 KB (DB column limit). Small XComs остаются в DB (faster). Large — pickled, S3 PUT, reference в DB. Tradeoffs: 50-200ms S3 latency per op, $0.40/month за 1M operations, pickle security risk (RCE если bucket compromised), cleanup orphan files через lifecycle. Production use ONLY если actually нужен" },
+        { "id": "c", "text": "Только в 3.x" },
+        { "id": "d", "text": "Не оправдан никогда" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Custom XCom backend trade-offs: speed (S3 slower чем DB), cost (negligible), security (pickle RCE risk если malicious S3 write), cleanup (orphan files). Best practice: SIZE_THRESHOLD parameter (4 KB) — small XComs DB, large S3. Most workloads default DB XCom sufficient. Custom backend justified только для large dataframes (pandas, numpy arrays). Migration к 3.x preserves API — no code changes.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m18-03-q2",
+      "type": "multiple-choice",
+      "question": "Capstone: Kafka consumer task делает Variable.get(...) — внутри task, не top-level. Почему важно?",
+      "options": [
+        { "id": "a", "text": "Performance" },
+        { "id": "b", "text": "Top-level Variable.get выполняется на каждом DAG parse (~30s) → load на secrets backend (Vault/DB), slow parse. Внутри task — evaluates только при run. Модуль 02 quiz fundamentals — most common anti-pattern в production Airflow" },
+        { "id": "c", "text": "Security" },
+        { "id": "d", "text": "Required в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Variable.get / Connection.get / network calls в top-level DAG code — выполняются каждый DAG parse (default 30s). На 100 DAGs = 100 calls к Vault per minute → load + slow parse. Anti-pattern. Fix: переместить внутрь task callable (eval только при run), OR set env vars (loaded once при scheduler start). Capstone correctly delays — Vault hit только при task execution.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-03-q3",
+      "type": "multiple-choice",
+      "question": "Capstone use atomic S3 write (tmp + rename). Что предотвращает?",
+      "options": [
+        { "id": "a", "text": "Slow uploads" },
+        { "id": "b", "text": "Partial writes visible downstream. Без atomic write: если task fails mid-PUT, downstream видит partially-written file. С tmp+rename: либо complete (final), либо нет файла. Idempotent — retry overwrites tmp без affecting final" },
+        { "id": "c", "text": "S3 cost" },
+        { "id": "d", "text": "Network issues" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Atomic write pattern (модуль 17.02): write tmp, then rename. Downstream consumers видят либо старый файл, либо новый — никогда partially-written. На S3 'rename' = copy + delete (короткое окно с обоими), на HDFS — true atomic. Spark v2 output committer делает автоматически (algorithm.version=2). Critical для idempotent file-based pipelines.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m18-03-q4",
+      "type": "true-false",
+      "question": "Capstone inlets/outlets на @task decorators дают automatic OpenLineage emission без custom extractors.",
+      "correctAnswer": true,
+      "explanation": "OpenLineage provider (apache-airflow-providers-openlineage) reads inlets/outlets, emits Dataset events automatically. Declarative lineage — no extractor needed. capstone использует inlets=[Table(...)] + outlets=[asset(...)] на TaskFlow tasks. Marquez visualizes полный chain. Alternative для PythonOperator без inlets/outlets — custom extractor (more work). Best practice для maximum coverage: inlets/outlets везде + standard operators where possible (auto-emit без declarations).",
+      "bloomLevel": "applied"
+    }
+  ]
+}

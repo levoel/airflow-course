@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "17-design-patterns/02-idempotency",
+  "moduleId": "17-design-patterns",
+  "_meta": { "idPrefix": "airflow-m17-02" },
+  "questions": [
+    {
+      "id": "airflow-m17-02-q1",
+      "type": "multiple-choice",
+      "question": "Production task делает INSERT INTO orders SELECT FROM staging. Failed на 50%, retry succeeded. Что не так?",
+      "options": [
+        { "id": "a", "text": "Ничего" },
+        { "id": "b", "text": "Не идемпотентно. Если первый attempt committed 50% rows перед failure, retry добавляет ВСЕ rows снова → 150% duplicates. Fix: MERGE INTO (PostgreSQL 15+) или INSERT ... ON CONFLICT (col) DO UPDATE — повтор не создаёт дубликаты" },
+        { "id": "c", "text": "Slow" },
+        { "id": "d", "text": "Bug в Airflow" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Classic idempotency failure. INSERT без conflict handling — non-idempotent. При retry duplicates. Fix: MERGE INTO с conflict on primary key. Поведение: первый run inserts 100 rows; retry — UPDATE existing (no duplicate), все 100 rows stay. ON CONFLICT (col) DO UPDATE — PostgreSQL syntax. MERGE INTO — стандарт SQL (Snowflake/BigQuery/Postgres 15+). Production rule: каждый INSERT в production = think about retry scenario.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-02-q2",
+      "type": "multiple-choice",
+      "question": "Atomic write file на S3 — какой pattern?",
+      "options": [
+        { "id": "a", "text": "Просто put_object" },
+        { "id": "b", "text": "Write в tmp location (data.tmp), затем copy → final + delete tmp. Pока tmp не renamed, downstream consumers видят либо старый файл, либо новый — не partially-written state. На S3 нет true atomic rename (copy+delete), но window короткий" },
+        { "id": "c", "text": "Multiple puts" },
+        { "id": "d", "text": "Невозможно atomic" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Atomic write pattern: write tmp + atomic rename. На S3 'rename' = copy + delete (не true atomic, есть короткое окно с обоими файлами). На HDFS — true atomic. Pattern критичен для downstream consumers — они не должны видеть partially-written file. Spark v2 output committer делает это автоматически (algorithm.version=2). True atomic — S3 versioning (старая версия hidden after upload new) или GCS native rename.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-02-q3",
+      "type": "multiple-choice",
+      "question": "Deterministic file paths — почему важно?",
+      "options": [
+        { "id": "a", "text": "Не важно" },
+        { "id": "b", "text": "Использовать ds в пути (s3://bucket/dt={{ ds }}/) — backfill за прошлую дату → точно тот же путь → retry перезаписывает same file (idempotent). С datetime.now() каждый retry создаёт new path, orphan files накапливаются" },
+        { "id": "c", "text": "Только для performance" },
+        { "id": "d", "text": "Required by S3" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Deterministic paths — это foundation идемпотентности файловых tasks. С ds в пути: retry → same path → overwrite (idempotent). С datetime.now() (wall-clock): каждый retry — новый путь, старые orphan files накапливаются как мусор. Backfill за 2024-06-15 должен give same path что и original run. Production pattern: partition by date `dt=2026-05-12` в data lake — DELETE partition + WRITE partition для idempotent reload.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m17-02-q4",
+      "type": "true-false",
+      "question": "Идемпотентный task всегда даёт correct result — если task idempotent, можно не worry о data quality.",
+      "correctAnswer": false,
+      "explanation": "Idempotency guarantees 'повтор даёт тот же state' — но не 'state правильный'. Bug в SQL/logic даст consistently wrong result. Idempotency защищает от retries, не от bugs. Production: idempotency + correctness checks (row count validation, schema checks, semantic assertions) — both нужны. Один без другого недостаточен. MERGE на wrong join key = consistently wrong data, but idempotent.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}
