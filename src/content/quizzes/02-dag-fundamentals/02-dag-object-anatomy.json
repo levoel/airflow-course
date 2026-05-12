@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/02-dag-object-anatomy",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-02" },
+  "questions": [
+    {
+      "id": "airflow-m02-02-q1",
+      "type": "multiple-choice",
+      "question": "DAG имеет `default_args = {'retries': 3}` и task с `@task(retries=0)`. Что произойдёт при failure этой task?",
+      "options": [
+        { "id": "a", "text": "Task будет retry 3 раза (default_args используются)" },
+        { "id": "b", "text": "Task НЕ будет retry — per-task `retries=0` override-ит default_args" },
+        { "id": "c", "text": "Task retry 3 + 0 = 3 раза" },
+        { "id": "d", "text": "Error при парсинге" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Per-task arguments override default_args. BaseOperator при инстанцировании сначала применяет default_args, потом per-task arguments переопределяют. Это design позволяет: DAG-wide policy через default_args, плюс override для специфических tasks. Полезный паттерн: DAG retry policy 3, но critical task fail-fast (retries=0 чтобы alert сработал быстрее).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-02-q2",
+      "type": "multiple-choice",
+      "question": "Что произойдёт если в DAG body написать `@dag(start_date=datetime.now())`?",
+      "options": [
+        { "id": "a", "text": "Ничего особенного — DAG запустится сейчас" },
+        { "id": "b", "text": "Катастрофа: datetime.now() evaluates на каждом parse (каждые 30s), start_date сдвигается, scheduler не знает что считать 'первым run'. Fix: hardcoded datetime(2024, 1, 1)" },
+        { "id": "c", "text": "Python error" },
+        { "id": "d", "text": "Будет работать только в Python 3.10+" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Любой code в DAG body выполняется при parse (каждые 30s по default через min_file_process_interval). datetime.now() возвращает разные значения каждый parse → start_date сдвигается → next_dagrun сдвигается → scheduler в замешательстве. Backfill теряет смысл, поскольку история ровно никогда не существовала. Fix: всегда hardcoded `start_date=datetime(2024, 1, 1)` (или другая fixed date).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-02-q3",
+      "type": "multiple-choice",
+      "question": "Зачем нужен `render_template_as_native_obj=True` в @dag?",
+      "options": [
+        { "id": "a", "text": "Для security" },
+        { "id": "b", "text": "По default Jinja templates рендерятся в строки. Native obj позволяет передавать Python objects (list, dict) между tasks без str conversion. Критично для Dynamic Task Mapping" },
+        { "id": "c", "text": "Для совместимости с 1.x" },
+        { "id": "d", "text": "Это deprecated параметр" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "По default Airflow рендерит Jinja templates в строки. Для passing complex Python objects (list, dict) — нужен `render_template_as_native_obj=True`. Без него `task2.expand(items=task1_returns_list)` получит string '[1, 2, 3]' вместо list. Критично для Dynamic Task Mapping и любого complex data flow между tasks через templated arguments.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-02-q4",
+      "type": "true-false",
+      "question": "Heavy imports в top-level DAG-файла (например `import tensorflow`) замедляют DagFileProcessor parsing. Best practice — lazy imports внутри task callable.",
+      "correctAnswer": true,
+      "explanation": "Каждый parse выполняет top-level code, включая imports. Если import занимает 2-3s (TensorFlow), parsing каждого DAG-файла занимает 2-3s, scheduler tick замедляется. Fix: lazy imports внутри @task functions — они impacted только при run, не при parse. С 2.7+ есть `parsing_pre_import_modules = True` (default) — pre-import heavy modules в parent process, share через fork. Но всё равно lazy imports — best practice.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

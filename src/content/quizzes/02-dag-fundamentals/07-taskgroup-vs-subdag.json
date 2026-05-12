@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/07-taskgroup-vs-subdag",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-07" },
+  "questions": [
+    {
+      "id": "airflow-m02-07-q1",
+      "type": "multiple-choice",
+      "question": "Почему SubDagOperator считается anti-pattern в 2.x?",
+      "options": [
+        { "id": "a", "text": "Слишком сложно объяснить" },
+        { "id": "b", "text": "Recursive slot consumption (deadlock risk), default SequentialExecutor для inner, performance scheduler overhead, UI confusion, inconsistent clear/retry" },
+        { "id": "c", "text": "Только из-за плохого имени" },
+        { "id": "d", "text": "Не работает с Python 3.10" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Пять причин: (1) SubDagOperator занимает slot в parent's pool + inner tasks тоже занимают slots → recursive consumption → deadlock; (2) Default SequentialExecutor для inner (до фикса) — no parallelism; (3) Каждый subdag = отдельный DAG, scheduler processes их отдельно — overhead; (4) UI: separate graph view, cross-page nav, конфликт metrics; (5) Clear/retry: что делать с inner tasks unclear. Deprecated в 2.2, removed в 3.0.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-07-q2",
+      "type": "multiple-choice",
+      "question": "TaskGroup vs SubDAG — главное архитектурное отличие?",
+      "options": [
+        { "id": "a", "text": "TaskGroup — это просто визуальный синтаксис, ничего не меняет" },
+        { "id": "b", "text": "TaskGroup — UI-only группировка, tasks остаются в parent DAG, нет отдельного DagRun. SubDAG — отдельный DAG с своим DagRun/parsing/scheduling" },
+        { "id": "c", "text": "Они идентичны под капотом" },
+        { "id": "d", "text": "SubDAG быстрее" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Главное: TaskGroup — UI-only. Tasks внутри group остаются в parent DAG, имеют parent's executor, parent's DagRun. Group_id просто prefix для task_id (data_processing.extraction.extract_a). Нет separate DAG, separate parsing, separate scheduling. SubDAG создавал actual separate DAG со всеми последствиями. Этот architectural difference решает все проблемы SubDAG.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m02-07-q3",
+      "type": "multiple-choice",
+      "question": "Когда использовать TaskGroup, а когда Dynamic Task Mapping (.expand)?",
+      "options": [
+        { "id": "a", "text": "TaskGroup всегда" },
+        { "id": "b", "text": "TaskGroup для логической группировки related tasks (visualization), Dynamic Mapping для dynamic N задач runtime; TaskGroup — static N; Mapping — N зависит от upstream result" },
+        { "id": "c", "text": "Они взаимозаменяемы" },
+        { "id": "d", "text": "Mapping всегда" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Different use cases. TaskGroup: логическая группировка related tasks для visualization — extract+transform+load в один group. Tasks static, известны при parse. Dynamic Task Mapping: N задач определяется runtime — например, обработать N файлов из S3 prefix (где N не известно при parse). Можно combine: TaskGroup с mapped tasks внутри. Don't confuse them — different problems.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m02-07-q4",
+      "type": "true-false",
+      "question": "После migration с SubDAG на TaskGroup нужно cleanup metadata DB — удалить старые dag_ids вида 'main_dag.my_subdag' из таблиц dag, serialized_dag, dag_run, task_instance.",
+      "correctAnswer": true,
+      "explanation": "SubDAG создавал отдельные dag_ids с pattern 'parent.child'. После migration на TaskGroup эти dag_ids становятся orphaned — они не имеют активного парсинга, но history остаётся в metadata DB, занимая место. Cleanup через `airflow dags delete -y main_dag.my_subdag` или прямые SQL DELETE (с осторожностью). Без cleanup metadata DB накапливает stale data — медленные queries, UI confusion.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/04-custom-timetables",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-04" },
+  "questions": [
+    {
+      "id": "airflow-m02-04-q1",
+      "type": "multiple-choice",
+      "question": "Какой главный метод Custom Timetable нужно реализовать?",
+      "options": [
+        { "id": "a", "text": "execute()" },
+        { "id": "b", "text": "next_dagrun_info(last_automated_data_interval, restriction) — возвращает DagRunInfo с run_after и data_interval" },
+        { "id": "c", "text": "schedule_dag_run()" },
+        { "id": "d", "text": "trigger()" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "next_dagrun_info — главный метод который scheduler вызывает в Phase 1 main loop. Параметры: last_automated_data_interval (когда был последний run), restriction (start_date/end_date/catchup из DAG). Возвращает DagRunInfo(run_after=когда запустить, data_interval=временной период). None если нет следующего run. Также нужны: infer_manual_data_interval, serialize/deserialize для DB storage.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m02-04-q2",
+      "type": "multiple-choice",
+      "question": "Когда стоит писать Custom Timetable вместо cron?",
+      "options": [
+        { "id": "a", "text": "Никогда" },
+        { "id": "b", "text": "Business calendar (fiscal year, holidays), нерегулярные intervals, event-based schedules, complex data_interval semantics ('предыдущий рабочий день')" },
+        { "id": "c", "text": "Всегда" },
+        { "id": "d", "text": "Только если timezone != UTC" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Cron достаточно для 95% cases — стандартные расписания. Custom Timetable для: (1) Business day с holidays exclusion; (2) Fiscal calendar (April-March); (3) Market hours (Mon-Fri 09:30-16:00 NY time); (4) Event-based (quarterly reports на конкретные даты); (5) Complex data_interval — например 'обработать данные с предыдущего рабочего дня', не просто 'предыдущий день'. Если cron expression подходит — не пишите Timetable (он добавляет complexity).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-04-q3",
+      "type": "multiple-choice",
+      "question": "В Custom Timetable вы загружаете holidays из external API в `__init__`. Какая проблема и решение?",
+      "options": [
+        { "id": "a", "text": "Нет проблемы" },
+        { "id": "b", "text": "API hit на каждом DagBag refresh (parsing every 30s) — нагрузка на API. Solutions: cache aggressively, load из DB table, use 'holidays' Python package, или load в class-level static field" },
+        { "id": "c", "text": "API не работает в Airflow" },
+        { "id": "d", "text": "Нужно использовать только Postgres" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Timetable serialized/deserialized часто. Если __init__ делает API call — это hit на каждом parse cycle (по default min_file_process_interval = 30s). Production fix: (1) lru_cache на module-level — share между parsing processes; (2) load из metadata DB table — single source; (3) python-holidays package — local lookup; (4) static class field if dates known. Никогда не делайте network calls в Timetable init.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-04-q4",
+      "type": "true-false",
+      "question": "DatasetOrTimeSchedule (2.4+) позволяет триггерить DAG либо по cron, либо при update dataset — combination time-based и data-aware scheduling.",
+      "correctAnswer": true,
+      "explanation": "DatasetOrTimeSchedule (старое имя — DatasetTriggeredTimetableWithCron) combines обе модели. DAG запускается когда сработал cron OR обновился dataset (whichever happens first). Use case: ежедневный sanity check (cron 06:00) + сразу при появлении новых данных. Это hybrid model — лучшее обоих миров.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

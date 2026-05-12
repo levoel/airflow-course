@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/06-setup-teardown",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-06" },
+  "questions": [
+    {
+      "id": "airflow-m02-06-q1",
+      "type": "multiple-choice",
+      "question": "В чём главное преимущество as_teardown(setups=...) по сравнению с trigger_rule='all_done'?",
+      "options": [
+        { "id": "a", "text": "Меньше кода" },
+        { "id": "b", "text": "Teardown failure reflected в DagRun state (DAG=failed если cleanup упал — cost control); явный scope; setup failure handling; cleared run корректно re-runs scope" },
+        { "id": "c", "text": "Только синтаксический сахар" },
+        { "id": "d", "text": "Работает только на K8s" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Key differences from trigger_rule='all_done': (1) Teardown failure делает DagRun failed (для cost control — leak Spark cluster или Snowflake warehouse недопустим silently); (2) Setup failure явно handled — teardown всё равно runs для cleanup partial state; (3) Cleared run корректно identifies scope; (4) First-class в UI (видно scope visually). Trigger_rule='all_done' даёт DAG success даже если teardown упал — производственная боль.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-06-q2",
+      "type": "multiple-choice",
+      "question": "Если setup task упала, что произойдёт с teardown task?",
+      "options": [
+        { "id": "a", "text": "Teardown skipped" },
+        { "id": "b", "text": "Teardown runs — для cleanup partial setup state (например, частично provisioned cluster). DagRun marked failed" },
+        { "id": "c", "text": "Teardown тоже fails автоматически" },
+        { "id": "d", "text": "DAG зависает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это ключевая фича Setup/Teardown. При setup failure: middle tasks skipped (нет ресурса для работы), teardown ВСЁ РАВНО запускается. Why? Setup мог частично provision ресурс перед failure — нужен cleanup. Teardown должен быть idempotent — handle случай 'возможно ресурс не существует' gracefully. DagRun marked failed из-за setup failure.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m02-06-q3",
+      "type": "multiple-choice",
+      "question": "Какая Airflow версия минимум для production Setup/Teardown без bug-ов?",
+      "options": [
+        { "id": "a", "text": "2.0+" },
+        { "id": "b", "text": "2.7+ (introduce feature), но для production — 2.10.5+ (фикс bug где teardown skipped при middle tasks failure + retry exhausted)" },
+        { "id": "c", "text": "Только 3.x" },
+        { "id": "d", "text": "1.10+" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Setup/Teardown introduced в 2.7. В 2.7-2.10.4 был bug: при middle tasks failure + retry exhausted, иногда teardown пропускался — production cost leak. Полностью fixed в 2.10.5 (Feb 2025). Production recommendation: 2.10.5+ или 2.11.x LTS. Если на older version — use trigger_rule='all_done' с осторожностью.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m02-06-q4",
+      "type": "true-false",
+      "question": "Teardown task ОБЯЗАТЕЛЬНО должен быть idempotent — handle gracefully случай 'ресурс уже удалён'.",
+      "correctAnswer": true,
+      "explanation": "Teardown может запускаться несколько раз: retry, clear DagRun, manual rerun. Должен handle: (1) Ресурс не существует — exit success без error; (2) Partial cleanup — продолжить cleanup оставшегося. Pattern: try/except для 'NotFound' / 'AlreadyTerminated' errors, return success. Без idempotency teardown будет fail при повторном run → cascading failures.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

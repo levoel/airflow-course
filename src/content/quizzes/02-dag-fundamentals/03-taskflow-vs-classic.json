@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/03-taskflow-vs-classic",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-03" },
+  "questions": [
+    {
+      "id": "airflow-m02-03-q1",
+      "type": "multiple-choice",
+      "question": "Что внутри @task decorator с точки зрения Airflow framework?",
+      "options": [
+        { "id": "a", "text": "Magic, нельзя объяснить" },
+        { "id": "b", "text": "Creates _PythonDecoratedOperator (subclass PythonOperator) wrapper, который автоматически resolves XCom inputs, calls user function, pushes return value to XCom" },
+        { "id": "c", "text": "Просто alias для PythonOperator" },
+        { "id": "d", "text": "Inline assembler" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "@task создаёт _PythonDecoratedOperator — subclass PythonOperator с extra logic. На execute(): resolves XCom args (если переданы task references вместо values), вызывает Python функцию, push return value в XCom (key='return_value' или multiple_outputs). Это thin wrapper — TaskFlow performs ~95% также быстро как Classic.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-03-q2",
+      "type": "multiple-choice",
+      "question": "В TaskFlow `process(get_data())` означает что?",
+      "options": [
+        { "id": "a", "text": "process() выполняется немедленно" },
+        { "id": "b", "text": "Creates dependency get_data → process на parse time; на runtime process получает результат get_data через XCom автоматически" },
+        { "id": "c", "text": "Это синтаксическая ошибка" },
+        { "id": "d", "text": "Только декларация — не делает ничего" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В DAG body вызов `get_data()` возвращает не значение, а XComArg — placeholder. Когда `process(arg)` вызывается с XComArg, Airflow знает: создать dependency get_data → process, на runtime process получит value через xcom_pull(task_ids='get_data'). Это implicit dependency через function calls — главная фишка TaskFlow.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-03-q3",
+      "type": "multiple-choice",
+      "question": "Когда использовать Classic Operators вместо @task?",
+      "options": [
+        { "id": "a", "text": "Никогда — TaskFlow всегда лучше" },
+        { "id": "b", "text": "Provider-specific operators (PostgresOperator, S3CopyObjectOperator, SparkSubmitOperator), tasks без data flow (только dependency), нужно explicit control над всеми attributes" },
+        { "id": "c", "text": "Когда не знаете Python" },
+        { "id": "d", "text": "Для legacy compatibility" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Mix их когда нужно — это нормальный production pattern. @task для pure Python data flow. Classic operators для: (1) Provider-specific actions (нет смысла оборачивать PostgresOperator в @task); (2) Tasks без data flow — `a >> b >> c` чище чем function nesting; (3) Когда нужны explicit attributes (executor_config для K8s, trigger_rule, pool через kwargs).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m02-03-q4",
+      "type": "true-false",
+      "question": "`@task(multiple_outputs=True)` или return type hint `TypedDict` создаёт отдельные XCom keys для каждого field — например split_data() с return {'users': [...], 'orders': [...]} → XCom 'users' и 'orders' отдельно.",
+      "correctAnswer": true,
+      "explanation": "По default `@task` пушит весь return как XCom 'return_value'. С `multiple_outputs=True` каждый key dict становится отдельным XCom. Это позволяет downstream task pull только нужную часть: `process_users(splits['users'])`. С `TypedDict` Airflow auto-detects multiple_outputs. Полезный pattern для splitting упомянутых результатов.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

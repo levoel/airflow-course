@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/03-webserver-rbac",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-03" },
+  "questions": [
+    {
+      "id": "airflow-m01-03-q1",
+      "type": "multiple-choice",
+      "question": "Airflow 2.x webserver построен на каком стеке?",
+      "options": [
+        { "id": "a", "text": "FastAPI + React + Vite" },
+        { "id": "b", "text": "Flask + Flask-AppBuilder (FAB) + Gunicorn, server-rendered UI на Jinja templates, REST API v1 через flask-restful" },
+        { "id": "c", "text": "Django + DRF" },
+        { "id": "d", "text": "Express.js + Node" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В 2.x — Flask + FAB + Gunicorn. UI server-rendered на Jinja templates. REST API v1 через flask-restful. FAB обеспечивает RBAC, security views, admin views. В 3.x этот стек полностью заменён на FastAPI + React UI (одно из крупнейших изменений 3.x). На 2026 ~80% production deployments всё ещё на 2.x с Flask + FAB.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-03-q2",
+      "type": "multiple-choice",
+      "question": "Сценарий: вы deploy-нули новый DAG, scheduler видит его, но в UI старая версия без новых tasks. Причина?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow" },
+        { "id": "b", "text": "Каждый Gunicorn worker держит свой DagBag в memory. Workers ещё с кэшем старой версии. Решение: restart workers через `worker_refresh_interval` или вручную" },
+        { "id": "c", "text": "Нужно перезапустить scheduler" },
+        { "id": "d", "text": "DAG ещё парсится" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Webserver читает serialized_dag из БД, но каждый Gunicorn worker процесс кэширует DagBag в memory. Когда scheduler обновил serialized_dag, scheduler видит сразу (только что записал), но webserver workers ещё с старым cache. Решение: (1) worker_refresh_interval default 100 минут — Gunicorn перезапускает workers периодически; (2) уменьшить interval для частых deploys; (3) `pkill -HUP gunicorn` для force restart; (4) на K8s — rolling restart pods.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-03-q3",
+      "type": "multiple-choice",
+      "question": "Default Airflow 2.x роли (FAB) — какая роль может read и trigger DAGs но НЕ может управлять users?",
+      "options": [
+        { "id": "a", "text": "Admin" },
+        { "id": "b", "text": "Op (DAG + admin, без user management)" },
+        { "id": "c", "text": "Viewer" },
+        { "id": "d", "text": "Public" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default FAB роли: Admin (всё, включая user management), Op (DAG + admin views, без user management), User (DAG read + trigger), Viewer (только read), Public (anonymous — по default без permissions). Op подходит для DevOps инженеров, которые управляют DAGs но не должны создавать новых пользователей.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-03-q4",
+      "type": "true-false",
+      "question": "Можно ограничить какие роли видят конкретный DAG через access_control={'FinanceTeam': {'can_read', 'can_edit'}} в @dag decorator.",
+      "correctAnswer": true,
+      "explanation": "Это per-DAG access control через FAB. При parse DAG Airflow auto-sync эти permissions. Полезно для multi-team setups где finance DAGs видны только финансовой команде, ML DAGs — ML команде. Альтернатива — separate Airflow deployments per team (overhead) или в 3.x — Multi-Team Deployments (AIP-67, 3.2 experimental).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

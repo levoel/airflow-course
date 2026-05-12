@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/02-scheduler-deep",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-02" },
+  "questions": [
+    {
+      "id": "airflow-m01-02-q1",
+      "type": "multiple-choice",
+      "question": "Что делает DagFileProcessor в Airflow 2.x?",
+      "options": [
+        { "id": "a", "text": "Главный процесс, который держит main loop scheduler" },
+        { "id": "b", "text": "Дочерний процесс (один на каждый DAG-файл), который импортирует .py, валидирует, сериализует в БД и завершается" },
+        { "id": "c", "text": "Это alias для webserver" },
+        { "id": "d", "text": "Это компонент Triggerer" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DagFileProcessor — короткоживущий процесс, создаваемый DagFileProcessorManager для каждого .py файла. Он импортирует файл, инстанцирует DAG-объекты, валидирует структуру (нет cycle, valid dag_id), сериализует в JSON и пишет в таблицу serialized_dag, затем завершается. Использование отдельного процесса на каждый файл — намеренная изоляция: краш одного DAG не валит scheduler, не утекает память между парсингами.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-02-q2",
+      "type": "multiple-choice",
+      "question": "Когда вы делаете `airflow scheduler` в 2.x, какое дерево процессов запускается?",
+      "options": [
+        { "id": "a", "text": "Один процесс — scheduler делает всё в одном process" },
+        { "id": "b", "text": "Parent (SchedulerJob main loop) → DagFileProcessorManager (forked) → N DagFileProcessor (parsing_processes)" },
+        { "id": "c", "text": "Только parent + threads" },
+        { "id": "d", "text": "Parent + ZooKeeper координация" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default в 2.x: parent process (SchedulerJob) держит main event loop. Через multiprocessing.Process forks DagFileProcessorManager — он управляет parsing. Manager forks N parsing processes (parsing_processes config, default 2). Это процессы (не threads) для true CPU parallelism (Python GIL) и изоляции краша. Можно опционально вынести parsing в standalone process через `airflow dag-processor` + `standalone_dag_processor = True`.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m01-02-q3",
+      "type": "multiple-choice",
+      "question": "У вас 5000 DAGs и scheduler_loop_duration метрика растёт > 10 секунд. Какой первый шаг тюнинга?",
+      "options": [
+        { "id": "a", "text": "Увеличить parallelism до 1000" },
+        { "id": "b", "text": "Включить standalone_dag_processor = True, увеличить parsing_processes до 2× vCPU, увеличить min_file_process_interval до 60s" },
+        { "id": "c", "text": "Перейти с PostgreSQL на MySQL" },
+        { "id": "d", "text": "Отключить retries во всех DAGs" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "При большом количестве DAGs главный bottleneck — parsing. (1) standalone_dag_processor вынесет parsing в отдельный процесс, не блокируя scheduler loop; (2) parsing_processes = 2× vCPU (Astronomer recommendation) — больше параллелизма; (3) min_file_process_interval = 60 — реже re-parse файлов; (4) увеличить dag_dir_list_interval — реже сканировать папку. Также проверить top-level network calls в DAG-файлах — они выполняются на каждом parse.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-02-q4",
+      "type": "true-false",
+      "question": "DagFileProcessor запускается как отдельный multiprocessing.Process (не thread) на каждый файл для трёх причин: изоляция краша, изоляция памяти, true CPU parallelism (обход GIL).",
+      "correctAnswer": true,
+      "explanation": "Все три причины верны. (1) Изоляция краша: если DAG-файл сегфолтит из-за битого C extension — упадёт только parsing process, не scheduler. (2) Изоляция памяти: Python не освобождает память между imports, отдельный процесс завершается полностью и память освобождается ОС. (3) GIL: Python threads не дают true CPU parallelism для CPU-bound parsing — multiprocessing обходит это.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

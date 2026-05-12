@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/05-metadata-db-schema",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-05" },
+  "questions": [
+    {
+      "id": "airflow-m01-05-q1",
+      "type": "multiple-choice",
+      "question": "Какая таблица в metadata DB обычно занимает наибольший % объёма в production?",
+      "options": [
+        { "id": "a", "text": "dag" },
+        { "id": "b", "text": "log (особенно если используется DB log handler — не рекомендуется в production)" },
+        { "id": "c", "text": "connection" },
+        { "id": "d", "text": "ab_user" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Таблица log часто занимает ~70% объёма metadata DB, если включён DB log handler. Best practice: использовать S3/GCS/Elasticsearch для file logs, оставив DB log только для audit (UI events: trigger, clear, pause). Без cleanup эта таблица растёт линейно с количеством events. Также большие: task_instance (~10-15%), xcom (~5-10% если default DB backend для блобов). Solution: `airflow db clean --keep-last 28` + pg_partman партиционирование.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-05-q2",
+      "type": "multiple-choice",
+      "question": "Какая SQL query поможет диагностировать stuck queued tasks?",
+      "options": [
+        { "id": "a", "text": "SELECT * FROM dag WHERE is_paused = true" },
+        { "id": "b", "text": "SELECT dag_id, task_id, queued_dttm, (now() - queued_dttm) AS queued_for FROM task_instance WHERE state = 'queued' AND queued_dttm < now() - interval '10 minutes'" },
+        { "id": "c", "text": "SELECT * FROM connection WHERE conn_type='postgres'" },
+        { "id": "d", "text": "SELECT * FROM xcom" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Этот запрос находит TaskInstances, которые перешли в queued state давно (>10 минут), но не получили worker. Причины: executor heartbeat missed (Celery worker died), broker problems (Redis down), pool exhausted, prefetch pitfall (long task блокирует slots). Это первый query в любой 'tasks are stuck' troubleshooting.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-05-q3",
+      "type": "multiple-choice",
+      "question": "Какой composite index добавлен в Airflow 2.7 и критичен для performance scheduler на больших installations?",
+      "options": [
+        { "id": "a", "text": "idx_dag_run_id" },
+        { "id": "b", "text": "idx_ti_dag_run_task_map_index ON task_instance(dag_id, run_id, task_id, map_index)" },
+        { "id": "c", "text": "idx_xcom_value" },
+        { "id": "d", "text": "idx_log_event" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Composite index на (dag_id, run_id, task_id, map_index) был добавлен в 2.7. Без него scheduler tick на >10k TI/day может занимать секунды (full table scan для каждого scheduling decision). С index — индекс scan, миллисекунды. Если апгрейдились с <2.7 — обязательно сделайте migrations. Также критичны: idx на dag_run(state, dag_id), idx на log(dttm).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-05-q4",
+      "type": "true-false",
+      "question": "Создание read-only Postgres user (airflow_readonly) с SELECT на public schema — best practice для analytics queries и monitoring дашбордов в production.",
+      "correctAnswer": true,
+      "explanation": "В production никогда не подключайтесь к metadata DB из приложений как `airflow` user — у него full access ко всему metadata (Connections с decrypted passwords, Variables, audit logs). Создайте read-only user с минимальными правами для: analytics queries, monitoring dashboards (Grafana datasource), data quality checks. Это базовый security hygiene.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

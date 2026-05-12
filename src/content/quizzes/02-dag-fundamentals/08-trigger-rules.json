@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/08-trigger-rules",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-08" },
+  "questions": [
+    {
+      "id": "airflow-m02-08-q1",
+      "type": "multiple-choice",
+      "question": "После BranchPythonOperator (@task.branch) какой trigger_rule нужен у downstream merge task?",
+      "options": [
+        { "id": "a", "text": "all_success (default)" },
+        { "id": "b", "text": "one_success или none_failed_min_one_success — иначе merge получит upstream_failed когда один из путей skipped (branching выбрал другой)" },
+        { "id": "c", "text": "all_failed" },
+        { "id": "d", "text": "trigger_rule неважен" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "После branching ОДИН из путей выбран — другие skipped. С default `all_success` merge видит mix success+skipped → переходит в upstream_failed (нежелательное поведение). С `one_success` merge triggers когда хотя бы один upstream success → корректно. С `none_failed_min_one_success` — also требует absence failures + minimum 1 success. Это must-know pattern для branching DAGs.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-08-q2",
+      "type": "multiple-choice",
+      "question": "Какой trigger_rule выбрать для task 'notify_summary' который должен отправить Slack message ВСЕГДА (success или fail), включая результаты всех upstream tasks?",
+      "options": [
+        { "id": "a", "text": "all_success" },
+        { "id": "b", "text": "all_done — запустится когда все upstream достигли terminal state (любого), внутри task делать xcom_pull с обработкой None для failed tasks" },
+        { "id": "c", "text": "one_failed" },
+        { "id": "d", "text": "none_failed" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "all_done — waits for all upstream terminal, runs regardless of outcomes. Внутри notify: для каждого upstream task — `try: result = ti.xcom_pull(task_ids=...) except: result = 'FAILED'`, собрать summary, send. Альтернатива `always` тоже работает но менее clean (не waits for terminal). Modern alternative: Listener API hook on_dag_run_finished — centralized notification без notify task в каждом DAG.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-08-q3",
+      "type": "multiple-choice",
+      "question": "Task с retries=3 failed в первой попытке. Может ли downstream task с trigger_rule=all_done запуститься между retries?",
+      "options": [
+        { "id": "a", "text": "Да" },
+        { "id": "b", "text": "Нет — up_for_retry не считается terminal state. Downstream tasks ждут пока upstream не достигнет final terminal state (success или failed после exhausted retries)" },
+        { "id": "c", "text": "Только при manual trigger" },
+        { "id": "d", "text": "Зависит от executor" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Terminal states: success, failed, skipped, upstream_failed. up_for_retry, up_for_reschedule, deferred, scheduled, queued, running — НЕ terminal. Downstream ждёт final state. С retries=3 task может пройти cycle: failed → up_for_retry → scheduled → queued → running → success (или failed после 3 попыток). Только в конце downstream может запуститься.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-08-q4",
+      "type": "true-false",
+      "question": "trigger_rule='always' — best practice для notification tasks. Запускается independently of upstream state.",
+      "correctAnswer": true,
+      "explanation": "'always' triggers независимо от upstream outcomes. Используется для (1) Notification tasks (Slack summary, email — должны идти всегда); (2) Audit logging; (3) Cleanup в специфических cases (хотя as_teardown лучше в 2.7+). Не использовать для actual business logic — она ДОЛЖНА зависеть от upstream. Anti-pattern: 'always' на core_processing task.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

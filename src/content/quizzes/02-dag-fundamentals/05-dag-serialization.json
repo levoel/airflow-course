@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "02-dag-fundamentals/05-dag-serialization",
+  "moduleId": "02-dag-fundamentals",
+  "_meta": { "idPrefix": "airflow-m02-05" },
+  "questions": [
+    {
+      "id": "airflow-m02-05-q1",
+      "type": "multiple-choice",
+      "question": "Что попадает в serialized_dag.data (JSONB)?",
+      "options": [
+        { "id": "a", "text": "Полный Python код DAG-файла" },
+        { "id": "b", "text": "Structure DAG: dag_id, schedule, tasks (с task_id, _task_type, python_callable_name), dependencies, default_args, params. НЕ хранится Python code функций (только их names)" },
+        { "id": "c", "text": "Pickle всех DAG objects" },
+        { "id": "d", "text": "Compiled bytecode" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Serialized DAG хранит ТОЛЬКО structure, не код. JSON содержит: dag_id, schedule, start_date, tasks (task_id, _task_type, python_callable_name — ИМЯ функции, не код), arguments, downstream_task_ids, default_args, params, doc_md. Workers при execute() делают actual import .py файла и find function по name. Это разделение позволяет: webserver работает без access к .py файлам, scheduler не делает re-import.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-05-q2",
+      "type": "multiple-choice",
+      "question": "Вы изменили implementation Python функции (тело `def extract():`), но scheduler не видит изменений. Почему?",
+      "options": [
+        { "id": "a", "text": "Bug в Airflow" },
+        { "id": "b", "text": "Serialized_dag хранит только structure, не код. Изменение тела функции не меняет structure → dag_hash остаётся → serialized_dag не обновляется. Но workers при run import свежий код. Force re-parse: `airflow dags reserialize` (2.7+)" },
+        { "id": "c", "text": "Scheduler crashed" },
+        { "id": "d", "text": "Нужно переписать DAG" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Это by design. Serialized_dag отслеживает только structure через dag_hash (MD5 JSON). Изменение implementation функции не меняет structure → hash тот же → нет UPDATE. НО: workers при execute() делают actual import .py и используют новый код. Так что новые runs работают с новой логикой. UI показывает старую structure (это OK — structure не изменилась). Force reserialize: `airflow dags reserialize` (2.7+) или touch .py файла.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-05-q3",
+      "type": "multiple-choice",
+      "question": "DAG с 1000+ tasks через generator pattern (не expand) — какая проблема?",
+      "options": [
+        { "id": "a", "text": "Никаких" },
+        { "id": "b", "text": "Single DAG имеет огромную сериализацию (>1MB JSON), что замедляет scheduler reads. Fix: Dynamic Task Mapping (`expand()`) — mapped TI создаются runtime, не embedded в DAG structure" },
+        { "id": "c", "text": "Невозможно запустить" },
+        { "id": "d", "text": "Только UI медленный" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Static generation: `for i in range(1000): task_i = PythonOperator(...)` создаёт 1000 task definitions IN structure → serialization 100KB-1MB. Scheduler читает это на каждом scheduling decision (через cache, но всё равно overhead). С `.expand()` (Dynamic Task Mapping, Module 07): structure имеет 1 task definition с `.expand(arg=[1...1000])`. Mapped TI создаются runtime в таблице task_instance с разными map_index. Structure size constant.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-05-q4",
+      "type": "true-false",
+      "question": "С 2.7+ `compress_serialized_dags = True` сжимает сериализацию через zstandard, экономит ~70% disk и DB IO.",
+      "correctAnswer": true,
+      "explanation": "Compression — production optimization для больших installations. zstandard очень эффективен на JSON: ratio 3-5x. Save: disk space в metadata DB, network IO (scheduler/webserver reads сериализацию), memory cache. CPU overhead minimal (compress/decompress fast). Recommended для production с >1000 DAGs.",
+      "bloomLevel": "applied"
+    }
+  ]
+}

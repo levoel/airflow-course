@@ -1,0 +1,323 @@
+---
+title: "Webserver и Flask-AppBuilder в 2.x"
+description: "Flask + FAB + Gunicorn architecture, RBAC security model, DagBag cache, тюнинг для больших deployments"
+order: 3
+difficulty: "advanced"
+estimatedTime: 20
+topics: ["Webserver", "Flask", "Flask-AppBuilder", "RBAC", "Gunicorn"]
+---
+
+# Webserver и Flask-AppBuilder в 2.x
+
+Webserver — это лицо Airflow для пользователей. В 2.x он построен на Flask + Flask-AppBuilder (FAB) + Gunicorn, server-rendered UI на Jinja templates, REST API v1 через flask-restful. Это проверенный временем стек, но он имеет специфические production gotchas — особенно с DagBag caching и FAB-driven auth.
+
+В 3.x webserver полностью заменён на FastAPI API Server с React UI, поэтому понимание FAB остаётся актуальным только для 2.x. Но **на 2026 год 80% production deployments — это именно 2.x**, поэтому это рабочий навык.
+
+---
+
+## Архитектура webserver
+
+<DiagramContainer title="Webserver в Airflow 2.x" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Gunicorn (master)"
+        tooltip="Pre-fork WSGI HTTP server. Один master process форкает N worker processes (default 4). Master не обслуживает requests — только управляет workers."
+      >
+        gunicorn master :8080
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="fork × workers" />
+    <FlowRow>
+      <DataBox
+        label="Worker 1"
+        tooltip="Gunicorn worker — отдельный Python процесс с Flask application. Каждый worker имеет свой DagBag в memory. Concurrent requests обрабатываются sync (default), gevent или eventlet."
+      >
+        Flask app + DagBag
+      </DataBox>
+      <DataBox
+        label="Worker 2"
+        tooltip="Каждый worker — независимая копия DagBag в memory. При 5000 DAGs это может быть гигабайт RAM на worker."
+      >
+        Flask app + DagBag
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Flask + Flask-AppBuilder (FAB)"
+        tooltip="Flask application + FAB поверх. FAB обеспечивает: RBAC (роли + permissions), security views (login/logout/profile), admin views, model views, REST API generation. Все UI views рендерятся Jinja templates server-side."
+      >
+        FAB views + REST API v1
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="SQLAlchemy direct" />
+    <FlowRow>
+      <DataBox
+        label="Metadata DB"
+        tooltip="Webserver читает serialized_dag для рендеринга graph/grid view, dag_run и task_instance для status, log для просмотра логов, ab_user/ab_role для auth."
+      >
+        Metadata DB
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Запуск и конфиг
+
+```bash
+airflow webserver --port 8080 --workers 4
+```
+
+Или через `airflow.cfg`:
+
+```ini
+[webserver]
+web_server_port = 8080
+workers = 4                        # Gunicorn worker processes
+worker_class = sync                # sync / gevent / eventlet
+worker_refresh_batch_size = 1      # restart workers по N штук
+worker_refresh_interval = 6000     # каждые 100 минут — restart всех (mitigates DagBag bloat)
+secret_key = <some-random-string>  # для signing cookies
+auth_backend = airflow.api.auth.backend.session
+```
+
+### Gunicorn worker classes
+
+| Class | Concurrency | Use case |
+|---|---|---|
+| `sync` (default) | 1 request per worker thread | Простой, безопасный, default |
+| `gevent` | N concurrent через greenlets | Высокая concurrency, blocking I/O |
+| `eventlet` | Similar to gevent | Альтернатива gevent |
+
+Для большинства production — `sync` достаточно. Если у вас high RPS UI (>100 req/s) — `gevent`.
+
+---
+
+## DagBag cache — главный pitfall
+
+Каждый Gunicorn worker процесс держит **свой `DagBag` в memory** — это парсенные DAG objects. При большом числе DAGs это может стать проблемой.
+
+### Размеры на практике
+
+Для деплоя с 5000 DAGs:
+- DagBag в memory ≈ **500 MB - 2 GB** на worker
+- 4 workers → 2-8 GB только на DagBag cache
+- Total webserver footprint → 3-10 GB
+
+### Проблема: stale cache
+
+DagBag в каждом worker инициализируется при старте worker (или после restart). Если DAGs изменились — workers видят старую версию до restart.
+
+**Mitigation в 2.x**: `worker_refresh_interval` — Gunicorn перезапускает workers периодически (default каждые 100 минут). Каждый restart перечитывает DagBag из serialized_dag table.
+
+```ini
+[webserver]
+worker_refresh_interval = 600      # каждые 10 минут (для частых deploy)
+worker_refresh_batch_size = 1      # по одному, чтобы не было downtime
+```
+
+### DAG Serialization помогает
+
+Webserver не парсит .py файлы — он читает уже сериализованную версию из таблицы `serialized_dag`. Это namespace, который scheduler пишет после parsing. Webserver просто десериализует JSON и кеширует.
+
+Если webserver видит "DAG не найден" а scheduler видит — типично это рассинхрон: scheduler уже обновил `serialized_dag`, webserver worker ещё с старым cache. Refresh worker — решает.
+
+---
+
+## Flask-AppBuilder (FAB) RBAC
+
+FAB реализует Role-Based Access Control над Flask. Концепции:
+
+### Users → Roles → Permissions
+
+```
+User (john) → Role (DataEngineer) → Permissions:
+  - can_read on Dag (read all DAGs)
+  - can_edit on Dag (trigger, clear, pause)
+  - can_read on TaskInstance
+  - menu_access on Variable
+```
+
+### Default roles
+
+| Role | Permissions |
+|---|---|
+| **Admin** | Все permissions, включая manage users |
+| **Op** | DAG + admin (без user management) |
+| **User** | DAG read + trigger, no admin |
+| **Viewer** | Только read |
+| **Public** | Anonymous (по default — нет permissions) |
+
+### Создание users через CLI
+
+```bash
+airflow users create \
+    --username alice \
+    --password secret \
+    --firstname Alice \
+    --lastname Smith \
+    --role Op \
+    --email alice@company.com
+
+airflow users list
+
+airflow users delete --username alice
+```
+
+### Per-DAG permissions (Access Control)
+
+Можно ограничить, какая роль видит конкретный DAG:
+
+```python
+@dag(
+    dag_id="finance_etl",
+    access_control={
+        "FinanceTeam": {"can_read", "can_edit"},
+        "Op": {"can_read"},
+    },
+)
+def finance_etl(): ...
+```
+
+Auto-sync ролей при DAG parse.
+
+---
+
+## Authentication backends
+
+Default — FAB authentication (username + password в metadata DB). Можно swap:
+
+```ini
+[webserver]
+auth_backend = airflow.api.auth.backend.basic_auth
+# Опции:
+# - basic_auth
+# - session
+# - kerberos_auth
+# - LDAP через webserver_config.py
+# - OAuth (Google, GitHub) через webserver_config.py
+```
+
+### LDAP пример (webserver_config.py)
+
+```python
+from flask_appbuilder.security.manager import AUTH_LDAP
+
+AUTH_TYPE = AUTH_LDAP
+AUTH_LDAP_SERVER = "ldap://ldap.company.com:389"
+AUTH_LDAP_USE_TLS = False
+AUTH_LDAP_SEARCH = "OU=Users,DC=company,DC=com"
+AUTH_LDAP_BIND_USER = "CN=svc-airflow,OU=Service,DC=company,DC=com"
+AUTH_LDAP_BIND_PASSWORD = "secret"
+AUTH_LDAP_UID_FIELD = "sAMAccountName"
+AUTH_LDAP_USER_REGISTRATION = True
+AUTH_LDAP_USER_REGISTRATION_ROLE = "Op"
+```
+
+### OAuth (Google) пример
+
+```python
+AUTH_TYPE = AUTH_OAUTH
+OAUTH_PROVIDERS = [{
+    "name": "google",
+    "icon": "fa-google",
+    "token_key": "access_token",
+    "remote_app": {
+        "client_id": os.environ["GOOGLE_OAUTH_CLIENT_ID"],
+        "client_secret": os.environ["GOOGLE_OAUTH_CLIENT_SECRET"],
+        "api_base_url": "https://www.googleapis.com/oauth2/v2/",
+        "client_kwargs": {"scope": "openid email"},
+        "access_token_url": "https://oauth2.googleapis.com/token",
+        "authorize_url": "https://accounts.google.com/o/oauth2/auth",
+    },
+}]
+```
+
+---
+
+## REST API v1 в 2.x
+
+С Airflow 2.0 — stable REST API v1 через flask-restful:
+
+```
+GET    /api/v1/dags
+GET    /api/v1/dags/{dag_id}
+POST   /api/v1/dags/{dag_id}/dagRuns       # trigger
+GET    /api/v1/dags/{dag_id}/dagRuns/{run_id}
+POST   /api/v1/dags/{dag_id}/clearTaskInstances
+GET    /api/v1/connections
+POST   /api/v1/variables
+```
+
+OpenAPI 3 spec на `/api/v1/openapi.yaml`. Можно генерировать клиенты на любом языке.
+
+Auth для API — отдельный backend:
+```ini
+[api]
+auth_backends = airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+```
+
+---
+
+## Production tuning
+
+### Sizing
+
+| Deploy size | Workers | Worker class | Memory |
+|---|---|---|---|
+| Small (<100 DAGs) | 2 | sync | 2 GB |
+| Medium (100-1000) | 4 | sync | 4 GB |
+| Large (1000-5000) | 6-8 | sync | 8-16 GB |
+| XL (>5000) | 8-12 | gevent | 16-32 GB |
+
+### Critical configs
+
+```ini
+[webserver]
+workers = 4                         # 2× vCPU обычно
+worker_class = sync
+worker_refresh_batch_size = 1
+worker_refresh_interval = 6000      # 100 minutes
+secret_key = <generate via openssl rand>
+expose_config = False               # production — не показывать конфиг в UI
+auth_rate_limited = True            # mitigates brute force
+auth_rate_limit = 5 per 40 second
+```
+
+### Health checks
+
+```bash
+# Webserver health
+curl http://airflow:8080/health
+# {"metadatabase": {"status": "healthy"}, "scheduler": {"status": "healthy", ...}}
+
+# K8s liveness probe
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 60
+  periodSeconds: 30
+```
+
+---
+
+## Что меняется в 3.x
+
+В Airflow 3.0:
+- **Flask + FAB → FastAPI + React UI**
+- **Flask blueprints для plugins → React plugin system** (3.1+)
+- **REST API v1 (Flask-RESTful) → REST API v2 (FastAPI с автогенерируемым OpenAPI)**
+- **FAB удалён из core** (AIP-79) — auth становится pluggable
+
+Это одно из крупнейших изменений 3.x. В нашем курсе мы остаёмся с Flask + FAB как production reality 2.x, и в Module 18 покажем migration path.
+
+---
+
+<KnowledgeCheck
+  question="Сценарий: вы deploy-нули новый DAG, scheduler его видит и запустил, но в Web UI старая версия (без новых tasks). Почему так может быть и как исправить?"
+  answer="Webserver не парсит .py файлы — он читает сериализованную версию DAG из таблицы serialized_dag. Каждый Gunicorn worker имеет свой DagBag cache в memory. Когда DAG обновлён в serialized_dag, scheduler видит сразу (он только что записал), но webserver workers ещё держат cache от старой версии. Решение: (1) restart Gunicorn workers (через `worker_refresh_interval`, default 100 минут, или вручную через `pkill -HUP gunicorn`); (2) уменьшить `worker_refresh_interval` для частых deploys (например, 10 минут); (3) на K8s — rolling restart pods после deploy. В 3.x с FastAPI и centralized state эта проблема решена иначе."
+/>

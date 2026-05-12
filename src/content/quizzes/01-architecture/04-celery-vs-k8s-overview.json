@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/04-celery-vs-k8s-overview",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-04" },
+  "questions": [
+    {
+      "id": "airflow-m01-04-q1",
+      "type": "multiple-choice",
+      "question": "Типичный task startup latency у CeleryExecutor vs KubernetesExecutor?",
+      "options": [
+        { "id": "a", "text": "Оба одинаковы — 5 секунд" },
+        { "id": "b", "text": "Celery: 1-3s (worker готов), Kubernetes: 5-30s (pull image + K8s scheduling + init container + Python startup)" },
+        { "id": "c", "text": "Celery медленнее (10-20s), Kubernetes быстрее (1-2s)" },
+        { "id": "d", "text": "Latency зависит только от типа task, не от executor" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Celery worker — long-living process, ready to execute. Task startup 1-3s (forking Python subprocess + LocalTaskJob init). KubernetesExecutor создаёт новый pod на каждую task: pull image (5-30s если не cached), K8s scheduling (1-5s), init container (2-5s), Python startup (1-3s). Total cold start 5-30s. Для коротких tasks (<1 min) это huge overhead.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-04-q2",
+      "type": "multiple-choice",
+      "question": "У вас workload: 1000 daily light SQL tasks (5 сек каждая) + 10 daily ML inference tasks (GPU + custom deps). Какой executor выбрать?",
+      "options": [
+        { "id": "a", "text": "Чистый CeleryExecutor — быстрее всё" },
+        { "id": "b", "text": "Чистый KubernetesExecutor — изоляция всегда хорошо" },
+        { "id": "c", "text": "CeleryKubernetesExecutor (hybrid): 1000 light tasks через Celery (5s × 1000 = быстро), 10 ML через K8s (GPU, isolation). Routing через @task(queue='kubernetes')" },
+        { "id": "d", "text": "LocalExecutor" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Hybrid optimal. 1000 коротких tasks через Celery: total time 5s × 1000 / N workers — быстро, дёшево. 10 ML через K8s: per-task GPU resources, custom image. Routing через queue. Альтернатива в 2.10+: Multiple Executors (AIP-61) — executor=CeleryExecutor,KubernetesExecutor, @task(executor='K8sExecutor'). Чистый K8s для всего был бы дорог: 1000 × 15s overhead = 4 часа waste на startup. Чистый Celery не даст GPU.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m01-04-q3",
+      "type": "multiple-choice",
+      "question": "Главный pitfall CeleryExecutor с worker_prefetch_multiplier > 1?",
+      "options": [
+        { "id": "a", "text": "Memory leak в worker" },
+        { "id": "b", "text": "Long-running task на worker с prefetch=4 блокирует 4 slot-а, другие short tasks ждут даже если worker свободен на остальных 3 slots" },
+        { "id": "c", "text": "Redis broker падает" },
+        { "id": "d", "text": "Tasks теряются при restart" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Celery worker с prefetch_multiplier=4 берёт из broker до 4×concurrency messages заранее. Если worker prefetched 4 tasks и один из них long-running (1 час), эти 4 slot-а заняты — short tasks ждут в queue даже если worker имеет свободные slots на других tasks. Best practice для mixed workload: `worker_prefetch_multiplier = 1`. Дополнительно: разные queues per workload type — long queue separate, short queue separate.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m01-04-q4",
+      "type": "true-false",
+      "question": "KubernetesExecutor watcher thread в scheduler-процессе подписан на K8s API events для отслеживания pod lifecycle (started/failed/completed).",
+      "correctAnswer": true,
+      "explanation": "Watcher thread — критичный компонент KubernetesExecutor. Запускается внутри scheduler process, подписан на K8s API watch endpoint. Когда pod меняет state (Pending → Running → Succeeded/Failed), watcher получает event и обновляет TaskInstance state в metadata DB. Без watcher scheduler не знал бы что pod завершился. При restart scheduler watcher переподключается, но pods могут остаться в orphan state (mitigated через try_adopt_task_instances).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

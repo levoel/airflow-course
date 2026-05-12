@@ -1,0 +1,89 @@
+{
+  "moduleId": "02-dag-fundamentals",
+  "title": "Module 02 Exam — DAG fundamentals",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m02-exam",
+    "description": "6-question integrated exam for Module 02"
+  },
+  "questions": [
+    {
+      "id": "airflow-m02-exam-q1",
+      "type": "multiple-choice",
+      "question": "DAG factory pattern с `Variable.get('db_password')` в top-level. Какая проблема?",
+      "options": [
+        { "id": "a", "text": "Не работает в Python 3.11" },
+        { "id": "b", "text": "Variable.get выполняется на каждом DAG parse (default min_file_process_interval = 30s) → постоянный hit на DB или Vault. Fix: переместить внутрь task callable или enable [secrets] use_cache=True" },
+        { "id": "c", "text": "Bug в Airflow" },
+        { "id": "d", "text": "Нужно использовать env vars" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Любой code в DAG body выполняется при parse (~каждые 30s). Variable.get → SQL query или Vault API call → нагрузка на secrets backend. Fix: (1) перенести внутрь @task — eval только при run; (2) enable [secrets] use_cache=True; (3) для DAG-config — use env vars (loaded once при scheduler start).",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-exam-q2",
+      "type": "multiple-choice",
+      "question": "TaskFlow @task vs Classic PythonOperator — главное преимущество TaskFlow?",
+      "options": [
+        { "id": "a", "text": "Быстрее работает" },
+        { "id": "b", "text": "Type-safe data flow между tasks через function arguments; automatic XCom resolution; чище код без boilerplate **context и manual xcom_pull" },
+        { "id": "c", "text": "Только синтаксический сахар" },
+        { "id": "d", "text": "Работает только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "TaskFlow преимущества: (1) Type hints для inputs/outputs — IDE autocomplete, type-checking; (2) Implicit dependency через function calls — `process(extract())` создаёт A→B; (3) Automatic XCom resolution — нет manual xcom_pull; (4) Чище код. Performance ~95% от Classic (тонкая обёртка). Mix Classic для provider operators, TaskFlow для Python logic — production pattern.",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m02-exam-q3",
+      "type": "multiple-choice",
+      "question": "В Airflow 2.x DAG serialization хранит:",
+      "options": [
+        { "id": "a", "text": "Полный Python source code DAG-файла" },
+        { "id": "b", "text": "Structure DAG (tasks, deps, schedule, args) в JSONB. НЕ хранит Python code — только names функций. Workers re-import .py при execute()" },
+        { "id": "c", "text": "Pickled Python objects" },
+        { "id": "d", "text": "Только task_ids" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Serialized_dag хранит structure — sufficient для scheduling decisions, UI rendering, dependency analysis. НЕ хранит код функций (только python_callable_name). Это позволяет: webserver работает без access к dags/ папке, scheduler не делает re-import. Изменение implementation функции не вызывает re-serialization (hash тот же), но workers подхватят свежий код при execute().",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m02-exam-q4",
+      "type": "multiple-choice",
+      "question": "Production pattern: provision Spark cluster → run jobs → terminate cluster. Что использовать в 2.x?",
+      "options": [
+        { "id": "a", "text": "SubDAG с trigger_rule='all_done' на terminate" },
+        { "id": "b", "text": "Setup/Teardown (2.7+): create_cluster.as_setup(), terminate_cluster.as_teardown(setups=create_cluster). Teardown runs даже при failures, DagRun reflects teardown failure (cost control). Min version 2.10.5 для production без bugs" },
+        { "id": "c", "text": "Просто sequential tasks без trigger_rule" },
+        { "id": "d", "text": "Sensor-based polling" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Setup/Teardown — modern abstraction (2.7+) для ephemeral resources. Преимущества vs trigger_rule='all_done': teardown failure делает DagRun failed (cost control), явный scope, setup failure handling. SubDAG — anti-pattern. 2.10.5+ обязателен для production — fix bug где teardown иногда skipped при middle failures + retry exhausted.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m02-exam-q5",
+      "type": "multiple-choice",
+      "question": "Custom Timetable нужен когда:",
+      "options": [
+        { "id": "a", "text": "Стандартный cron достаточно" },
+        { "id": "b", "text": "Business calendar (fiscal year, holidays exclusion), market hours, event-based schedule, complex data_interval semantics — то, что нельзя выразить cron-ом" },
+        { "id": "c", "text": "Всегда — это modern way" },
+        { "id": "d", "text": "Только в 3.x" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Custom Timetable (AIP-39, 2.2+) для сложных расписаний: business days с holidays, fiscal calendar, market hours, event-based (quarterly reports на конкретные даты). Cron покрывает 95% cases — не пишите Timetable когда cron подходит (он добавляет complexity: serialization, unit tests, может ломать parsing).",
+      "bloomLevel": "evaluative"
+    },
+    {
+      "id": "airflow-m02-exam-q6",
+      "type": "true-false",
+      "question": "TaskGroup в Airflow 2.x — UI-only группировка tasks. Tasks остаются в parent DAG, parent's executor, parent's DagRun — нет отдельного DAG как у legacy SubDAG.",
+      "correctAnswer": true,
+      "explanation": "TaskGroup решает все проблемы SubDAG: tasks остаются в parent DAG (нет recursive slot consumption / deadlock), используют parent's executor (full parallelism), один DagRun (не два), corresponding clear/retry semantics, native UI с collapsible group в parent graph view. group_id — namespace для task_id внутри. SubDAG removed в 3.0. Всегда используйте TaskGroup в новом коде.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}
