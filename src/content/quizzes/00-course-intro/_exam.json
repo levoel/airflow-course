@@ -38,15 +38,15 @@
     {
       "id": "airflow-m00-exam-q3",
       "type": "multiple-choice",
-      "question": "Зачем в Airflow 3.x DAG Processor стал mandatory отдельным процессом?",
+      "question": "Почему курс ориентирован на Airflow 2.x, а не 3.x?",
       "options": [
-        { "id": "a", "text": "Для backward compatibility с Airflow 1.x" },
-        { "id": "b", "text": "Для изоляции parsing от scheduler loop, поддержки DAG Bundles (AIP-66), DAG Versioning и Task SDK boundary" },
-        { "id": "c", "text": "Это случайное архитектурное решение без значимого эффекта" },
-        { "id": "d", "text": "Только для increase Python interpreter версии" }
+        { "id": "a", "text": "Airflow 3.x ещё не вышел" },
+        { "id": "b", "text": "На 2026 ~80% production deployments на 2.10/2.11, 2.11 — LTS, managed services (MWAA, Cloud Composer 2) ещё на 2.x. Курс готовит к production reality + даёт upgrade path к 3.x в финальном модуле" },
+        { "id": "c", "text": "3.x не имеет преимуществ" },
+        { "id": "d", "text": "Эти версии идентичны" }
       ],
       "correctAnswer": "b",
-      "explanation": "DAG Processor mandatory в 3.0 решает несколько задач: (1) изоляция parsing — медленный DAG больше не блокирует scheduler loop; (2) DAG Bundles (AIP-66) — несколько источников DAGs (git, S3) с версионированием; (3) DAG Versioning (AIP-63) — каждый DagRun привязан к версии bundle; (4) поддержка Task SDK (AIP-72) — workers не имеют direct DB access.",
+      "explanation": "Airflow 3.0 вышел в апреле 2025, но на 2026 production reality — это 2.10/2.11. 2.11 — LTS. Большинство managed offerings (MWAA, Cloud Composer 2) ещё на 2.x. Курс делает экспертом по 2.x — текущей prod версии — и даёт upgrade path к 3.x в финальном модуле (FastAPI server, Task SDK, DAG Versioning, Assets rename, migration через airflow upgrade-check).",
       "bloomLevel": "analytical"
     },
     {
@@ -80,9 +80,9 @@
     {
       "id": "airflow-m00-exam-q6",
       "type": "true-false",
-      "question": "Курс ориентирован на Airflow 3.x и намеренно не покрывает SubDAG operator (заменён TaskGroup), Smart Sensors (удалены), Flower (заменяется OTel) и Airflow 1.x.",
+      "question": "Курс ориентирован на Airflow 2.10/2.11 (LTS) и намеренно не покрывает SubDAG operator (deprecated, anti-pattern), Smart Sensors (удалены), Flower (заменяется OTel в 2.10+) и Airflow 1.x.",
       "correctAnswer": true,
-      "explanation": "Курс 3.x-first. SubDAG operator и Smart Sensors — anti-patterns / removed. Flower deprecated в пользу OTel metrics. Airflow 1.x устарел. 2.10/2.11 упоминаются как historical context, потому что 80% production deployments всё ещё на них в 2026.",
+      "explanation": "Курс 2.10/2.11-first. SubDAG operator и Smart Sensors — anti-patterns / removed. Flower deprecated в пользу OTel metrics. Airflow 1.x устарел. SequentialExecutor только для тестов. Финальный модуль (M18) даёт upgrade path к Airflow 3.x как next step.",
       "bloomLevel": "evaluative"
     }
   ]

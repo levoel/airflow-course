@@ -19,16 +19,16 @@
           "definition": "Направленный ациклический граф — основная абстракция Airflow. Узлы — это tasks, рёбра — зависимости (A → B значит 'B зависит от A'). Ациклический — нельзя пройти из вершины в неё саму. Гарантирует конечное число шагов выполнения.",
           "example": "@dag(schedule='@daily', start_date=datetime(2026, 1, 1))\ndef my_dag():\n    extract = extract_task()\n    transformed = transform_task(extract)\n    load_task(transformed)\n    notify_task(transformed)\n# Airflow выводит граф: extract → transform → [load, notify]",
           "relatedLessons": [
-            { "title": "DAG fundamentals", "slug": "02-dag-fundamentals/01-dag-anatomy" }
+            { "title": "DAG fundamentals", "slug": "02-dag-fundamentals/01-module-overview" }
           ]
         },
         {
           "term": "DagRun",
           "termEn": "DAG Run",
-          "definition": "Конкретный запуск DAG за определённый интервал (data interval). DagRun имеет state (queued/running/success/failed), logical_date, run_id, dag_version_id (с 3.0+). Создаётся scheduler-ом из timetable или asset event. Внутри содержит TaskInstance-ы.",
-          "example": "-- В metadata DB:\nSELECT dag_id, run_id, state, start_date, dag_version_id\nFROM dag_run\nWHERE dag_id = 'orders_etl'\nORDER BY start_date DESC LIMIT 5;",
+          "definition": "Конкретный запуск DAG за определённый интервал (data interval). DagRun имеет state (queued/running/success/failed), logical_date (в 2.x — execution_date), run_id. Создаётся scheduler-ом из timetable или dataset event.",
+          "example": "-- В metadata DB:\nSELECT dag_id, run_id, state, start_date, execution_date\nFROM dag_run\nWHERE dag_id = 'orders_etl'\nORDER BY start_date DESC LIMIT 5;",
           "relatedLessons": [
-            { "title": "DagRun lifecycle", "slug": "04-scheduler-internals/03-dagrun-lifecycle" }
+            { "title": "Scheduler main loop", "slug": "04-scheduler-internals/01-main-loop" }
           ]
         },
         {
@@ -37,43 +37,52 @@
           "definition": "Конкретный запуск конкретного task в конкретном DagRun. Имеет полный жизненный цикл состояний: none → scheduled → queued → running → success/failed/retry/deferred. Хранится в таблице task_instance metadata DB.",
           "example": "# TaskInstance состояния:\n# none — deps не satisfied\n# scheduled — все deps OK, выбран scheduler-ом\n# queued — отдан executor-у\n# running — выполняется на worker\n# success / failed / up_for_retry / deferred",
           "relatedLessons": [
-            { "title": "TI state machine", "slug": "04-scheduler-internals/04-task-state-machine" }
+            { "title": "TI state machine", "slug": "04-scheduler-internals/01-main-loop" }
           ]
         },
         {
           "term": "Executor",
           "termEn": "Executor",
-          "definition": "Компонент Airflow, отвечающий за выполнение tasks. Получает workload от scheduler, кладёт в свой queue/orchestrator, отслеживает результат. Варианты: LocalExecutor, CeleryExecutor, KubernetesExecutor, CeleryKubernetesExecutor, EdgeExecutor (3.0+), Pluggable Executors (AIP-61).",
+          "definition": "Компонент Airflow, отвечающий за выполнение tasks. В 2.x: LocalExecutor, CeleryExecutor, KubernetesExecutor, CeleryKubernetesExecutor, LocalKubernetesExecutor. С 2.10 — Multiple Executors одновременно (AIP-61).",
           "example": "# airflow.cfg\n[core]\nexecutor = LocalExecutor,CeleryExecutor  # multiple executors (AIP-61, 2.10+)\n\n# Task с явным executor:\n@task(executor='CeleryExecutor')\ndef heavy_task():\n    pass",
           "relatedLessons": [
-            { "title": "Executors overview", "slug": "05-executors/01-overview" }
+            { "title": "Executors overview", "slug": "05-executors/01-module-overview" }
           ]
         },
         {
           "term": "Scheduler",
           "termEn": "Scheduler",
-          "definition": "Главный процесс Airflow. Парсит DAGs (через DAG Processor в 3.x), создаёт DagRun-ы по timetable, переводит TaskInstance scheduled → queued, кидает их в executor. Может работать в HA режиме (несколько scheduler-ов одновременно).",
+          "definition": "Главный процесс Airflow. Парсит DAGs (через DagFileProcessor pool внутри scheduler-process в 2.x), создаёт DagRun-ы по timetable, переводит TaskInstance scheduled → queued, кидает их в executor. Работает в HA режиме с 2.0+ через PostgreSQL row-level locks.",
           "example": "# Запуск scheduler standalone\nairflow scheduler\n\n# В Docker:\ndocker compose exec airflow-scheduler airflow scheduler\n\n# Проверить heartbeat в metadata DB:\nSELECT id, job_type, state, latest_heartbeat\nFROM job WHERE job_type='SchedulerJob';",
           "relatedLessons": [
             { "title": "Scheduler main loop", "slug": "04-scheduler-internals/01-main-loop" }
           ]
         },
         {
-          "term": "DAG Processor",
-          "termEn": "DAG Processor",
-          "definition": "Отдельный процесс в Airflow 3.x (mandatory с 3.0, AIP-66). Парсит .py файлы DAGs, сериализует их в БД (таблица serialized_dag). В 2.x этим занимался scheduler — теперь изолировано для предотвращения замедления scheduler loop медленным парсингом.",
-          "example": "# Запуск DAG processor:\nairflow dag-processor\n\n# Конфиг:\n[scheduler]\nparsing_processes = 2  # parallel DagFileProcessor (2x vCPU recommendation)\nmin_file_process_interval = 30",
+          "term": "DagFileProcessor",
+          "termEn": "DAG File Processor",
+          "definition": "В 2.x — пул дочерних процессов (multiprocessing.Process) ВНУТРИ scheduler-процесса. Парсит .py файлы DAGs, сериализует их в БД (таблица serialized_dag). Можно опционально вынести в standalone process через `airflow dag-processor`. В 3.x стал mandatory отдельным процессом (AIP-66).",
+          "example": "# airflow.cfg\n[scheduler]\nparsing_processes = 2  # parallel DagFileProcessor (default)\nmin_file_process_interval = 30\n\n# Standalone:\nairflow dag-processor",
           "relatedLessons": [
-            { "title": "DAG Processor", "slug": "01-architecture/03-dag-processor-bundles" }
+            { "title": "Architecture", "slug": "01-architecture/01-process-architecture" }
           ]
         },
         {
           "term": "Triggerer",
           "termEn": "Triggerer",
-          "definition": "Отдельный процесс с asyncio event loop, держащий тысячи активных triggers для deferrable operators. Когда task вызывает self.defer(), trigger сериализуется и передаётся triggerer-у; событие просыпает task без блокировки worker-slot.",
+          "definition": "Отдельный процесс с asyncio event loop, держащий тысячи активных triggers для deferrable operators (AIP-40 stable с 2.5). Когда task вызывает self.defer(), trigger сериализуется и передаётся triggerer-у; событие просыпает task без блокировки worker-slot.",
           "example": "# Запуск:\nairflow triggerer\n\n# Custom trigger:\nclass MyTrigger(BaseTrigger):\n    async def run(self):\n        while not ready:\n            await asyncio.sleep(1)\n        yield TriggerEvent(data)",
           "relatedLessons": [
-            { "title": "Triggerer architecture", "slug": "09-triggerer-deferrable/01-architecture" }
+            { "title": "Triggerer", "slug": "09-triggerer-deferrable/01-module-overview" }
+          ]
+        },
+        {
+          "term": "Webserver",
+          "termEn": "Webserver (Airflow 2.x)",
+          "definition": "В Airflow 2.x — Flask application + Flask-AppBuilder (FAB) + Gunicorn. Server-rendered UI на Jinja templates. REST API v1 через flask-restful. Auth pluggable через FAB. В Airflow 3.x заменён на FastAPI + React UI.",
+          "example": "# airflow.cfg\n[webserver]\nweb_server_port = 8080\nworkers = 4                       # Gunicorn workers\nworker_class = sync\nworker_refresh_interval = 6000    # restart on big DagBag",
+          "relatedLessons": [
+            { "title": "Architecture", "slug": "01-architecture/01-process-architecture" }
           ]
         }
       ]
@@ -85,7 +94,7 @@
         {
           "term": "Critical Section",
           "termEn": "Critical Section",
-          "definition": "В Scheduler — участок main loop, где TI переводятся из scheduled в queued state с одновременной проверкой concurrency и pool limits. Защищён row-level lock на pool slots (SELECT * FROM slot_pool FOR UPDATE NOWAIT) — гарантирует, что одновременно только один scheduler в section, обеспечивая HA через RDBMS lock без Raft/ZK.",
+          "definition": "В Scheduler — участок main loop (с Airflow 2.0+), где TI переводятся из scheduled в queued state с одновременной проверкой concurrency и pool limits. Защищён row-level lock на pool slots (SELECT * FROM slot_pool FOR UPDATE NOWAIT) — гарантирует, что одновременно только один scheduler в section, обеспечивая HA через RDBMS lock без Raft/ZK.",
           "example": "-- В Postgres логах:\nLOG: process X waiting for ShareLock on transaction Y\n  on relation slot_pool of database airflow\n\n-- Это значит scheduler-1 в critical section, scheduler-2 ждёт",
           "relatedLessons": [
             { "title": "Critical Section + HA", "slug": "04-scheduler-internals/02-critical-section-ha" }
@@ -97,49 +106,40 @@
           "definition": "TaskInstance в состоянии running, чей heartbeat от worker не обновлялся дольше scheduler_zombie_task_threshold (default 300s). Причины: worker OOM-killed, node spot termination, network partition. Scheduler помечает их failed/up_for_retry.",
           "example": "# Конфиг:\n[scheduler]\nscheduler_zombie_task_threshold = 300\n\n# Мониторинг:\nSELECT dag_id, task_id, latest_heartbeat,\n       now() - latest_heartbeat AS gap\nFROM task_instance\nWHERE state='running'\n  AND latest_heartbeat < now() - interval '300 seconds';",
           "relatedLessons": [
-            { "title": "Zombie tasks", "slug": "04-scheduler-internals/05-zombies-orphans" }
+            { "title": "Scheduler main loop", "slug": "04-scheduler-internals/01-main-loop" }
           ]
         },
         {
           "term": "Orphan Task",
           "termEn": "Orphan Task",
           "definition": "TaskInstance в состоянии queued/running, чей scheduler/worker умер. Живой scheduler через adopt_or_reset_orphaned_tasks пытается забрать их (try_adopt_task_instances у executor-а) или сбросить в state=None для рестарта.",
-          "example": "# Внутри SchedulerJobRunner:\nUPDATE job SET state='failed'\nWHERE job_type='SchedulerJob'\n  AND state='running'\n  AND latest_heartbeat < now() - 30s;\n# Затем — adopt их TI или reset",
+          "example": "# Внутри SchedulerJob:\nUPDATE job SET state='failed'\nWHERE job_type='SchedulerJob'\n  AND state='running'\n  AND latest_heartbeat < now() - 30s;\n# Затем — adopt их TI или reset",
           "relatedLessons": [
-            { "title": "Orphan adoption", "slug": "04-scheduler-internals/05-zombies-orphans" }
-          ]
-        },
-        {
-          "term": "DAG Bundle",
-          "termEn": "DAG Bundle",
-          "definition": "Коллекция DAGs с фиксированной версией, AIP-66 (3.0+). Bundle может быть git repo, S3 prefix, GCS bucket — pluggable backends. У каждого bundle есть manifest и версия → DagRun привязывается к версии кода. Cleared task запустится на том же коде.",
-          "example": "# config.yaml:\ndag_processor:\n  dag_bundles:\n    - name: production\n      classpath: airflow.dag_processing.bundles.git.GitDagBundle\n      kwargs:\n        repo_url: 'git@github.com:company/dags.git'\n        ref: main",
-          "relatedLessons": [
-            { "title": "DAG Bundles", "slug": "01-architecture/03-dag-processor-bundles" }
+            { "title": "Scheduler main loop", "slug": "04-scheduler-internals/01-main-loop" }
           ]
         }
       ]
     },
     {
-      "id": "datasets-assets",
-      "name": "Datasets и Assets",
+      "id": "datasets",
+      "name": "Datasets и Data-aware scheduling",
       "terms": [
         {
-          "term": "Asset",
-          "termEn": "Asset (Airflow 3.x)",
-          "definition": "В Airflow 3.0 переименование Dataset (2.4-2.11) — declarative data object с identifier. DAGs могут produce assets (через outlets) и consume их (через schedule). Когда asset обновлён, downstream DAGs автоматически triggers. С 3.2 поддерживает partitions (downstream подписывается на конкретные).",
-          "example": "from airflow.sdk import asset, dag\n\n@asset(schedule='@daily')\ndef orders_asset(context):\n    return df  # автоматически outlet\n\n@dag(schedule=[orders_asset])\ndef consumer(): ...",
+          "term": "Dataset",
+          "termEn": "Dataset (Airflow 2.4+)",
+          "definition": "В Airflow 2.4+ (AIP-48) declarative data object с identifier. DAGs могут produce datasets (через outlets) и consume их (через schedule=[dataset]). Когда dataset обновлён, downstream DAGs автоматически triggers. В Airflow 3.x переименовано в Assets с расширениями.",
+          "example": "from airflow import Dataset\nfrom airflow.decorators import dag, task\n\nmy_dataset = Dataset('s3://bucket/data.parquet')\n\n@dag(schedule=[my_dataset])\ndef consumer(): ...\n\n@dag(schedule='@daily')\ndef producer():\n    @task(outlets=[my_dataset])\n    def write(): ...",
           "relatedLessons": [
-            { "title": "Datasets → Assets", "slug": "08-datasets-assets/01-overview" }
+            { "title": "Datasets", "slug": "08-datasets-assets/01-module-overview" }
           ]
         },
         {
-          "term": "Event-driven scheduling",
-          "termEn": "Event-driven scheduling (AIP-82)",
-          "definition": "В Airflow 3.0 механизм триггера DAG-а из внешнего message bus (SQS, Kafka, etc.) через CommonMessageQueue abstraction. Расширение Assets для случаев, когда событие не file/table-based.",
-          "example": "from airflow.providers.common.messaging import CommonMessageQueue\n\nqueue = CommonMessageQueue(\n    queue_url='sqs://my-queue',\n    schema='orders_v1'\n)\n\n@dag(schedule=queue)\ndef process_orders(): ...",
+          "term": "DatasetAlias",
+          "termEn": "DatasetAlias (Airflow 2.9+)",
+          "definition": "Dynamic dataset references — для случаев, когда нельзя статически определить dataset URI. На runtime эмитим конкретный dataset event через context.",
+          "example": "from airflow.datasets import DatasetAlias\n\nmy_alias = DatasetAlias('my-alias')\n\n@task(outlets=[my_alias])\ndef dynamic_writer(context):\n    context['outlet_events'][my_alias].add(\n        Dataset(f's3://bucket/{path}')\n    )",
           "relatedLessons": [
-            { "title": "Event-driven", "slug": "08-datasets-assets/03-event-driven" }
+            { "title": "Datasets", "slug": "08-datasets-assets/01-module-overview" }
           ]
         }
       ]
@@ -149,21 +149,12 @@
       "name": "Executors",
       "terms": [
         {
-          "term": "Pluggable Executors",
-          "termEn": "Pluggable Executors (AIP-61)",
+          "term": "Multiple Executors",
+          "termEn": "Multiple Executors (AIP-61, 2.10+)",
           "definition": "В Airflow 2.10+ возможность одновременно использовать несколько executors. Конфиг: executor = LocalExecutor,CeleryExecutor. Первый — default. Task может явно указать executor через @task(executor='CeleryExecutor'). В 3.2 добавлено team-scoping (AIP-67).",
           "example": "[core]\nexecutor = LocalExecutor,CeleryExecutor,KubernetesExecutor\n\n@task(executor='KubernetesExecutor')\ndef gpu_task():\n    # запустится в k8s pod\n    pass",
           "relatedLessons": [
-            { "title": "Pluggable Executors", "slug": "05-executors/05-pluggable-multi" }
-          ]
-        },
-        {
-          "term": "Edge Executor",
-          "termEn": "Edge Executor (AIP-69)",
-          "definition": "Новый executor в Airflow 3.0 для on-prem/edge worker-ов за NAT. Worker звонит домой в API server через polling (HTTP), не требует прямого доступа к metadata DB (использует Task SDK AIP-72). Provider package: apache-airflow-providers-edge3.",
-          "example": "[core]\nexecutor = airflow.providers.edge3.executors.EdgeExecutor\n\n# Worker:\nairflow edge worker --api-url https://airflow.example.com",
-          "relatedLessons": [
-            { "title": "Edge Executor", "slug": "05-executors/06-edge-executor" }
+            { "title": "Executors", "slug": "05-executors/01-module-overview" }
           ]
         },
         {
@@ -172,7 +163,16 @@
           "definition": "Параметр Celery worker — сколько messages забирать из broker заранее. Значение по умолчанию 4 — long-task может занять 4 slots, блокируя другие. Best practice для mixed workload: worker_prefetch_multiplier = 1.",
           "example": "# airflow.cfg\n[celery]\nworker_prefetch_multiplier = 1  # против starvation\nworker_concurrency = 16\nworker_autoscale = 16,8  # min/max\nbroker_url = redis://redis:6379/0\nresult_backend = db+postgresql://airflow:...@postgres/airflow",
           "relatedLessons": [
-            { "title": "Celery internals", "slug": "05-executors/02-celery-deep" }
+            { "title": "Executors deep", "slug": "05-executors/01-module-overview" }
+          ]
+        },
+        {
+          "term": "CeleryKubernetesExecutor",
+          "termEn": "CeleryKubernetesExecutor",
+          "definition": "В Airflow 2.x hybrid executor: по queue task выбирается путь. queue='kubernetes' → KubernetesExecutor (изоляция, slow start), всё остальное → CeleryExecutor (быстрый, shared workers). Также LocalKubernetesExecutor (Local + K8s).",
+          "example": "[core]\nexecutor = airflow.executors.celery_kubernetes_executor.CeleryKubernetesExecutor\n\n# Task на K8s:\n@task(queue='kubernetes')\ndef gpu_task(): ...\n\n# Task на Celery:\n@task\ndef light_task(): ...",
+          "relatedLessons": [
+            { "title": "Executors", "slug": "05-executors/01-module-overview" }
           ]
         }
       ]
@@ -187,25 +187,43 @@
           "definition": "Симметричный encryption Airflow для Connections и Variables. AES-128-CBC + HMAC-SHA256. Ключ в airflow.cfg fernet_key. Key rotation через несколько ключей: новые шифруются первым, старые расшифровываются любым.",
           "example": "# Генерация ключа:\npython -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'\n\n# Key rotation:\nexport AIRFLOW__CORE__FERNET_KEY='new_key,old_key'\n\n# Re-encrypt:\nairflow rotate-fernet-key",
           "relatedLessons": [
-            { "title": "Fernet encryption", "slug": "10-connections-secrets/02-fernet" }
+            { "title": "Secrets", "slug": "10-connections-secrets/01-module-overview" }
           ]
         },
         {
-          "term": "Task SDK",
-          "termEn": "Task SDK (AIP-72)",
-          "definition": "В Airflow 3.0 архитектурный разрыв: workers больше не имеют direct DB access, общаются с API server через REST. Task SDK — Python библиотека, реализующая этот контракт. Открывает путь для multi-language workers (Go SDK in flight).",
-          "example": "# Старый импорт (2.x):\nfrom airflow.models import Variable\n\n# Новый (3.x) — через SDK:\nfrom airflow.sdk import dag, task, Variable\n\n@task\ndef use_var():\n    val = Variable.get('my_var')  # под капотом — REST call",
+          "term": "Listener API",
+          "termEn": "Listener API (Airflow 2.8+)",
+          "definition": "В Airflow 2.8+ новый 'правильный' способ слушать events lifecycle (task started/success/failed, dataset created/changed). Раньше использовали on_failure_callback per task. Listener видит ВСЕ events системы — идеально для generic alerting, audit logging, OpenLineage emission.",
+          "example": "from airflow.listeners import hookimpl\n\nclass MyListener:\n    @hookimpl\n    def on_task_instance_running(self, previous_state, task_instance, session):\n        send_to_slack(f'Task {task_instance.task_id} started')",
           "relatedLessons": [
-            { "title": "Task SDK", "slug": "01-architecture/02-task-sdk-boundary" }
+            { "title": "Plugins / Listeners", "slug": "12-plugins-listeners/01-module-overview" }
           ]
         },
         {
           "term": "OpenLineage",
           "termEn": "OpenLineage",
-          "definition": "Open standard для emission data lineage events. Airflow provider apache-airflow-providers-openlineage автоматически эмитит OL events для каждого task (job start/complete/fail) с метаданными (SQL, source/destination, schema). Бэкенды: Marquez, DataHub, Atlan.",
+          "definition": "Open standard для emission data lineage events. Airflow provider apache-airflow-providers-openlineage (стабилизирован с 2.6) автоматически эмитит OL events для каждого task (job start/complete/fail) с метаданными (SQL, source/destination, schema). Бэкенды: Marquez, DataHub, Atlan.",
           "example": "# airflow.cfg\n[openlineage]\ntransport = {\"type\":\"http\",\"url\":\"http://marquez:5000\"}\nnamespace = production\n\n# Все стандартные operators emit-ят OL events автоматически",
           "relatedLessons": [
-            { "title": "OpenLineage", "slug": "14-observability-openlineage/03-openlineage" }
+            { "title": "OpenLineage", "slug": "14-observability-openlineage/01-module-overview" }
+          ]
+        },
+        {
+          "term": "Deferrable Operators",
+          "termEn": "Deferrable Operators (AIP-40)",
+          "definition": "Operators, которые могут передать управление triggerer (async event loop) вместо блокировки worker slot. С 2.2 experimental, с 2.5 stable. Worker вызывает self.defer(trigger=MyTrigger(), method_name='execute_complete') → state=deferred → освобождает slot.",
+          "example": "from airflow.providers.standard.sensors.date_time import DateTimeSensorAsync\n\n@dag(...)\ndef my_dag():\n    DateTimeSensorAsync(\n        task_id='wait',\n        target_time='2026-05-13T10:00:00'\n    )  # ← НЕ блокирует worker slot",
+          "relatedLessons": [
+            { "title": "Triggerer", "slug": "09-triggerer-deferrable/01-module-overview" }
+          ]
+        },
+        {
+          "term": "OpenTelemetry",
+          "termEn": "OpenTelemetry (AIP-49, Airflow 2.10+)",
+          "definition": "В Airflow 2.10+ полный stack OTel: metrics, traces, logs. Заменяет StatsD. Готовая интеграция с Datadog, Dynatrace, NewRelic, Grafana Cloud, Tempo. Ключевые метрики: scheduler_loop_duration, executor.open_slots, triggerer.running_triggers.",
+          "example": "# airflow.cfg\n[metrics]\notel_on = True\notel_host = otel-collector\notel_port = 4317\notel_prefix = airflow\notel_interval_milliseconds = 60000",
+          "relatedLessons": [
+            { "title": "Observability + OpenLineage", "slug": "14-observability-openlineage/01-module-overview" }
           ]
         }
       ]

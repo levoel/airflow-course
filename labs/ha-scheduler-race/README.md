@@ -20,9 +20,8 @@ docker compose up -d
 Поднимаются:
 - 1 PostgreSQL
 - 1 Redis (Celery broker)
-- 1 API Server
-- 1 DAG Processor
-- **2 Scheduler instances** (scheduler-1, scheduler-2)
+- 1 Webserver (Flask)
+- **2 Scheduler instances** (scheduler-1, scheduler-2) — каждый с встроенным DagFileProcessor pool
 - 2 Celery Workers
 - 1 Triggerer
 
@@ -31,7 +30,7 @@ docker compose up -d
 В отдельном терминале триггеруем 100 DAG runs параллельно:
 
 ```bash
-docker compose exec api-server bash -c '
+docker compose exec webserver bash -c '
   for i in {1..100}; do
     airflow dags trigger sample_dag --run-id manual_$i
   done

@@ -11,7 +11,7 @@ topics: ["Scheduler", "Main loop", "SchedulerJobRunner", "TaskInstance lifecycle
 
 Scheduler — это сердце Airflow. От его правильной работы зависят: когда DagRun будет создан, когда TaskInstance перейдёт в queued, когда executor получит команду, когда зомби-таски будут зачищены. Этот урок препарирует scheduler main loop до конкретного псевдокода и SQL-запросов, которые он отправляет в metadata DB.
 
-Главный класс — `SchedulerJobRunner` (в 3.x — `airflow-core/src/airflow/jobs/scheduler_job_runner.py`).
+Главный класс — `SchedulerJob` (в 2.x — `airflow/jobs/scheduler_job.py`; в 3.x переименован в `SchedulerJobRunner`).
 
 ---
 
@@ -66,7 +66,7 @@ def _create_dagruns_for_dags(self, session):
             data_interval=dag.timetable.data_interval,
             state=DagRunState.QUEUED,
             run_type=DagRunType.SCHEDULED,
-            dag_version_id=dag.current_version_id,  # 3.x — pin to version
+            # В 3.x также: dag_version_id=dag.current_version_id (AIP-63 DAG Versioning)
         )
         session.add(dag_run)
 
@@ -86,8 +86,8 @@ def _create_dagruns_for_dags(self, session):
 **Ключевые моменты:**
 - `next_dagrun_create_after` — момент, когда следующий run должен быть создан. Обновляется после каждого создания.
 - DagRun сразу попадает в state **`queued`** — это значит «scheduler знает, что надо запускать, ждёт перехода в running».
-- `dag_version_id` (3.x) — фиксируем версию bundle на момент создания DagRun.
-- Asset-triggered runs — из таблицы `dataset_dag_run_queue` (если все необходимые datasets обновлены).
+- Dataset-triggered runs — из таблицы `dataset_dag_run_queue` (если все необходимые datasets обновлены — Datasets API, AIP-48 с 2.4+).
+- В 3.x добавилось `dag_version_id` (AIP-63 DAG Versioning) — каждый DagRun привязан к версии bundle.
 
 ---
 
@@ -98,7 +98,7 @@ def _create_dagruns_for_dags(self, session):
 ```python
 # Псевдокод _schedule_dag_run
 def _schedule_dag_run(self, dag_run, session):
-    dag = serialized_dag_to_dag(dag_run.dag_version_id)
+    dag = serialized_dag_to_dag(dag_run.dag_id)
     task_instances = dag_run.get_task_instances(session)
 
     for ti in task_instances:
@@ -250,7 +250,7 @@ metrics.counter("scheduler.tasks.killed_externally", ...)
 | `max_dagruns_per_loop_to_schedule` | 20 | Batch size for examine |
 | `max_tis_per_query` | 16 | Batch enqueue в critical section |
 | `scheduler_zombie_task_threshold` | 300 | Heartbeat для tasks |
-| `dag_dir_list_interval` | 300 | Scan папки DAGs на новые файлы (relevant for Local Bundle) |
+| `dag_dir_list_interval` | 300 | Scan папки DAGs на новые файлы |
 
 ---
 

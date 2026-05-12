@@ -1,41 +1,41 @@
 {
   "id": "airflow-course",
-  "title": "Apache Airflow 3 Ultimate",
-  "description": "Ультимативный курс по Apache Airflow 3.x — от scheduler internals и critical section до Task SDK, DAG Versioning, OpenLineage и production HA setup. Курс охватывает 3.x как основной target с историческим контекстом 2.x.",
+  "title": "Apache Airflow 2 Ultimate",
+  "description": "Ультимативный курс по Apache Airflow 2.x — от scheduler internals и critical section до Celery/Kubernetes executors, Datasets, Deferrable Operators, OpenLineage и production HA setup. Target: 2.10/2.11 LTS с обзором upgrade path на 3.x.",
   "author": "Lev Neganov",
   "difficulty": "advanced",
   "language": "ru",
   "version": "1.0.0",
   "modules": [
     { "id": "00-course-intro", "title": "Введение в курс" },
-    { "id": "01-architecture", "title": "Архитектура Airflow 3.x" },
+    { "id": "01-architecture", "title": "Архитектура Airflow 2.x" },
     { "id": "02-dag-fundamentals", "title": "DAG fundamentals" },
     { "id": "03-operators-sensors", "title": "Operators и Sensors" },
     { "id": "04-scheduler-internals", "title": "Scheduler internals" },
     { "id": "05-executors", "title": "Executors deep dive" },
     { "id": "06-xcom-data-passing", "title": "XCom и data passing" },
     { "id": "07-dynamic-task-mapping", "title": "Dynamic Task Mapping" },
-    { "id": "08-datasets-assets", "title": "Datasets / Assets" },
+    { "id": "08-datasets-assets", "title": "Datasets (с обзором Assets в 3.x)" },
     { "id": "09-triggerer-deferrable", "title": "Triggerer и Deferrable Operators" },
     { "id": "10-connections-secrets", "title": "Connections, Variables, Secrets" },
     { "id": "11-pools-concurrency", "title": "Pools и Concurrency" },
     { "id": "12-plugins-listeners", "title": "Plugins и Listeners" },
-    { "id": "13-rest-api-cli", "title": "REST API v2 и airflowctl" },
+    { "id": "13-rest-api-cli", "title": "REST API и CLI" },
     { "id": "14-observability-openlineage", "title": "Observability и OpenLineage" },
     { "id": "15-production-deployment", "title": "Production deployment" },
     { "id": "16-testing-dags", "title": "Тестирование DAGs" },
     { "id": "17-design-patterns", "title": "Design patterns" },
-    { "id": "18-capstone-migration", "title": "Capstone и Migration 2→3" }
+    { "id": "18-capstone-migration", "title": "Capstone и upgrade path на 3.x" }
   ],
   "tags": [
     "airflow",
+    "airflow-2",
     "orchestration",
     "data-engineering",
     "scheduler",
     "kubernetes",
     "openlineage",
-    "datasets",
-    "task-sdk"
+    "datasets"
   ],
   "prerequisites": {
     "courses": [

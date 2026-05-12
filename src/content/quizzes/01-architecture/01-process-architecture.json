@@ -6,51 +6,51 @@
     {
       "id": "airflow-m01-01-q1",
       "type": "multiple-choice",
-      "question": "Какие шесть основных процессов составляют минимальный full setup Airflow 3.x?",
+      "question": "Какие пять основных процессов составляют типичный full setup Airflow 2.x?",
       "options": [
-        { "id": "a", "text": "webserver, scheduler, worker, flower, redis, postgres" },
-        { "id": "b", "text": "API Server (FastAPI), Scheduler, DAG Processor, Triggerer, Workers, Metadata DB (PostgreSQL)" },
-        { "id": "c", "text": "master, worker, executor, queue, db, ui" },
+        { "id": "a", "text": "webserver, scheduler, worker, flower, sequencer" },
+        { "id": "b", "text": "Webserver (Flask + FAB), Scheduler (с DagFileProcessor pool внутри), Triggerer, Workers (Celery/K8s/Local), Metadata DB (PostgreSQL)" },
+        { "id": "c", "text": "master, worker, executor, queue, ui" },
         { "id": "d", "text": "Только Scheduler и Workers — остальное опционально" }
       ],
       "correctAnswer": "b",
-      "explanation": "В 3.x минимальный setup: API Server (FastAPI вместо Flask webserver), Scheduler, DAG Processor (mandatory с 3.0 — AIP-66), Triggerer (для deferrable operators), Workers (Celery/K8s/Edge), Metadata DB (PostgreSQL recommended). Flower deprecated, REDIS опционален (только для Celery).",
+      "explanation": "В 2.x минимальный setup: Webserver (Flask + Flask-AppBuilder), Scheduler (включающий DagFileProcessor pool через multiprocessing), Triggerer (для deferrable operators, AIP-40 stable с 2.5), Workers (Celery/K8s/Local), Metadata DB (PostgreSQL recommended). DagFileProcessor можно опционально вынести в standalone process через `airflow dag-processor`. В 3.x DAG Processor стал mandatory отдельным процессом (AIP-66).",
       "bloomLevel": "conceptual"
     },
     {
       "id": "airflow-m01-01-q2",
       "type": "multiple-choice",
-      "question": "Зачем в 3.x вынесли DAG Processor в отдельный mandatory процесс?",
+      "question": "В Airflow 2.x workers имеют direct DB access через SQLAlchemy. Какие проблемы это создаёт?",
       "options": [
-        { "id": "a", "text": "Для backward compatibility с 1.x" },
-        { "id": "b", "text": "Изоляция parsing от scheduler loop + поддержка DAG Bundles (AIP-66) + DAG Versioning (AIP-63) + Task SDK boundary (AIP-72)" },
-        { "id": "c", "text": "Случайное архитектурное решение" },
-        { "id": "d", "text": "Только для multi-team scenarios" }
+        { "id": "a", "text": "Никаких — это удобно и быстро" },
+        { "id": "b", "text": "Security (компрометация worker = DB access ко всем Connections), schema coupling (нет rolling DB migrations), network requirement (не работает за NAT)" },
+        { "id": "c", "text": "Только performance — slow queries" },
+        { "id": "d", "text": "Это просто backward compat" }
       ],
       "correctAnswer": "b",
-      "explanation": "DAG Processor отделение решает четыре связанные задачи: (1) изоляция — медленный DAG не блокирует scheduler loop; (2) DAG Bundles (pluggable backends: git/S3/GCS); (3) DAG Versioning — каждый DagRun привязан к версии bundle; (4) Task SDK — workers не имеют direct DB access, только через API Server.",
+      "explanation": "Three главные проблемы direct DB access workers: (1) Security — atтакующий через скомпрометированный worker получает доступ ко всему metadata (Connections с decrypted passwords, Variables, logs); (2) Schema coupling — DB schema migration требует синхронного обновления всех workers; (3) Network — worker нужен direct DB access, не работает за NAT, в edge сценариях. В 3.x решается Task SDK boundary (AIP-72) — workers только через REST API. В 2.x mitigation: Secrets Backend (Vault), network segmentation, audit logs.",
       "bloomLevel": "applied"
     },
     {
       "id": "airflow-m01-01-q3",
       "type": "multiple-choice",
-      "question": "В 3.x можно использовать несколько executor-ов одновременно через Pluggable Executors (AIP-61). Какие польза?",
+      "question": "Где парсятся DAG-файлы в Airflow 2.x по умолчанию?",
       "options": [
-        { "id": "a", "text": "Никакая — это всегда замедляет систему" },
-        { "id": "b", "text": "Можно: lightweight tasks на CeleryExecutor (низкая latency), GPU-heavy на KubernetesExecutor (изоляция), admin на LocalExecutor. Раньше один Airflow = один executor" },
-        { "id": "c", "text": "Только для backward compatibility" },
-        { "id": "d", "text": "Это только для multi-cloud setups" }
+        { "id": "a", "text": "В webserver process" },
+        { "id": "b", "text": "В workers перед выполнением каждого task" },
+        { "id": "c", "text": "В DagFileProcessor pool — multiprocessing процессы ВНУТРИ scheduler-process (можно опционально вынести в standalone)" },
+        { "id": "d", "text": "Прямо в metadata DB через stored procedures" }
       ],
-      "correctAnswer": "b",
-      "explanation": "Pluggable Executors решает старую боль — раньше выбор executor был binary: либо все tasks через Celery (фаст старт, low isolation), либо все через K8s (изоляция, slow start). Теперь можно: легковесные на Celery, GPU/dependency-heavy на K8s, admin на Local. Task указывает executor через @task(executor='KubernetesExecutor'). В 3.2 — multi-team scoping (AIP-67).",
+      "correctAnswer": "c",
+      "explanation": "В 2.x DagFileProcessor — это пул дочерних процессов (multiprocessing.Process), запускаемых ВНУТРИ scheduler-процесса. Default `parsing_processes = 2`. Можно опционально запустить standalone через `airflow dag-processor` для изоляции parsing от scheduler loop. В 3.x это стало mandatory разделение (AIP-66).",
       "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m01-01-q4",
       "type": "true-false",
-      "question": "В Airflow 3.x workers имеют прямой доступ к metadata DB через SQLAlchemy.",
-      "correctAnswer": false,
-      "explanation": "В 3.x workers НЕ имеют direct DB access. Это ключевое архитектурное изменение (AIP-72 Task SDK). Workers общаются с control plane только через REST API к API Server. Это даёт: (1) security isolation; (2) schema decoupling для rolling upgrades; (3) multi-language workers через REST contract (Go SDK in flight); (4) Edge Executor работает за NAT через HTTP polling.",
+      "question": "Airflow 2.0+ поддерживает multi-scheduler HA через PostgreSQL row-level locks (без необходимости в Raft / ZooKeeper).",
+      "correctAnswer": true,
+      "explanation": "Это одна из главных фич Airflow 2.0 (декабрь 2020). Multi-scheduler HA реализован через `SELECT * FROM slot_pool FOR UPDATE NOWAIT` — row-level lock в critical section. Только один scheduler одновременно может делать enqueue decisions. Если scheduler-2 пытается войти когда scheduler-1 уже там — получает lock_not_available и пропускает tick. Elegant design — distributed coordination через RDBMS без Raft/ZK. Требует PostgreSQL 9.6+ или MySQL 8.0+ (для SKIP LOCKED / NOWAIT). Детально в Module 04.",
       "bloomLevel": "conceptual"
     }
   ]

@@ -1,10 +1,10 @@
 ---
 title: "Обзор модуля: Design Patterns"
-description: "Idempotency, DAG factory, backfill-safety, HITL (3.1), OpenLineage-aware patterns"
+description: "Idempotency, DAG factory, backfill-safety, OpenLineage-aware patterns"
 order: 1
 difficulty: "advanced"
 estimatedTime: 12
-topics: ["Design Patterns", "Idempotency", "Factory", "HITL"]
+topics: ["Design Patterns", "Idempotency", "Factory", "Backfill"]
 ---
 
 # Design Patterns — обзор модуля
@@ -18,11 +18,11 @@ Production Airflow — это не про синтаксис @dag/@task, а пр
 | 01 | **Обзор модуля** | Текущий урок |
 | 02 | Idempotency | MERGE INTO, atomic writes, deterministic paths |
 | 03 | DAG factory pattern | Генерация DAGs из конфига, pitfalls top-level imports |
-| 04 | Reusable TaskGroups + Setup/Teardown | Wrapping ephemeral compute |
+| 04 | Reusable TaskGroups + Setup/Teardown (2.7+) | Wrapping ephemeral compute |
 | 05 | Backfill-safe DAGs | Data interval respecting, no `datetime.now()` |
-| 06 | HITL (Human-in-the-Loop, 3.1) | Approval workflows via UI |
-| 07 | OpenLineage-aware patterns | Designing for lineage emission |
-| 08 | Error handling и retry strategies | Exponential backoff, dead letter queues |
+| 06 | OpenLineage-aware patterns | Designing for lineage emission |
+| 07 | Error handling и retry strategies | Exponential backoff, dead letter queues |
+| 08 | Approval workflows | Sensor-based approval (в 3.x — HITL operator) |
 
 ## Top 5 patterns
 
@@ -70,25 +70,24 @@ for cfg in load_configs():
 @dag(start_date=datetime(2024, 1, 1), schedule='@daily', catchup=False)
 ```
 
-### 4. HITL (3.1+)
+### 4. Approval workflow (через sensor)
+
+В 2.x для human approval используется sensor pattern:
 
 ```python
-from airflow.sdk import HITLApproval
-
-@task
-def deploy_to_prod():
-    approval = HITLApproval(
-        approvers=['security-team'],
-        message="Deploy v2.5 to production?",
-        timeout=timedelta(hours=24)
-    )
-    if approval.wait():
-        do_deploy()
+@task.sensor(poke_interval=300, timeout=86400, mode="reschedule")
+def wait_approval(**context) -> PokeReturnValue:
+    approval_status = check_approval_table(context["dag_run"].run_id)
+    if approval_status == "approved":
+        return PokeReturnValue(is_done=True)
+    return PokeReturnValue(is_done=False)
 ```
+
+В Airflow 3.1+ появился dedicated **HITL (Human-in-the-Loop)** operator для этого паттерна. В 2.x используем sensor-based подход.
 
 ### 5. OpenLineage-aware
 
-Использовать standard operators (PostgresOperator, S3CopyObjectOperator) везде где возможно — они эмитят OL events автоматически. Custom Python operators требуют write extractors.
+Использовать standard operators (PostgresOperator, S3CopyObjectOperator) везде где возможно — они эмитят OL events автоматически (с 2.6+ через `apache-airflow-providers-openlineage`). Custom Python operators требуют write extractors.
 
 ## Killer takeaway
 

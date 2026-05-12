@@ -1,30 +1,30 @@
 ---
-title: "Обзор модуля: Capstone и Migration 2→3"
-description: "End-to-end проект + Migration playbook с upgrade-check, ruff AIR301/302"
+title: "Обзор модуля: Capstone и Upgrade Path на 3.x"
+description: "End-to-end проект на Airflow 2.x + Migration playbook с airflow upgrade-check, ruff AIR301/AIR302"
 order: 1
 difficulty: "advanced"
 estimatedTime: 18
-topics: ["Capstone", "Migration", "Airflow 3", "Production"]
+topics: ["Capstone", "Migration", "Airflow 3", "Upgrade Path"]
 ---
 
-# Capstone и Migration 2→3 — финальный модуль
+# Capstone и Upgrade Path на 3.x — финальный модуль
 
-Финальный модуль — интегральная проверка знаний и practical playbook для migration с 2.x на 3.x. Capstone-проект объединяет все killer-темы курса в реальный production pipeline.
+Финальный модуль — интегральная проверка знаний по Airflow 2.x и practical playbook для migration на 3.x. Capstone-проект объединяет все killer-темы курса в реальный production pipeline.
 
 ## Уроки модуля
 
 | # | Урок | Что внутри |
 |---|---|---|
 | 01 | **Обзор модуля** | Текущий урок |
-| 02 | Capstone — design phase | E2E pipeline architecture, requirements |
+| 02 | Capstone — design phase | E2E pipeline architecture на Airflow 2.x |
 | 03 | Capstone — implementation | Datasets, dynamic mapping, deferrable, custom XCom, OpenLineage |
-| 04 | Capstone — K8s deployment | Helm chart, HA setup |
-| 05 | Migration 2.x → 3.x — overview | Что меняется, breaking changes, timeline |
-| 06 | Migration tools | airflow upgrade-check, ruff AIR301/302 |
-| 07 | Migration — DAG code changes | Imports, decorators, SubDAG → TaskGroup |
-| 08 | Migration — infrastructure changes | DAG Processor mandatory, Task SDK, FAB removal |
+| 04 | Capstone — K8s deployment | Helm chart, HA setup, Multiple Executors |
+| 05 | **Migration 2.x → 3.x — overview** | Что меняется, breaking changes, timeline |
+| 06 | Migration tools | airflow upgrade-check, ruff AIR301/AIR302 |
+| 07 | Migration — DAG code changes | Imports, decorators, Datasets→Assets rename |
+| 08 | Migration — infrastructure changes | DAG Processor mandatory, Task SDK, FAB removal, FastAPI |
 
-## Capstone проект
+## Capstone проект на Airflow 2.x
 
 **Задача**: Real-time orders ETL pipeline.
 
@@ -33,23 +33,23 @@ topics: ["Capstone", "Migration", "Airflow 3", "Production"]
 PostgreSQL (orders DB)
     ↓ CDC через Debezium
 Kafka topics (orders, items, customers)
-    ↓ Airflow DAG triggered by dataset
+    ↓ Airflow DAG triggered by dataset (AIP-48)
 Spark transformation (через KubernetesPodOperator)
-    ↓ Asset emission
+    ↓ Dataset emission
 Iceberg lakehouse (через SparkSubmitOperator)
-    ↓ Asset cascade
+    ↓ Dataset cascade
 ClickHouse OLAP (через ClickHouseOperator)
     ↓ Notify
 Slack alerts (через deferrable sensor)
 ```
 
-**Что демонстрируется**:
-- ✅ Assets (Modules 8) для data-aware scheduling
-- ✅ Dynamic Task Mapping (M7) для parallel processing файлов
-- ✅ Deferrable Sensors (M9) для Kafka topic monitoring
-- ✅ Custom XCom Backend на S3 (M6) для блобов
+**Что демонстрируется (всё в 2.x)**:
+- ✅ Datasets (M8) для data-aware scheduling (AIP-48, 2.4+)
+- ✅ Dynamic Task Mapping (M7) для parallel processing файлов (AIP-42, 2.3+)
+- ✅ Deferrable Sensors (M9) для Kafka topic monitoring (AIP-40)
+- ✅ Custom XCom Backend на S3 (M6)
 - ✅ OpenLineage automatic emission (M14) → Marquez
-- ✅ Pluggable Executors (M5) — light tasks на Celery, Spark на K8s
+- ✅ Multiple Executors (AIP-61, 2.10+) — light tasks на Celery, Spark на K8s
 - ✅ Vault Secrets Backend (M10) для DB credentials
 - ✅ HA Setup (M15) — 2 scheduler, 2 triggerer
 
@@ -59,21 +59,23 @@ Slack alerts (через deferrable sensor)
 
 | Что | 2.x | 3.x |
 |---|---|---|
-| **Imports** | `from airflow.models import Variable` | `from airflow.sdk import Variable` |
-| **DAG processor** | Опциональный | **Mandatory** (AIP-66) |
-| **Worker DB access** | Direct SQLAlchemy | **Только через REST API** (AIP-72) |
-| **Webserver** | Flask | **FastAPI API Server** (AIP-79) |
+| **Imports** | `from airflow.decorators import dag, task` | `from airflow.sdk import dag, task` |
+| **DAG processor** | Pool внутри scheduler (опционально standalone) | **Mandatory** отдельный процесс (AIP-66) |
+| **Worker DB access** | Direct SQLAlchemy | **Только через REST API** (AIP-72 Task SDK) |
+| **Webserver** | Flask + Flask-AppBuilder | **FastAPI API Server** + React UI |
 | **execution_date** | Часто используется | **Deprecated** — use logical_date (AIP-83) |
-| **SubDAG operator** | Доступен | **Удалён** (anti-pattern) |
-| **SmartSensor** | Доступен | **Удалён** (use deferrable) |
+| **SubDAG operator** | Доступен (deprecated) | **Удалён** |
+| **SmartSensor** | Уже удалён в 2.x | Удалён |
 | **Datasets** | `from airflow import Dataset` | **Assets**: `from airflow.sdk import asset` (AIP-74) |
 | **FAB auth** | Built-in | **Pluggable** (AIP-79) |
+| **REST API** | v1 (Flask-RESTful) | v2 (FastAPI с OpenAPI) |
+| **`flink-conf.yaml`** | n/a (это про Flink) | n/a |
 
 ### Migration tools
 
 ```bash
 # 1. Static check
-airflow upgrade-check --to-version 3.2
+airflow upgrade-check --to-version 3.0
 
 # 2. Ruff rules
 pip install ruff
@@ -85,19 +87,26 @@ ruff check --fix --select AIR301 dags/  # автозамена импортов
 
 ### Step-by-step playbook
 
-1. **Upgrade to 2.11.x** (LTS) — последняя 2.x с migration helpers
+1. **Upgrade to 2.11.x** (LTS) — последняя 2.x с migration helpers (`airflow upgrade-check`)
 2. **Fix `airflow upgrade-check` warnings** все
 3. **Backup metadata DB**
 4. **Pause all DAGs** через UI
 5. **Wait for in-flight TaskInstances** — все должны завершиться
-6. **Upgrade Airflow 2.11 → 3.2** через `pip install` или Helm chart upgrade
+6. **Upgrade Airflow 2.11 → 3.0/3.2** через `pip install` или Helm chart upgrade
 7. **Run `airflow db migrate`**
-8. **Verify** — check DAG Processor process, API Server health
+8. **Verify** — check standalone DAG Processor process, FastAPI API Server health
 9. **Unpause DAGs gradually**
+
+## Что особенно стоит migrate сначала
+
+- **TaskFlow API DAGs** — migration через ruff AIR301 (auto-rename imports)
+- **Datasets → Assets** — функционально совместимо, но API меняется
+- **`execution_date`** → `logical_date` (AIR302)
+- **SubDAG → TaskGroup** — если ещё не сделали в 2.x
 
 ## Killer takeaway
 
-Migration 2.x → 3.x — не косметический upgrade. Это **архитектурный сдвиг** — Task SDK boundary, DAG Bundles, Datasets→Assets, Pluggable Executors. Делайте миграцию planned, с testing на staging environment минимум 2 недели.
+Migration 2.x → 3.x — не косметический upgrade. Это **архитектурный сдвиг** — Task SDK boundary, standalone mandatory DAG Processor, FastAPI server, Datasets→Assets, FAB removal. Делайте миграцию planned, с testing на staging environment минимум 2 недели. Большинство production deployments в 2026 ещё на 2.10/2.11 (LTS) — спешка не нужна.
 
 ## Что дальше
 

@@ -1,11 +1,11 @@
-# Apache Airflow 3 Ultimate Course
+# Apache Airflow 2 Ultimate Course
 
-Ультимативный курс по Apache Airflow с фокусом на 3.x — от scheduler internals до Task SDK, DAG Versioning, OpenLineage и production HA setup.
+Ультимативный курс по Apache Airflow с фокусом на 2.x (2.10/2.11 LTS) — от scheduler internals до Celery/Kubernetes executors, Datasets, Deferrable Operators, OpenLineage и production HA setup.
 
 ## Целевая аудитория
 
 - Data engineers, понимающие основы Python и SQL
-- Инженеры, переходящие с 2.x на 3.x
+- Инженеры, работающие с production Airflow 2.x
 - Архитекторы дата-платформ, проектирующие orchestration layer
 
 ## Что внутри
@@ -15,53 +15,58 @@
 | # | Модуль | Глубина |
 |---|---|---|
 | 00 | Введение | Landscape, when NOT Airflow |
-| 01 | Архитектура 3.x | Task SDK boundary, DAG Bundles |
+| 01 | Архитектура 2.x | Webserver, Scheduler, Workers, Triggerer, DAG Processor |
 | 02 | DAG fundamentals | TaskFlow, Custom Timetables, Setup/Teardown |
 | 03 | Operators & Sensors | poke/reschedule/deferred сравнение |
 | 04 | **Scheduler internals** ★ | Critical Section, HA через PG row-level locking |
-| 05 | **Executors deep** ★ | Pluggable Executors, Edge Executor |
-| 06 | XCom & data passing | Custom backends, Object Storage |
+| 05 | **Executors deep** ★ | Local, Celery, Kubernetes, CeleryKubernetes, Multiple Executors (AIP-61) |
+| 06 | XCom & data passing | Custom backends, Object Storage XCom (2.8+) |
 | 07 | Dynamic Task Mapping | expand, scaling pitfalls |
-| 08 | **Datasets → Assets** ★ | Asset Partitions, Event-driven AIP-82 |
-| 09 | Triggerer & Deferrable | asyncio internals |
+| 08 | **Datasets** ★ | Data-aware scheduling (2.4+), DatasetAlias (2.9), event-driven patterns |
+| 09 | Triggerer & Deferrable | asyncio internals, AIP-40 |
 | 10 | Connections & Secrets | Fernet, Vault, Secrets Backends |
 | 11 | Pools & Concurrency | 5 уровней concurrency |
-| 12 | Plugins & Listeners | Listener API, React UI plugins |
-| 13 | REST API v2 & CLI | FastAPI, airflowctl |
-| 14 | **Observability + OpenLineage** ★ | OTel, automatic lineage |
-| 15 | Production deployment | HA, Helm, Multi-Team |
-| 16 | Testing DAGs | airflow dags test |
-| 17 | Design Patterns | Idempotency, HITL, factory |
-| 18 | Capstone + Migration 2→3 | E2E project + upgrade playbook |
+| 12 | Plugins & Listeners | Listener API (2.8+), plugin architecture |
+| 13 | REST API & CLI | Stable REST API v1 (2.0+), automation |
+| 14 | **Observability + OpenLineage** ★ | OTel (2.10+), automatic lineage |
+| 15 | Production deployment | HA, Helm chart, MWAA/Composer/Astronomer |
+| 16 | Testing DAGs | airflow dags test, pytest-airflow |
+| 17 | Design Patterns | Idempotency, DAG factory, backfill-safety |
+| 18 | Capstone + Upgrade Path на 3.x | E2E project + migration к Airflow 3.0+ |
 
 ★ = killer differentiator
 
 ## Технологии
 
-- Python 3.12
-- Apache Airflow 3.2.x (3.x-first, 2.x как historical context)
+- **Apache Airflow 2.10.x / 2.11.x (LTS)** — основной target
+- Python 3.11
 - Docker Compose для labs
 - PostgreSQL 16
 - Redis (CeleryExecutor) и Kubernetes (KubernetesExecutor)
+
+## Почему Airflow 2, а не 3?
+
+На май 2026 года ~80% production deployments всё ещё на 2.10/2.11. Airflow 2.11 — официальный LTS с поддержкой security patches. Большинство managed services (AWS MWAA, GCP Cloud Composer 2) только начинают поддерживать 3.x.
+
+Курс делает вас экспертом по 2.x — production reality — а в финальном модуле даёт **upgrade path к 3.x**: что меняется (FastAPI server, Task SDK, DAG Versioning, Assets rename), как мигрировать через `airflow upgrade-check`, что сломается.
 
 ## Структура репозитория
 
 ```
 airflow-course/
-├── config.json              # Манифест курса
+├── config.json
 ├── README.md
-├── VERSIONS.md              # Хронология версий Airflow
+├── VERSIONS.md
 ├── data/
-│   ├── glossary.json        # Глоссарий терминов
-│   └── troubleshooting.json # Production gotchas
+│   ├── glossary.json
+│   └── troubleshooting.json
 ├── src/
-│   ├── components/diagrams/ # Custom React диаграммы по модулям
+│   ├── components/diagrams/
 │   └── content/
-│       ├── course/          # MDX уроки (модуль/урок)
-│       └── quizzes/         # JSON квизы (модуль/урок)
-└── labs/                    # Docker labs
+│       ├── course/        # MDX уроки (модуль/урок)
+│       └── quizzes/       # JSON квизы
+└── labs/                  # Docker labs
     ├── ha-scheduler-race/
-    ├── celery-prefetch-pitfall/
     └── ...
 ```
 
@@ -71,4 +76,4 @@ Lev Neganov — neganovlevs@gmail.com
 
 ## Лицензия
 
-MIT — материалы открыты, используйте в обучении и production.
+MIT

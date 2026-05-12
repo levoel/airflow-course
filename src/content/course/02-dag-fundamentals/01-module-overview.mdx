@@ -9,7 +9,7 @@ topics: ["DAG", "TaskFlow", "Timetables", "Setup/Teardown"]
 
 # DAG fundamentals — обзор модуля
 
-Модуль 02 — это глубокое погружение в анатомию DAG. Если в модуле 00 мы только увидели «как написать DAG», здесь мы препарируем DAG object изнутри: что происходит при `@dag()` decorator вызове, как scheduler сериализует DAG в БД, чем отличаются Timetables от старого schedule_interval, зачем нужны Setup/Teardown tasks.
+Модуль 02 — это глубокое погружение в анатомию DAG. Если в модуле 00 мы только увидели «как написать DAG», здесь мы препарируем DAG object изнутри: что происходит при `@dag()` decorator вызове, как scheduler сериализует DAG в БД, чем отличаются Timetables (AIP-39) от старого `schedule_interval`, зачем нужны Setup/Teardown tasks (2.7+).
 
 ## Уроки модуля
 
@@ -18,29 +18,41 @@ topics: ["DAG", "TaskFlow", "Timetables", "Setup/Teardown"]
 | 01 | **Обзор модуля** | Текущий урок |
 | 02 | DAG object anatomy | `@dag()` decorator, default_args, lifecycle hooks |
 | 03 | TaskFlow API vs Classic | `_PythonDecoratedOperator` под капотом @task, миграция |
-| 04 | Custom Timetables (AIP-39) | `Timetable` interface, `next_dagrun_info`, real-world examples |
+| 04 | Custom Timetables (AIP-39, 2.2+) | `Timetable` interface, `next_dagrun_info`, real-world examples |
 | 05 | DAG serialization | Что попадает в `serialized_dag.data`, как webserver рендерит без парсинга .py |
-| 06 | Setup / Teardown tasks (2.7+) | Управление ephemeral ресурсами, teardown executed always |
-| 07 | TaskGroup vs SubDAG | Почему SubDAG anti-pattern, TaskGroup mechanics |
+| 06 | Setup / Teardown tasks (2.7+) | Управление ephemeral ресурсами, teardown executed always (с 2.10.5) |
+| 07 | TaskGroup vs SubDAG | Почему SubDAG anti-pattern (deprecated), TaskGroup mechanics |
 
 ## Ключевые концепты
 
-- **TaskFlow API** — модерн декларативный синтаксис (с 2.0). Под капотом — `_PythonDecoratedOperator`. Преимущества: typed inputs/outputs, автоматический XCom, чище код.
-- **Custom Timetables** (AIP-39) — собственные расписания через `Timetable` класс. Идёт дальше cron-выражений: business calendars, market hours, holidays.
-- **DAG Serialization** — DAG объект сериализуется в БД при parse. Scheduler и Webserver работают с этой сериализацией, не парся .py повторно. С 3.0 — `serialized_dag` + `dag_version` для versioning.
-- **Setup / Teardown** (2.7+) — задачи для управления ephemeral ресурсами (например, поднять Spark кластер до tasks, выключить после). **Teardown executed even if main tasks failed** (фикс в 2.10.5).
+- **TaskFlow API** — модерн декларативный синтаксис (с 2.0). В 2.x импорт: `from airflow.decorators import dag, task`. Под капотом — `_PythonDecoratedOperator`. Преимущества: typed inputs/outputs, автоматический XCom, чище код.
+- **Custom Timetables** (AIP-39, 2.2+) — собственные расписания через `Timetable` класс. Идёт дальше cron-выражений: business calendars, market hours, holidays.
+- **DAG Serialization** — DAG объект сериализуется в БД при parse. Scheduler и Webserver работают с этой сериализацией, не парся .py повторно.
+- **Setup / Teardown** (2.7+) — задачи для управления ephemeral ресурсами (например, поднять Spark кластер до tasks, выключить после). **Teardown executed even if main tasks failed** (полностью фикснуто в 2.10.5).
 
 ## Killer takeaway
 
 DAG object — не Python-объект, который scheduler «исполняет». Это **declarative spec**, который сериализуется в БД при parse, и оттуда читается scheduler-ом и UI. Это значит:
 - `datetime.now()` в DAG body — недетерминированно (каждый parse даёт разный результат)
-- `Variable.get()` в top-level — выполняется на каждый parse (нагрузка на Vault)
+- `Variable.get()` в top-level — выполняется на каждый parse (нагрузка на DB/Vault)
 - Любой code в module body выполняется при parse, не при run
+
+## Импорты в 2.x vs 3.x
+
+```python
+# 2.x:
+from airflow.decorators import dag, task
+
+# 3.x (будущее, через Task SDK):
+from airflow.sdk import dag, task
+```
+
+В финальном модуле upgrade path покажем как ruff (правило AIR301) автоматически мигрирует импорты.
 
 ## Связи с другими модулями
 
 - **Модуль 04 (Scheduler internals)** — как scheduler читает serialized_dag и принимает decisions
 - **Модуль 17 (Design Patterns)** — best practices для DAG architecture, idempotency, factory pattern
-- **Модуль 18 (Migration 2→3)** — устаревший синтаксис, переход на TaskFlow
+- **Модуль 18 (Upgrade Path)** — устаревший синтаксис, переход на TaskFlow + 3.x
 
 В следующем уроке начинаем с DAG object anatomy.

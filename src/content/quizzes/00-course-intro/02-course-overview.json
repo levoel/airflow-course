@@ -17,22 +17,22 @@
         { "id": "d", "text": "Module 12 (Plugins) и Module 13 (REST API)" }
       ],
       "correctAnswer": "b",
-      "explanation": "Модули 04 (Scheduler internals) и 05 (Executors deep) — killer-модули с уникальным контентом: scheduler critical section с live pg_locks мониторингом, HA через row-level locks, executor-specific internals (Celery prefetch pitfall, K8s watcher thread, Pluggable Executors AIP-61). Эти темы редко покрываются глубоко в публичных курсах. Также важны 08 (Datasets→Assets) и 14 (OpenLineage).",
+      "explanation": "Модули 04 (Scheduler internals) и 05 (Executors deep) — killer-модули с уникальным контентом: scheduler critical section с live pg_locks мониторингом, HA через row-level locks (с 2.0), executor-specific internals (Celery prefetch pitfall, K8s watcher thread, Multiple Executors AIP-61 с 2.10+). Эти темы редко покрываются глубоко в публичных курсах. Также важны 08 (Datasets с DatasetAlias 2.9) и 14 (OpenLineage).",
       "studyHint": "Повторите урок 02 — раздел 'Структура 19 модулей'",
       "bloomLevel": "conceptual"
     },
     {
       "id": "airflow-m00-02-q2",
       "type": "multiple-choice",
-      "question": "Курс ориентирован на Apache Airflow 3.x. Что из перечисленного НЕ покрывается курсом?",
+      "question": "Курс ориентирован на Apache Airflow 2.10/2.11. Что из перечисленного НЕ покрывается курсом?",
       "options": [
         { "id": "a", "text": "TaskFlow API и dynamic task mapping" },
-        { "id": "b", "text": "SubDAG operator (заменён TaskGroup, anti-pattern) и Smart Sensors (удалены в 2.x)" },
-        { "id": "c", "text": "Kubernetes Operator для деплоя Airflow" },
-        { "id": "d", "text": "OpenLineage и DAG Versioning" }
+        { "id": "b", "text": "SubDAG operator (deprecated, anti-pattern), Smart Sensors (удалены в 2.x), Flower как primary monitor (заменяется OTel)" },
+        { "id": "c", "text": "Kubernetes Executor и Helm chart" },
+        { "id": "d", "text": "OpenLineage и Datasets" }
       ],
       "correctAnswer": "b",
-      "explanation": "SubDAG operator и Smart Sensors намеренно опущены, потому что они либо deprecated/removed, либо признаны anti-pattern. SubDAG заменён TaskGroup (с 2.0), Smart Sensors удалены в пользу Deferrable Operators. Также не покрываем Airflow 1.x, Flower (заменяется OTel), per-DAG concurrency old syntax. Всё остальное в списке — наоборот, ключевые темы курса.",
+      "explanation": "SubDAG operator deprecated и считается anti-pattern (заменён TaskGroup). Smart Sensors удалены в пользу Deferrable Operators (AIP-40, stable с 2.5). Flower заменяется OTel метриками с 2.10+. Также не покрываем Airflow 1.x, SequentialExecutor, legacy schedule_interval syntax. Всё остальное в списке — наоборот, ключевые темы курса.",
       "studyHint": "Повторите урок 02 — раздел 'Что НЕ покрываем'",
       "bloomLevel": "applied"
     },
@@ -54,9 +54,9 @@
     {
       "id": "airflow-m00-02-q4",
       "type": "true-false",
-      "question": "Каждый модуль курса включает MDX-уроки, knowledge check, quiz из 4 вопросов на урок, module exam из 6 вопросов и Docker lab на ключевые модули.",
+      "question": "Курс ориентирован на Airflow 2.x (2.10/2.11 LTS) как production reality, а финальный модуль даёт upgrade path к 3.x через airflow upgrade-check и ruff правила.",
       "correctAnswer": true,
-      "explanation": "Это стандартная структура каждого модуля. MDX даёт теорию с диаграммами и кодом, quiz после каждого урока проверяет конкретное понимание (4 вопроса разного bloomLevel), module exam в конце модуля интегральный (6 вопросов, passing threshold 70%). Docker labs на killer-модули (04 Scheduler, 05 Executors, 09 Triggerer, 14 OpenLineage, 15 Production) дают возможность экспериментально проверить теорию руками.",
+      "explanation": "На май 2026 года ~80% production deployments всё ещё на 2.10/2.11. Airflow 2.11 — LTS с security patches. Managed services (MWAA, Cloud Composer 2) только начинают migration на 3.x. Курс делает экспертом по 2.x с обзорным upgrade path к 3.x в финальном модуле (M18) — что меняется (FastAPI server, Task SDK, DAG Versioning, Assets rename), как мигрировать через airflow upgrade-check, ruff AIR301/AIR302.",
       "bloomLevel": "conceptual"
     }
   ]

@@ -1,70 +1,99 @@
 ---
-title: "Обзор модуля: REST API v2 и airflowctl"
-description: "FastAPI v2 vs Flask v1, JWT/OAuth auth, airflowctl remote CLI"
+title: "Обзор модуля: REST API и CLI"
+description: "Stable REST API v1 (2.0+), authentication, automation patterns"
 order: 1
 difficulty: "advanced"
 estimatedTime: 10
-topics: ["REST API", "FastAPI", "airflowctl", "OAuth"]
+topics: ["REST API", "CLI", "Authentication", "Automation"]
 ---
 
-# REST API v2 и airflowctl — обзор модуля
+# REST API и CLI — обзор модуля
 
-В Airflow 3.0 произошло фундаментальное обновление API: REST API v2 на FastAPI с автогенерируемым OpenAPI spec, плюс новый `airflowctl` provider для remote CLI без захода в scheduler container.
+В Airflow 2.0 стал stable REST API v1 на Flask-RESTful. Это позволяет автоматизировать всё через HTTP: trigger DAGs, monitor execution, clear tasks, manage Connections. Этот модуль учит правильно использовать API в CI/CD контексте.
 
 ## Уроки модуля
 
 | # | Урок | Что внутри |
 |---|---|---|
 | 01 | **Обзор модуля** | Текущий урок |
-| 02 | REST API v2 (FastAPI, 3.0) | OpenAPI spec, /api/v2/ endpoints |
-| 03 | API v1 (Flask) vs v2 (FastAPI) | Migration paths, deprecation |
-| 04 | Authentication: JWT, OAuth2, basic | Token endpoints, refresh, RBAC |
-| 05 | airflowctl provider | Remote CLI через REST, install + auth |
-| 06 | Common automation patterns | Trigger DAGs externally, monitor, clear |
+| 02 | REST API v1 endpoints | /api/v1/* — основные endpoints |
+| 03 | Authentication: basic, JWT, OAuth | FAB auth backends |
+| 04 | Common automation patterns | Trigger DAGs externally, monitor state, clear |
+| 05 | CLI deep dive | airflow dags / tasks / db / pools / connections |
+| 06 | Programmatic access | Python client, custom scripts |
 
-## REST API v2 — ключевые endpoints
+## REST API v1 — ключевые endpoints
 
 ```bash
 # Trigger DAG run
-POST /api/v2/dags/{dag_id}/dagRuns
+POST /api/v1/dags/{dag_id}/dagRuns
 {
   "logical_date": "2026-05-12T00:00:00Z",
   "conf": {"key": "value"}
 }
 
 # Get DAG run state
-GET /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}
+GET /api/v1/dags/{dag_id}/dagRuns/{dag_run_id}
 
 # List TaskInstances
-GET /api/v2/dags/{dag_id}/dagRuns/{run_id}/taskInstances
+GET /api/v1/dags/{dag_id}/dagRuns/{run_id}/taskInstances
 
 # Clear tasks
-POST /api/v2/dags/{dag_id}/clearTaskInstances
+POST /api/v1/dags/{dag_id}/clearTaskInstances
 ```
 
-OpenAPI spec → `/api/v2/openapi.json` → автогенерация клиентов на любом языке.
+OpenAPI 3 spec доступен на `/api/v1/openapi.yaml`.
 
-## airflowctl — remote CLI
+## Authentication backends
+
+```ini
+[api]
+auth_backends = airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+```
+
+Доступные backends:
+- `basic_auth` — HTTP Basic с FAB users
+- `session` — cookie-based (для AJAX из UI)
+- `kerberos_auth`
+- `airflow.providers.amazon.aws.auth_manager.aws_auth_manager` — AWS IAM (через MWAA)
+
+## Common automation patterns
+
+### Trigger DAG из external system
 
 ```bash
-# Install
-pip install apache-airflow-providers-airflowctl
-
-# Auth
-airflowctl config set-url https://airflow.example.com
-airflowctl auth login
-
-# Use
-airflowctl dags list
-airflowctl dags trigger my_dag
-airflowctl dags pause my_dag
+curl -X POST \
+  -u airflow:airflow \
+  -H "Content-Type: application/json" \
+  -d '{"conf": {"source_path": "s3://..."}}' \
+  http://airflow:8080/api/v1/dags/my_dag/dagRuns
 ```
 
-Преимущества vs `airflow` CLI:
-- Не требует захода в scheduler container
-- Работает с remote Airflow (production, staging)
-- Использует REST API под капотом
+### Monitor execution
+
+```bash
+curl -u airflow:airflow \
+  http://airflow:8080/api/v1/dags/my_dag/dagRuns/manual__2026-05-12T10:00:00 \
+  | jq '.state'
+```
+
+### Из Python через requests
+
+```python
+import requests
+from requests.auth import HTTPBasicAuth
+
+response = requests.post(
+    "http://airflow:8080/api/v1/dags/my_dag/dagRuns",
+    auth=HTTPBasicAuth("airflow", "airflow"),
+    json={"conf": {"date": "2026-05-12"}}
+)
+```
 
 ## Killer takeaway
 
-Для CI/CD integration используйте `airflowctl` или прямые REST API calls — не SSH в scheduler container. REST API v2 designed для automation: idempotent requests, structured errors, JWT auth.
+Для CI/CD integration используйте REST API v1, не SSH в scheduler container. REST API designed для automation: idempotent requests, structured errors, FAB-based auth.
+
+## Что нового в 3.x (обзор)
+
+В Airflow 3.0 REST API v2 на FastAPI с автогенерируемым OpenAPI и React-friendly contract. Также появляется `airflowctl` provider — remote CLI без захода в scheduler container. Обе фичи покрываются в финальном модуле upgrade path.

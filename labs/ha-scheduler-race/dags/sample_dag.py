@@ -5,7 +5,7 @@
 """
 
 from datetime import datetime, timedelta
-from airflow.sdk import dag, task
+from airflow.decorators import dag, task
 
 
 @dag(
@@ -27,6 +27,7 @@ def sample_dag():
         import time
         time.sleep(30)
         return "task_1 done"
+
 
     @task
     def task_2():

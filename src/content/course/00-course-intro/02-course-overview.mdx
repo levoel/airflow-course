@@ -9,7 +9,17 @@ topics: ["Курс", "Roadmap", "Module overview"]
 
 # Обзор курса и дорожная карта
 
-Этот курс — самое глубокое погружение в Apache Airflow на русском языке. Цель — не «научиться писать DAG», а **понять, как Airflow устроен под капотом**: как scheduler конкурирует за critical section через row-level locks PostgreSQL, как triggerer держит тысячи асинхронных triggers на одном asyncio loop, как Task SDK развёл архитектуру 3.x на control-plane и worker-plane.
+Этот курс — самое глубокое погружение в Apache Airflow 2.x на русском языке. Цель — не «научиться писать DAG», а **понять, как Airflow устроен под капотом**: как scheduler конкурирует за critical section через row-level locks PostgreSQL, как triggerer держит тысячи асинхронных triggers на одном asyncio loop, как Datasets реализуют data-aware scheduling, как Celery Executor и Kubernetes Executor отличаются в внутреннем устройстве.
+
+---
+
+## Почему Airflow 2.x, не 3.x
+
+На май 2026 года ~80% production deployments всё ещё на 2.10/2.11. **Airflow 2.11 — официальный LTS** с поддержкой security patches. Managed services (AWS MWAA, GCP Cloud Composer 2) только начинают migration на 3.x.
+
+Курс делает вас экспертом по 2.x — production reality — а в финальном модуле даёт **upgrade path к 3.x**: что меняется (FastAPI server, Task SDK, DAG Versioning, Assets rename), как мигрировать через `airflow upgrade-check`, что сломается в DAG-коде.
+
+Большинство концепций 2.x остаются актуальными в 3.x — изменения преимущественно архитектурные и инфраструктурные, а не в DAG-коде. После этого курса вы сможете и работать в 2.x prod, и подготовить миграцию на 3.x.
 
 ---
 
@@ -20,7 +30,7 @@ topics: ["Курс", "Roadmap", "Module overview"]
 - Уже работали с Airflow на уровне «писал DAG, поднимал docker-compose с LocalExecutor»
 - Понимают Python (декораторы, контекстные менеджеры, asyncio хотя бы на уровне идеи)
 - Знают SQL и работали с PostgreSQL или MySQL
-- Хотят перейти на Airflow 3.x или внедрить его в production
+- Хотят углубить свои знания Airflow 2.x для production использования
 
 Если вы впервые слышите про Airflow — рекомендую сначала пройти базовый курс на Astronomer Academy или прочитать «Data Pipelines with Apache Airflow» (Manning). Этот курс — продолжение, а не первый шаг.
 
@@ -42,8 +52,8 @@ topics: ["Курс", "Roadmap", "Module overview"]
     </FlowRow>
     <Arrow direction="down" label="Основы" />
     <FlowRow>
-      <DataBox label="01 — Архитектура 3.x" tooltip="Task SDK, DAG Bundles, FastAPI server, процесс-level overview.">Архитектура</DataBox>
-      <DataBox label="02 — DAG fundamentals" tooltip="TaskFlow API, Custom Timetables, Setup/Teardown, DAG serialization.">DAG</DataBox>
+      <DataBox label="01 — Архитектура 2.x" tooltip="Webserver, Scheduler, Workers, Triggerer, DAG Processor — компонентный overview.">Архитектура</DataBox>
+      <DataBox label="02 — DAG fundamentals" tooltip="TaskFlow API, Custom Timetables (AIP-39), Setup/Teardown, DAG serialization.">DAG</DataBox>
       <DataBox label="03 — Operators / Sensors" tooltip="BaseOperator anatomy, poke vs reschedule vs deferred, provider ecosystem.">Operators</DataBox>
     </FlowRow>
     <Arrow direction="down" label="★ Internals" />
@@ -56,38 +66,38 @@ topics: ["Курс", "Roadmap", "Module overview"]
       </DataBox>
       <DataBox
         label="05 — Executors deep"
-        tooltip="Local, Celery (prefetch pitfall), Kubernetes (watcher thread), Pluggable Executors AIP-61, Edge Executor AIP-69."
+        tooltip="Local, Celery (prefetch pitfall), Kubernetes (watcher thread), CeleryKubernetes hybrid, Multiple Executors (AIP-61, 2.10+)."
       >
         Executors ★
       </DataBox>
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
-      <DataBox label="06 — XCom" tooltip="DB storage, 48KB лимит, Object Storage XCom backend.">XCom</DataBox>
-      <DataBox label="07 — Dynamic Mapping" tooltip="expand, expand_kwargs, scaling pitfalls.">Mapping</DataBox>
-      <DataBox label="08 — Datasets/Assets" tooltip="AIP-48 → AIP-74/75, Asset Partitions (3.2), Event-driven AIP-82.">Assets ★</DataBox>
+      <DataBox label="06 — XCom" tooltip="DB storage, 48KB лимит, Object Storage XCom backend (2.8+).">XCom</DataBox>
+      <DataBox label="07 — Dynamic Mapping" tooltip="expand (AIP-42, 2.3+), expand_kwargs, scaling pitfalls.">Mapping</DataBox>
+      <DataBox label="08 — Datasets" tooltip="AIP-48 (2.4+), DatasetAlias (2.9), data-aware scheduling. В 3.x переименованы в Assets.">Datasets ★</DataBox>
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
-      <DataBox label="09 — Triggerer / Deferrable" tooltip="asyncio event loop, BaseTrigger, TriggerEvent, HA triggerer.">Triggerer</DataBox>
+      <DataBox label="09 — Triggerer / Deferrable" tooltip="asyncio event loop, BaseTrigger, TriggerEvent (AIP-40, 2.2+).">Triggerer</DataBox>
       <DataBox label="10 — Secrets" tooltip="Fernet encryption internals, Vault/AWS SM backends, lookup order.">Secrets</DataBox>
       <DataBox label="11 — Pools / Concurrency" tooltip="5 уровней concurrency, priority weight rules, slot contention.">Pools</DataBox>
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
-      <DataBox label="12 — Plugins / Listeners" tooltip="Listener API (2.8+), React UI plugins (3.1+).">Plugins</DataBox>
-      <DataBox label="13 — REST API v2" tooltip="FastAPI vs Flask v1, airflowctl, OAuth/JWT.">API</DataBox>
-      <DataBox label="14 — Observability + OpenLineage" tooltip="OTel полный stack, OpenLineage automatic emission, Marquez.">Lineage ★</DataBox>
+      <DataBox label="12 — Plugins / Listeners" tooltip="Listener API (2.8+), AirflowPlugin class, custom hooks.">Plugins</DataBox>
+      <DataBox label="13 — REST API" tooltip="Stable REST API v1, JWT auth, automation patterns.">API</DataBox>
+      <DataBox label="14 — Observability + OpenLineage" tooltip="OTel (AIP-49, 2.10+), OpenLineage automatic emission, Marquez.">Lineage ★</DataBox>
     </FlowRow>
     <Arrow direction="down" label="Production" />
     <FlowRow>
-      <DataBox label="15 — Production" tooltip="HA reference, Helm chart, Multi-Team AIP-67, managed comparison.">Deploy</DataBox>
-      <DataBox label="16 — Testing" tooltip="Unit/integration tests, airflow dags test, custom operator testing.">Tests</DataBox>
-      <DataBox label="17 — Design Patterns" tooltip="Idempotency, DAG factory, HITL, OpenLineage-aware patterns.">Patterns</DataBox>
+      <DataBox label="15 — Production" tooltip="HA reference, Helm chart, MWAA/Composer/Astronomer comparison.">Deploy</DataBox>
+      <DataBox label="16 — Testing" tooltip="Unit/integration tests, airflow dags test, pytest-airflow.">Tests</DataBox>
+      <DataBox label="17 — Design Patterns" tooltip="Idempotency, DAG factory, OpenLineage-aware patterns.">Patterns</DataBox>
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
-      <DataBox label="18 — Capstone + Migration" tooltip="E2E проект + Migration 2→3 playbook с upgrade-check и ruff AIR301/302.">Финал</DataBox>
+      <DataBox label="18 — Capstone + Upgrade Path 3.x" tooltip="E2E проект + Migration 2.x → 3.x playbook через airflow upgrade-check и ruff AIR301/AIR302.">Финал</DataBox>
     </FlowRow>
   </FlowColumn>
 </DiagramContainer>
@@ -100,11 +110,11 @@ topics: ["Курс", "Roadmap", "Module overview"]
 
 К концу курса вы будете способны:
 
-1. **Развернуть production HA-кластер Airflow 3.x** — 2 scheduler, 2 triggerer, multi-worker, RDS PostgreSQL, PgBouncer, Helm chart на Kubernetes.
-2. **Диагностировать proble Hand-on**: stuck queued tasks, zombie cleanup, scheduler loop slowdown, RocksDB → SmartSensor migration.
+1. **Развернуть production HA-кластер Airflow 2.x** — 2-3 scheduler, 2 triggerer, multi-worker, RDS PostgreSQL, PgBouncer, Helm chart на Kubernetes.
+2. **Диагностировать problem hands-on**: stuck queued tasks, zombie cleanup, scheduler loop slowdown, Celery prefetch pitfall.
 3. **Писать ультимативные DAGs**: TaskFlow с typed XCom, dynamic mapping, deferrable sensors, datasets-aware scheduling.
 4. **Внедрить OpenLineage** для автоматического data lineage с Marquez backend.
-5. **Мигрировать с 2.x на 3.x** — knowing the breaking changes, ruff AIR301/302 rules, `airflow upgrade-check`.
+5. **Подготовить миграцию с 2.x на 3.x** — knowing the breaking changes, ruff AIR301/AIR302 rules, `airflow upgrade-check`.
 6. **Аргументировать выбор Airflow vs Prefect / Dagster / Argo / Temporal** в конкретном архитектурном контексте.
 
 ---
@@ -128,8 +138,8 @@ topics: ["Курс", "Roadmap", "Module overview"]
 
 ## Стек курса
 
-- **Apache Airflow 3.2.x** — current stable (примеры на 3.x синтаксисе)
-- **Python 3.12**
+- **Apache Airflow 2.10.x / 2.11.x (LTS)** — основной target
+- **Python 3.11**
 - **PostgreSQL 16** — metadata DB
 - **Redis 7** — Celery broker
 - **Docker Compose** — для всех labs
@@ -141,18 +151,18 @@ topics: ["Курс", "Roadmap", "Module overview"]
 
 ## Что НЕ покрываем
 
-Курс ориентирован на 3.x. Намеренно опускаем:
+Курс ориентирован на современный 2.x (2.10/2.11). Намеренно опускаем:
 
 - **Airflow 1.x** — устарел, не используется в новых проектах
-- **SubDAG operator** — заменён TaskGroup, considered anti-pattern
-- **Smart Sensors** — удалены в 2.x, заменены deferrable operators
-- **Per-DAG concurrency old syntax** — современный синтаксис в TaskFlow
-- **Flower как Celery monitor** — заменяется на OTel метрики
-- **ZooKeeper-based HA** — никогда не было в Airflow, упоминаем только как контраст
+- **SubDAG operator** — deprecated, anti-pattern, заменён TaskGroup
+- **Smart Sensors** — удалены в 2.x, заменены Deferrable Operators
+- **SequentialExecutor** — только для testing
+- **Flower как primary monitor** — заменяется OTel метриками (с 2.10+)
+- **Legacy `schedule_interval` syntax** — современный синтаксис `schedule=...`
 
 ---
 
 <KnowledgeCheck
   question="Какие два модуля курса дают наибольшую глубину internals и наиболее уникальны по сравнению с другими курсами по Airflow?"
-  answer="Модули 04 (Scheduler internals) и 05 (Executors deep dive). Они препарируют scheduler main loop, critical section с row-level locks PostgreSQL, HA mechanism, zombie cleanup, executor-specific internals (Celery prefetch pitfall, Kubernetes watcher thread, Pluggable Executors AIP-61, Edge Executor). Также важны модули 08 (Datasets→Assets с Asset Partitions 3.2 и Event-driven AIP-82) и 14 (OpenLineage end-to-end). Эти модули вместе составляют killer-материал курса."
+  answer="Модули 04 (Scheduler internals) и 05 (Executors deep dive). Они препарируют scheduler main loop, critical section с row-level locks PostgreSQL, HA mechanism, zombie cleanup, executor-specific internals (Celery prefetch pitfall, Kubernetes watcher thread, Multiple Executors AIP-61 в 2.10+). Также важны модули 08 (Datasets с DatasetAlias 2.9) и 14 (OpenLineage). Эти модули вместе составляют killer-материал курса."
 />
