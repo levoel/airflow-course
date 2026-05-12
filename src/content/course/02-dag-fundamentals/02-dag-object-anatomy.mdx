@@ -92,7 +92,7 @@ class DAG:
 from airflow.decorators import dag, task
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["etl"],
@@ -114,14 +114,14 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 with DAG(
-    dag_id="my_dag",
-    schedule="@daily",
+    dag_id="my_dag"
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["etl"],
 ) as dag:
     PythonOperator(
-        task_id="hello",
+        task_id="hello"
         python_callable=lambda: "world",
     )
 ```
@@ -138,7 +138,7 @@ with DAG(
 
 ```python
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args={
@@ -166,7 +166,7 @@ Inheritance применяется во время инстанцировани�
 <DiagramContainer title="default_args inheritance — DAG → Task" color="blue">
   <FlowColumn>
     <FlowRow>
-      <DataBox label="DAG.default_args" tooltip="Dict переданный в @dag(default_args={...}). Хранится как attribute DAG object. При инстанцировании каждого task используется как baseline.">{retries: 2, retry_delay: 5min, owner: 'data-team'}</DataBox>
+      <DataBox label="DAG.default_args" tooltip="Dict переданный в @dag(default_args=...). Хранится как attribute DAG object. При инстанцировании каждого task используется как baseline.">{`{retries: 2, retry_delay: 5min, owner: 'data-team'}`}</DataBox>
     </FlowRow>
     <Arrow direction="down" label="BaseOperator.__init__ merges" />
     <FlowRow>
@@ -242,7 +242,7 @@ def check_sla(dag, task_list, blocking_task_list, slas, blocking_tis):
     log_sla_miss(dag.dag_id, [t.task_id for t in task_list])
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     on_success_callback=notify_success,
@@ -278,7 +278,7 @@ By default Jinja templates рендерятся в строки. Для passing 
 
 ```python
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     render_template_as_native_obj=True,  # ← Magic
@@ -311,16 +311,16 @@ def fiscal_year(execution_date):
     return execution_date.year if execution_date.month >= 4 else execution_date.year - 1
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     user_defined_macros={"fiscal_year": fiscal_year},
     user_defined_filters={"upper_case": str.upper},
 )
 def my_dag():
     PostgresOperator(
-        task_id="query",
+        task_id="query"
         sql="SELECT * FROM sales WHERE fy = {{ fiscal_year(execution_date) }} "
-            "AND region = '{{ params.region | upper_case }}'",
+            "AND region = '{{ params.region | upper_case }}'"
         params={"region": "europe"},
     )
 ```
@@ -343,7 +343,7 @@ SELECT * FROM orders WHERE created_at::date = '{{ ds }}';
 )
 def my_dag():
     PostgresOperator(
-        task_id="extract",
+        task_id="extract"
         sql="orders.sql",  # ← путь относительно searchpath
     )
 ```

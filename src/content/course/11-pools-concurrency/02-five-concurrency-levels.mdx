@@ -125,7 +125,7 @@ max_active_tasks_per_dag = 16
 ```python
 # DAG-level override
 @dag(
-    schedule="@hourly",
+    schedule="@hourly"
     max_active_tasks=32,  # 2.x новое имя; concurrency=32 — старое, всё ещё работает
 )
 def my_dag():
@@ -148,7 +148,7 @@ def my_dag():
 
 ```python
 @dag(
-    schedule="@hourly",
+    schedule="@hourly"
     max_active_runs=1,  # ← sequential: следующий час не стартует, пока текущий не закончил
 )
 def sequential_etl():

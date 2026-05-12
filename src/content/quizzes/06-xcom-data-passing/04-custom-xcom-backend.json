@@ -51,7 +51,7 @@
       "question": "Path traversal — известная уязвимость Custom Backend если deserialize_value тривиально доверяет JSON ref `{'uri': 's3://...'}` из DB. Атакующий с DB write access (например через compromised admin UI) может inject `{'uri': 's3://bucket/../../other-bucket/secrets'}` и читать произвольные blobs — mitigation: validate URI начинается с expected prefix.",
       "correctAnswer": true,
       "explanation": "Да, это реальный security concern. Если deserialize_value() читает любой URI из XCom value — это лазейка. Mitigation: (1) валидация URI prefix: `if not uri.startswith(f's3://{ALLOWED_BUCKET}/xcom/'): raise ValueError;` (2) IAM scope-down — worker может писать только под xcom/<dag_id>/...; (3) SSE-KMS encryption per-DAG; (4) CloudTrail/audit logging S3 access; (5) bucket policy restricting access только Airflow IAM roles. Также PII concerns: lifecycle policy auto-delete после 90 дней, no public reads.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

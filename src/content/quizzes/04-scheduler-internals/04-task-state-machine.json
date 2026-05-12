@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Критическое отличие: up_for_retry — это failure path (exception raised, retries left, retry_delay wait). up_for_reschedule — sensor poke returned False, это штатное поведение, не failure. Reschedule освобождает worker slot и записывает в task_reschedule table с reschedule_date=now()+poke_interval. Reschedule не считается failure для retry counter. Sensor в mode='poke' (default) держит worker slot между poke; в mode='reschedule' — отпускает. Reschedule лучше для long-waiting sensors, чтобы не блокировать pool.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-04-q4",

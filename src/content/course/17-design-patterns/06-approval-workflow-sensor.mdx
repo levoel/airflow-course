@@ -172,7 +172,7 @@ Run: {context['dag_run'].run_id}
 [Approve / Reject]({approval_url})
 """
     requests.post(
-        "https://hooks.slack.com/services/...",
+        "https://hooks.slack.com/services/..."
         json={"text": msg, "channel": "#approvals"},
     )
 ```
@@ -217,7 +217,7 @@ loan_disbursement_pipeline()
 
 | Mode | Worker behavior | Подходит для | Cost |
 |---|---|---|---|
-| `poke` | Worker занят весь sensor lifetime | Short timeout (<10 min) | Wastes worker slot |
+| `poke` | Worker занят весь sensor lifetime | Short timeout (&lt;10 min) | Wastes worker slot |
 | `reschedule` | Worker free между pokes — TI re-scheduled | Long timeout (hours, days) | Slight overhead per poke |
 
 Для approval (24 hours) — **только `reschedule`**. С `poke` 24h × 16 concurrent approvals = exhaust pool.
@@ -332,8 +332,8 @@ def loan_pipeline():
 
     # Built-in HITL operator
     approval = ApprovalOperator(
-        task_id="manager_approval",
-        prompt="Approve loan disbursement?",
+        task_id="manager_approval"
+        prompt="Approve loan disbursement?"
         timeout=timedelta(hours=24),
         notify_channels=["#approvals"],  # Slack/Teams integration
         approver_groups=["managers"],     # role-based authorization

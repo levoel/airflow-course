@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Principle of least privilege: automation должен иметь exactly те permissions, которые ему нужны. Read для monitoring (DagRuns/TI), create DagRun (trigger), edit TI (clear). Не давать write на Connections/Variables — automation может leak credentials в logs/errors. Не давать can_admin — это full control. Connections управлять через CLI в CI (`airflow connections import`) или secrets backend (Vault) — не через REST API.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m13-06-q3",
@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "REST API не предназначен для polling-based dashboards. Каждый GET — heavy SQL (10-50MB response), парсинг marshmallow в Python objects. Concurrent polls сложатся. Правильный подход: OpenTelemetry metrics (модуль 14) для real-time dashboards (Prometheus + Grafana — дешёвый, push-based). Если REST действительно нужен — backend service делает 1 poll/min, cache в Redis, dashboard читает из Redis. Listener API (модуль 12) — push events по state change.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m13-06-q4",

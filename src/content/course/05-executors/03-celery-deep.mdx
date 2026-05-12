@@ -201,7 +201,7 @@ worker_prefetch_multiplier = 1   # default 4 — это для super-short tasks
 
 Это значит: worker prefetches только `concurrency × 1 = 16` messages. Long task в slot не блокирует prefetched batch — остальные 16 slots сразу подбирают новые messages из broker (где их доступно всем workers).
 
-**Trade-off**: больше round-trips к broker (network overhead). Для tasks < 1 second это заметно. Для tasks > 5 seconds — pure win.
+**Trade-off**: больше round-trips к broker (network overhead). Для tasks &lt; 1 second это заметно. Для tasks > 5 seconds — pure win.
 
 **Правила**:
 | Workload | prefetch_multiplier |
@@ -430,7 +430,7 @@ Long-living Celery worker накапливает memory leak (Python imports, la
 
 **Trade-off**: на high throughput restart overhead заметен. Подбирать по profilirovaniyu memory growth.
 
-### Gotcha 4: visibility_timeout < task duration
+### Gotcha 4: visibility_timeout &lt; task duration
 
 Для broker=Redis, Celery использует `visibility_timeout` (default 1 hour). Если task длится > 1 час, Celery считает его lost и **дублирует message**. Получите double execution.
 

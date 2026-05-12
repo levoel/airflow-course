@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Из официальных docs Airflow 2.0 scheduler design: ключевое decision — operational simplicity. Оператор уже использует PostgreSQL для metadata, и переиспользование DB locks убирает необходимость в отдельном Raft (etcd) / Paxos (Cassandra) / ZK (HBase) кластере. Trade-off: throughput меньше чем у dedicated consensus, но deployment проще. Это сознательный выбор — Airflow targets ops teams без heavy distributed systems expertise.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-02-q2",
@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Critical section serialized — только один scheduler одновременно делает enqueue в phase 3. Остальные phases (create DagRuns, schedule TI, housekeeping) могут параллелиться, но обычно не bottleneck. Sweet spot: 1 для dev, 2 для small (<500 DAGs), 3-4 для medium-large (500-5k), 5+ — diminishing returns. После 5 scheduler-ов prefer Postgres tuning (PgBouncer connection pooling, индексы на dag_run/task_instance, VACUUM/autovacuum tuning, partitioning логов) над добавлением scheduler.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-02-q4",

@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Kubernetes auth method — gold standard для K8s deployments. Setup: enable auth в Vault, configure с K8s API endpoint + CA cert, define roles binding SA name + namespace → policies. Pod's mounted JWT token → VaultBackend читает /var/run/secrets/.../token → отправляет к Vault → Vault TokenReview через K8s API → если verified, выдаёт Vault token. No secrets в Airflow config — identity-based. Comparable patterns: IRSA для EKS + AWS Secrets Manager, Workload Identity для GKE + GCP Secret Manager, Managed Identity для AKS + Azure Key Vault. Всё это — bind cloud identity к K8s SA, без long-lived creds.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m10-exam-q5",

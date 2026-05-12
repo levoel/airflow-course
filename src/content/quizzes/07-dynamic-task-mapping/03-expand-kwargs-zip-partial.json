@@ -51,7 +51,7 @@
       "question": "`.map(fn)` на XComArg — это lazy lambda transformation на element level, выполняется при resolve worker-а; не создаёт extra task. Сложные transformations лучше делать через явный @task (retryable, logged, debuggable).",
       "correctAnswer": true,
       "explanation": "Да. XComArg.map(fn) — lazy MapXComArgWithMap. Не создаёт TI, не пишет XCom. Применяется на runtime worker-а когда resolved. Преимущества: zero Airflow overhead, no extra TI scheduling. Caveats: lambda должна быть picklable (closures fragile), нет retries (failure transformation = TI failure), нет separate log, debugging harder. Лучше использовать .map для простых ops (subscript, arithmetic, lambda pair: {...}). Для complex logic — явный @task: получаете retries, logs, debuggability, type safety.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -77,8 +77,8 @@ OL provider видит `transform_orders` как opaque Python task — нет l
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 
 transform_orders = SQLExecuteQueryOperator(
-    task_id="transform_orders",
-    conn_id="warehouse",
+    task_id="transform_orders"
+    conn_id="warehouse"
     sql="""
     INSERT INTO dim.orders
     SELECT
@@ -127,8 +127,8 @@ class CustomEtlOperatorExtractor(BaseExtractor):
 
         inputs = [
             Dataset(
-                namespace=f"postgres://{op.source_conn_host}:{op.source_conn_port}",
-                name=f"{op.source_database}.{op.source_table}",
+                namespace=f"postgres://{op.source_conn_host}:{op.source_conn_port}"
+                name=f"{op.source_database}.{op.source_table}"
                 facets={
                     "schema": SchemaDatasetFacet(fields=[
                         SchemaField(name="id", type="bigint"),
@@ -140,13 +140,13 @@ class CustomEtlOperatorExtractor(BaseExtractor):
 
         outputs = [
             Dataset(
-                namespace=f"snowflake://{op.target_account}.snowflakecomputing.com",
+                namespace=f"snowflake://{op.target_account}.snowflakecomputing.com"
                 name=f"{op.target_database}.{op.target_schema}.{op.target_table}",
             )
         ]
 
         return TaskMetadata(
-            name=f"{op.task_id}",
+            name=f"{op.task_id}"
             inputs=inputs,
             outputs=outputs,
             run_facets={},
@@ -198,7 +198,7 @@ def custom_transform(execution_date: str):
     adapter = OpenLineageAdapter()
     adapter.emit_dataset_event(
         run_id=ctx["run_id"],
-        job_name=f"{ctx['dag'].dag_id}.{ctx['task'].task_id}",
+        job_name=f"{ctx['dag'].dag_id}.{ctx['task'].task_id}"
         inputs=[
             Dataset(namespace="s3://lake", name="raw/orders/2026-05-12.parquet"),
         ],
@@ -290,7 +290,7 @@ Avoid:
 
 Prefer:
 - Plain INSERT/SELECT/MERGE
-- CTEs <= 3 levels
+- CTEs &lt;= 3 levels
 - Explicit table names (avoid `*` joins без aliases)
 
 ---
@@ -379,7 +379,7 @@ def extract(self):
 ```python
 SparkSubmitOperator(
     ...
-    packages="io.openlineage:openlineage-spark:1.20.0",
+    packages="io.openlineage:openlineage-spark:1.20.0"
     conf={
         "spark.extraListeners": "io.openlineage.spark.agent.OpenLineageSparkListener",
         "spark.openlineage.transport.type": "http",

@@ -156,7 +156,7 @@ while elapsed < MAX_WAIT_SEC:
 
     try:
         r = session.get(
-            f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}/dagRuns/{DAG_RUN_ID}",
+            f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}/dagRuns/{DAG_RUN_ID}"
             timeout=10
         )
         r.raise_for_status()
@@ -172,7 +172,7 @@ while elapsed < MAX_WAIT_SEC:
     if state == "failed":
         # Получим failed tasks для логов
         ti_resp = session.get(
-            f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}/dagRuns/{DAG_RUN_ID}/taskInstances",
+            f"{AIRFLOW_URL}/api/v1/dags/{DAG_ID}/dagRuns/{DAG_RUN_ID}/taskInstances"
             params={"state": "failed"}
         ).json()
         for ti in ti_resp.get("task_instances", []):
@@ -227,7 +227,7 @@ since = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
 
 # Найдём все failed TI за последние 12 часов
 r = session.get(
-    f"{AIRFLOW}/api/v1/dags/~/dagRuns/~/taskInstances",
+    f"{AIRFLOW}/api/v1/dags/~/dagRuns/~/taskInstances"
     params={
         "state": "failed",
         "start_date_gte": since,
@@ -265,7 +265,7 @@ for (dag_id, run_id), task_ids in to_retry.items():
         "dry_run": True
     }
     dry = session.post(
-        f"{AIRFLOW}/api/v1/dags/{dag_id}/clearTaskInstances",
+        f"{AIRFLOW}/api/v1/dags/{dag_id}/clearTaskInstances"
         json=payload, timeout=30
     ).json()
     print(f"{dag_id} run={run_id}: would clear {len(dry['task_instances'])} TI")
@@ -273,7 +273,7 @@ for (dag_id, run_id), task_ids in to_retry.items():
     # Реальный clear
     payload["dry_run"] = False
     real = session.post(
-        f"{AIRFLOW}/api/v1/dags/{dag_id}/clearTaskInstances",
+        f"{AIRFLOW}/api/v1/dags/{dag_id}/clearTaskInstances"
         json=payload, timeout=30
     )
     real.raise_for_status()
@@ -367,7 +367,7 @@ for conn in connections:
         # Update — PATCH без connection_id в body
         body = {k: v for k, v in conn.items() if k != "connection_id"}
         ur = session.patch(
-            f"{AIRFLOW}/api/v1/connections/{conn_id}",
+            f"{AIRFLOW}/api/v1/connections/{conn_id}"
             json=body, timeout=10
         )
         ur.raise_for_status()
@@ -435,7 +435,7 @@ for dag_id, sla_hours in SLA.items():
     threshold = (now - timedelta(hours=sla_hours)).isoformat()
 
     r = session.get(
-        f"{AIRFLOW}/api/v1/dags/{dag_id}/dagRuns",
+        f"{AIRFLOW}/api/v1/dags/{dag_id}/dagRuns"
         params={
             "state": "running",
             "limit": 10,
@@ -503,7 +503,7 @@ while date <= end:
     # Wait if too many already running
     while True:
         r = session.get(
-            f"{AIRFLOW}/api/v1/dags/{DAG_ID}/dagRuns",
+            f"{AIRFLOW}/api/v1/dags/{DAG_ID}/dagRuns"
             params={"state": "running,queued", "limit": 100}
         ).json()
         active = len(r["dag_runs"])
@@ -514,7 +514,7 @@ while date <= end:
 
     run_id = f"backfill__{date.strftime('%Y-%m-%d')}"
     resp = session.post(
-        f"{AIRFLOW}/api/v1/dags/{DAG_ID}/dagRuns",
+        f"{AIRFLOW}/api/v1/dags/{DAG_ID}/dagRuns"
         json={
             "dag_run_id": run_id,
             "logical_date": date.isoformat(),

@@ -91,19 +91,19 @@ postgres://airflow:s3cr3t@db.internal:5432/warehouse?sslmode=require&connect_tim
 from airflow.models import Connection
 
 conn = Connection(
-    conn_id="warehouse_dwh",
-    conn_type="postgres",
-    host="db.internal",
+    conn_id="warehouse_dwh"
+    conn_type="postgres"
+    host="db.internal"
     port=5432,
-    login="airflow",
-    password="s3cr3t",
-    schema="warehouse",
+    login="airflow"
+    password="s3cr3t"
+    schema="warehouse"
     extra='{"sslmode": "require", "connect_timeout": 10}',
 )
 
 # Эквивалентно:
 conn = Connection(
-    conn_id="warehouse_dwh",
+    conn_id="warehouse_dwh"
     uri="postgres://airflow:s3cr3t@db.internal:5432/warehouse?sslmode=require&connect_timeout=10",
 )
 ```
@@ -301,7 +301,7 @@ def call_external_api():
     base_url = conn.host
 
     response = requests.get(
-        f"{base_url}/orders",
+        f"{base_url}/orders"
         headers={"Authorization": f"Bearer {api_key}"},
         timeout=30,
     )

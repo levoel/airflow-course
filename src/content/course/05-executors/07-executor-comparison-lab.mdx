@@ -31,7 +31,7 @@ from datetime import datetime
 import time
 
 @dag(
-    dag_id="executor_benchmark",
+    dag_id="executor_benchmark"
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
@@ -394,7 +394,7 @@ kubectl top pods -n airflow
 | Условие | Executor |
 |---|---|
 | Dev environment | LocalExecutor |
-| < 100 tasks/min, single-node, simple | LocalExecutor |
+| &lt; 100 tasks/min, single-node, simple | LocalExecutor |
 | > 100 tasks/min, shared environment | CeleryExecutor |
 | Per-task isolation, GPU, custom images | KubernetesExecutor |
 | Mixed light + heavy (на 2.10+) | Multiple Executors AIP-61 |

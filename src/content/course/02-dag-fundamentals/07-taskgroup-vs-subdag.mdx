@@ -46,7 +46,7 @@ topics: ["TaskGroup", "SubDAG", "Anti-pattern", "DAG Organization"]
 # subdag.py
 def subdag(parent_dag_id, child_dag_id, args):
     subdag = DAG(
-        dag_id=f"{parent_dag_id}.{child_dag_id}",
+        dag_id=f"{parent_dag_id}.{child_dag_id}"
         default_args=args,
     )
 
@@ -63,7 +63,7 @@ from airflow.operators.subdag import SubDagOperator
 
 with DAG("main_dag", default_args=args) as dag:
     subdag_op = SubDagOperator(
-        task_id="my_subdag",
+        task_id="my_subdag"
         subdag=subdag("main_dag", "my_subdag", args),
     )
 ```
@@ -120,7 +120,7 @@ from airflow.utils.task_group import TaskGroup
 from datetime import datetime
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
 )

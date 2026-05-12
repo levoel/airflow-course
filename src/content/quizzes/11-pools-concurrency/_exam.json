@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Critical section — самая защищённая часть Airflow. NOWAIT: второй scheduler сразу получает lock_not_available и skip tick, никаких deadlocks. Aggregate pool usage + UPDATE TI state в одной транзакции — атомарно. Это почему pool — самый правильный уровень для protection внешних ресурсов.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-exam-q3",
@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Downstream bias — корни с длинным хвостом выигрывают cross-DAG в shared pool. Это design (без корня DAG не двинется), но counter-intuitive для production SLA. Fix: либо переключить weight_rule='absolute' на critical DAG через default_args (predictable ranking), либо explicit поднять priority_weight на critical корень.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-exam-q5",

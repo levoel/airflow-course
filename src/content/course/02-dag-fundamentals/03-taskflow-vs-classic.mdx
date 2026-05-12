@@ -36,23 +36,23 @@ def load(**context):
     print(f"Loading: {transformed}")
 
 with DAG(
-    dag_id="classic_etl",
-    schedule="@daily",
+    dag_id="classic_etl"
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
 ) as dag:
     extract_op = PythonOperator(
-        task_id="extract",
+        task_id="extract"
         python_callable=extract,
     )
 
     transform_op = PythonOperator(
-        task_id="transform",
+        task_id="transform"
         python_callable=transform,
     )
 
     load_op = PythonOperator(
-        task_id="load",
+        task_id="load"
         python_callable=load,
     )
 
@@ -76,7 +76,7 @@ from airflow.decorators import dag, task
 from datetime import datetime
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
 )
@@ -258,7 +258,7 @@ def hybrid_dag():
     date = get_date()
 
     create_table = PostgresOperator(
-        task_id="create_table",
+        task_id="create_table"
         sql="CREATE TABLE orders_{{ ti.xcom_pull(task_ids='get_date') }} (...)",
     )
 
@@ -291,7 +291,7 @@ def hybrid_dag():
 ```python
 @task.virtualenv(
     requirements=["pandas==2.1.0", "numpy==1.25"],
-    python_version="3.11",
+    python_version="3.11"
     system_site_packages=False,
 )
 def isolated_task():

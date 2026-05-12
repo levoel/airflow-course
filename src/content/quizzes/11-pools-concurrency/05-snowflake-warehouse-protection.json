@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Split per query class — главный production pattern. Read queries — много lightweight параллельных (warehouse сам priority queue), ETL — max 4 чтобы не положить. Если single pool=8: read упирается (хотим 16+), если single pool=16: ETL положит warehouse. Split даёт isolation: read саtuрация не влияет на ETL.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-05-q2",
@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Pool — это economic trade-off. Без pool 100 queries × 10min = ~30 min realtime $96. С pool=4: 250min realtime $96 (тот же total cost). НО: cost variance, peak load predictable, no surprise multi-cluster auto-scale. Production почти всегда выбирает predictability.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-05-q4",

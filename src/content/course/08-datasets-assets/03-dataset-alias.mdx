@@ -115,7 +115,7 @@ from airflow.decorators import dag, task
 tenants_alias = DatasetAlias("tenant-orders-processed")
 
 @dag(
-    dag_id="tenant_etl_dispatcher",
+    dag_id="tenant_etl_dispatcher"
     schedule="@hourly",
 )
 def tenant_dispatcher():

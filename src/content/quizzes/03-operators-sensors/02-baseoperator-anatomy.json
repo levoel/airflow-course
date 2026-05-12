@@ -54,7 +54,7 @@
       "question": "Mutable default argument в __init__ custom operator (`def __init__(self, items: list = []): ...`) — корректный pattern в Airflow, потому что Airflow создаёт новый instance operator на каждый DagRun.",
       "correctAnswer": false,
       "explanation": "Это **classic Python pitfall**, и в Airflow он особенно опасен. Default `[]` создаётся один раз при определении функции и шарится между всеми instances класса. На втором парсе DAG (через 30 секунд по default min_file_process_interval), если первый прогон что-то добавил в self.items, второй увидит это. Pattern: `def __init__(self, items: list | None = None):` и внутри `self.items = items or []`. Симптомы при ошибке — state накапливается между runs, появляются неожиданные значения, hard-to-debug bugs. Airflow создаёт operator instance каждый раз при DAG parse, но default argument шарен.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

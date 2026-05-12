@@ -120,8 +120,8 @@ def hybrid_ml_pipeline():
                 spec=V1PodSpec(
                     node_selector={"gpu-type": "nvidia-a100"},
                     containers=[V1Container(
-                        name="base",
-                        image="my-registry.com/airflow-ml:2.10.5",
+                        name="base"
+                        image="my-registry.com/airflow-ml:2.10.5"
                         resources=V1ResourceRequirements(
                             requests={"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"},
                             limits={"cpu": "8", "memory": "32Gi", "nvidia.com/gpu": "1"},
@@ -187,7 +187,7 @@ kubernetes_queue = kubernetes   # tasks с queue='kubernetes' → K8s
 | **Throughput for short tasks** | До 100 tasks/min | До 10000 tasks/min (multi-worker) |
 | **Horizontal scaling** | Нет (single-node) | Да (add workers) |
 | **HA** | Только scheduler | Scheduler + workers |
-| **Recommended scale** | Small (<100 short tasks/min) | Medium-Large |
+| **Recommended scale** | Small (&lt;100 short tasks/min) | Medium-Large |
 
 ---
 
@@ -251,7 +251,7 @@ def heavy_processing(): ...
 def team_a_etl(): ...
 
 # Team B — ML, needs custom image, K8s pod
-@task(queue="kubernetes",
+@task(queue="kubernetes"
       executor_config={"pod_override": V1Pod(...)})
 def team_b_ml(): ...
 ```
@@ -265,7 +265,7 @@ def quick(): ...
 @task(queue="kubernetes",     # explicit large
       executor_config={"pod_override": V1Pod(
           spec=V1PodSpec(containers=[V1Container(
-              name="base",
+              name="base"
               resources=V1ResourceRequirements(
                   requests={"cpu": "8", "memory": "32Gi"}
               )

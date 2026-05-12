@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Scheduler health = четыре аспекта: (1) Loop speed (loop_duration); (2) DAG parsing health (parse_time + import_errors — bad new DAG ломает parser); (3) Executor throughput (open_slots + queued_tasks — capacity bottleneck); (4) DB connectivity (pool usage — saturation = scheduler stuck). Эти metrics показывают 95% production issues. Все остальные (CPU, RAM, etc) — secondary, нужны для root cause analysis после signal от primary.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-07-q4",
@@ -51,7 +51,7 @@
       "question": "Runbook (action plan) обязателен для каждого alert. Без runbook on-call в 3 AM не знает что делать — открывает Google и теряет 30 минут на context-load. Production alert without runbook = техдолг.",
       "correctAnswer": true,
       "explanation": "Best practice: alert annotation `runbook` содержит step-by-step actions: (1) что проверить first (links на dashboards/queries); (2) common causes ranked by probability; (3) safe mitigation steps; (4) when to escalate. Это позволяет new on-call engineer reagировать в 3 AM без full context. Без runbook каждый incident = research from scratch → длинные MTTR. Best production playbook: runbook embedded в alert message (PagerDuty/Slack), links на dashboards с pre-filled queries, post-incident review обновляет runbook.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

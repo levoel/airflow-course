@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Astronomer = fastest rollout новых Airflow versions. MWAA исторически медленный (12+ months после release). Composer тоже не super fast. Astronomer engineers contribute upstream — они знают release раньше остальных. Если ваша стратегия — быть на latest (security fixes, new features, 3.x adoption ASAP) — Astro правильный выбор. Self-host тоже даёт control над сроками, но требует SRE.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m15-05-q4",

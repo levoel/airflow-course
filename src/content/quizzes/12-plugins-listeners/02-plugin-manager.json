@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Provider package — versioned (pip pin), distributable (через artifact registry), full Airflow 3.x compatibility. File-based — Quick dev / on-premise hacks. UI Connection types регистрация только через provider. Production team: package + pip install в Dockerfile.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m12-02-q2",

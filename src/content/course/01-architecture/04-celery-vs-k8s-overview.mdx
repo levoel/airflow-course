@@ -142,7 +142,7 @@ from kubernetes.client import V1Pod, V1PodSpec, V1Container, V1ResourceRequireme
         "pod_override": V1Pod(
             spec=V1PodSpec(
                 containers=[V1Container(
-                    name="base",
+                    name="base"
                     resources=V1ResourceRequirements(
                         requests={"cpu": "2", "memory": "8Gi", "nvidia.com/gpu": "1"},
                         limits={"cpu": "4", "memory": "16Gi", "nvidia.com/gpu": "1"},
@@ -180,7 +180,7 @@ def gpu_inference():
 ## Когда какой
 
 ### Используйте **CeleryExecutor** когда:
-- Тысячи коротких tasks (<1 minute) в час
+- Тысячи коротких tasks (&lt;1 minute) в час
 - Все tasks делят одинаковую Python environment
 - Хочется simple operational model (Python + Redis)
 - Cost matters для idle time (можно держать минимум workers)

@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Cold start 25s + work 5s = 83% overhead. Оптимизация cold start (DaemonSet pre-pull, slim image, IfNotPresent) сводит до 5-10s — всё равно 50%+ overhead на короткие tasks. На 2.10+ — AIP-61 cleanest решение: short→Celery (1.5s startup), heavy/GPU/isolation→K8s. На 2.3-2.9 — CeleryKubernetesExecutor (hybrid) с `queue='kubernetes'` routing. Не использовать K8s для всего — wasteful на коротких.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m05-exam-q5",

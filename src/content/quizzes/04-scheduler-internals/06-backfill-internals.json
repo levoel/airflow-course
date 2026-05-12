@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "--reset-dagruns: BEGIN; DELETE FROM task_instance WHERE run_id IN (...); DELETE FROM dag_run WHERE data_interval_start BETWEEN ...; COMMIT. Деструктивная операция — historical TI data, XCom values, logs reference потеряны. 95% случаев лучше использовать --rerun-failed-tasks: оставляет existing DagRuns, clear только failed TIs. --reset-dagruns только когда DAG structure изменилась (added/removed tasks) и existing TIs incoherent с new structure. Even then — backup metadata DB первым.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-06-q3",

@@ -21,8 +21,8 @@ Sensors — операторы, которые ждут условия (key в S
 
 ```python
 S3KeySensor(
-    task_id="wait_for_data",
-    bucket_key="...",
+    task_id="wait_for_data"
+    bucket_key="..."
     mode="poke",  # или "reschedule" или ... (deferrable не через mode)
     poke_interval=60,
     timeout=86400,
@@ -246,7 +246,7 @@ Waits for external event (SQS message, Kafka offset, S3 EventBridge). В 3.x Ass
 
 Не всегда deferrable нужен. Cases где poke ОК:
 
-1. **Quick existence check** (< 1 минута total). Overhead defer/triggerer/wakeup может быть больше чем sync poke loop.
+1. **Quick existence check** (&lt; 1 минута total). Overhead defer/triggerer/wakeup может быть больше чем sync poke loop.
 2. **Single sensor on tiny DAG**. Если DAG имеет один sensor с timeout=10 минут — не стоит deploy-ить triggerer ради него.
 3. **Development/testing** — proще без triggerer setup.
 4. **Sensors с heavy CPU work in poke** (unusual). Если poke() делает heavy compute, async pattern не помогает — нужен sync compute на worker.
@@ -287,17 +287,17 @@ grep -r "mode=\"poke\"" dags/
 ```python
 # Before
 S3KeySensor(
-    task_id="wait",
-    bucket_key="...",
-    mode="poke",
+    task_id="wait"
+    bucket_key="..."
+    mode="poke"
     poke_interval=60,
     timeout=14400,
 )
 
 # After
 S3KeySensor(
-    task_id="wait",
-    bucket_key="...",
+    task_id="wait"
+    bucket_key="..."
     deferrable=True,  # ← добавлено
     poke_interval=60,
     timeout=14400,
@@ -345,7 +345,7 @@ triggerer:
 | Scaling ceiling | ~50 (per 50 workers) | ~500 (DB bound) | **5000+ per triggerer** |
 | Infra requirement | Workers | Workers + healthy DB | **Triggerer required** |
 | Code complexity | Trivial | Trivial | Moderate (custom trigger) |
-| Best fit | Quick (<60s) waits | Legacy without triggerer | Production at scale |
+| Best fit | Quick (&lt;60s) waits | Legacy without triggerer | Production at scale |
 | Failure mode | Worker OOM | DB lock contention | Triggerer crash → re-adopt |
 | Resource cost (1000 sensors) | $$$$ | $$ | **$** |
 

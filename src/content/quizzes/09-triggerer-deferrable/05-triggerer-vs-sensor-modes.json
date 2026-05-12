@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Production rules: (1) timeout > 1h — poke блокирует slot часами, reschedule переливает DB; (2) >100 concurrent — worker pool требует 100+ slots только для waits; (3) External APIs — async polling more efficient at scale; (4) Real-time events — async pattern natively fits. Не 'всегда' — для quick (<60s) waits в маленьких DAGs deferrable overhead больше чем benefit. Deferrable не experimental — AIP-40 stable с 2.5, production-ready 2.7+, default option в 2.10+.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m09-05-q3",

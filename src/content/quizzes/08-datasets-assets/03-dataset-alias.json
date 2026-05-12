@@ -51,7 +51,7 @@
       "question": "DatasetAlias и DatasetAll/DatasetAny решают одну и ту же проблему — conditional dataset triggering.",
       "correctAnswer": false,
       "explanation": "Они решают РАЗНЫЕ проблемы. DatasetAlias — runtime URI dynamism (URI не известен на parse time). DatasetAll/DatasetAny — boolean composition статически известных datasets (AND/OR logic). Они ortogonal и могут комбинироваться: schedule=DatasetAll(static_ds, alias_ds). Путаница — типичная для junior engineers; правильный ментальный модель: alias про 'unknown URI', All/Any про 'how many of known datasets trigger'.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

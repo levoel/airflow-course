@@ -132,7 +132,7 @@ Lock держится **до COMMIT/ROLLBACK**. PostgreSQL автоматиче�
     </FlowRow>
     <Arrow direction="down" label="30s prошло" />
     <FlowRow>
-      <DataBox label="Scheduler-2 — adopt_or_reset_orphaned_tasks" tooltip="Scheduler 2 в фазе housekeeping: UPDATE job SET state='failed' WHERE latest_heartbeat < now() - 30s; затем findит orphan TI и пытается adopt их (try_adopt_task_instances) или reset.">housekeeping</DataBox>
+      <DataBox label="Scheduler-2 — adopt_or_reset_orphaned_tasks" tooltip="Scheduler 2 в фазе housekeeping: UPDATE job SET state='failed' WHERE latest_heartbeat &lt; now() - 30s; затем findит orphan TI и пытается adopt их (try_adopt_task_instances) или reset.">housekeeping</DataBox>
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
@@ -145,7 +145,7 @@ Lock держится **до COMMIT/ROLLBACK**. PostgreSQL автоматиче�
 
 ## Тонкости: MariaDB не работает
 
-Этот механизм опирается на `SKIP LOCKED` и `NOWAIT` для row-level locks. PostgreSQL поддерживает оба с давних версий. **MariaDB < 10.6 не имеет `SKIP LOCKED` / `NOWAIT`** → multi-scheduler HA не работает.
+Этот механизм опирается на `SKIP LOCKED` и `NOWAIT` для row-level locks. PostgreSQL поддерживает оба с давних версий. **MariaDB &lt; 10.6 не имеет `SKIP LOCKED` / `NOWAIT`** → multi-scheduler HA не работает.
 
 Из официальных доков:
 
@@ -164,7 +164,7 @@ Lock держится **до COMMIT/ROLLBACK**. PostgreSQL автоматиче�
 - **Scheduling decisions (phase 2)** — могут параллелиться, но обычно не bottleneck.
 
 **Sweet spot:**
-- 1 scheduler — dev / small (< 50 DAGs)
+- 1 scheduler — dev / small (&lt; 50 DAGs)
 - 2 scheduler-а — small-medium (50-500 DAGs)
 - 3-4 scheduler-а — medium-large (500-5k DAGs)
 - 5+ scheduler-ов — diminishing returns, DB bottleneck

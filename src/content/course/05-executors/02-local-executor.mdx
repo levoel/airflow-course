@@ -199,7 +199,7 @@ LocalExecutor отлично работает в следующих случая
 | Сценарий | Почему ок |
 |---|---|
 | **Dev environment** | Минимум setup — одна машина + PostgreSQL |
-| **Small production** (<100 tasks/min) | Простая операция, нет overhead Celery/K8s |
+| **Small production** (&lt;100 tasks/min) | Простая операция, нет overhead Celery/K8s |
 | **One team, one machine** | Не нужно межтимовое isolation |
 | **Cost-sensitive deployment** | Нет idle workers, нет K8s cluster |
 | **Onprem без K8s** | Альтернативы — Celery (требует Redis), Local — самый дешёвый |
@@ -352,7 +352,7 @@ WHERE application_name LIKE 'airflow%' GROUP BY state;
 | Setup complexity | Минимум — только Airflow | Redis + workers + config |
 | Scaling | Vertical (RAM/CPU ноды) | Horizontal (add workers) |
 | Failure isolation | Subprocess crash изолирован | Worker crash может потерять task (acks_late) |
-| Best for | <100 tasks/min, single-node | High throughput, multi-node |
+| Best for | &lt;100 tasks/min, single-node | High throughput, multi-node |
 
 В следующем уроке — **CeleryExecutor deep dive** — препарируем broker, prefetch pitfall и worker autoscaling до уровня message flow.
 

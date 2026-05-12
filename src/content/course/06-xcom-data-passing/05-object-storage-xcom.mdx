@@ -128,8 +128,8 @@ Connection `aws_default` — обычная Airflow Connection с типом AWS
 |---|---|
 | `-1` (default) | **Всегда** в Object Storage, никогда в DB |
 | `0` | Любой XCom > 0 bytes — в Object Storage (всё) |
-| `1024` | XCom < 1KB — в DB, >= 1KB — в Object Storage |
-| `48 * 1024` | "Like default DB" — < 48KB в DB, иначе в S3 |
+| `1024` | XCom &lt; 1KB — в DB, >= 1KB — в Object Storage |
+| `48 * 1024` | "Like default DB" — &lt; 48KB в DB, иначе в S3 |
 
 Production recommendation: `xcom_objectstorage_threshold = 1024` или `4096` — small JSON status в DB (fast pull), large data в Object Storage.
 

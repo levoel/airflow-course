@@ -19,11 +19,11 @@ topics: ["Capstone", "Architecture", "CDC", "Kafka", "Iceberg", "ClickHouse"]
 
 E-commerce платформа продаёт orders в реальном времени. Бизнес-команды требуют:
 
-1. **Real-time dashboards** в ClickHouse — orders, revenue, conversion rates с latency < 5 минут
+1. **Real-time dashboards** в ClickHouse — orders, revenue, conversion rates с latency &lt; 5 минут
 2. **Historical analytics** в Iceberg lakehouse — полная история, query через Trino/Spark SQL
 3. **Data lineage** — compliance team должна trace flow PII data
 4. **High reliability** — ETL должен work через RDS failover, K8s node restart, partial failures
-5. **Cost-effective** — < $10k/month infra при 1M orders/day
+5. **Cost-effective** — &lt; $10k/month infra при 1M orders/day
 
 Constraints:
 - Source — Postgres OLTP (production orders DB, нельзя query directly heavy)

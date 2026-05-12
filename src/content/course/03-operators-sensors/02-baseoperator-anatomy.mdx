@@ -229,8 +229,8 @@ class S3DownloadOperator(BaseOperator):
 
 ```python
 S3DownloadOperator(
-    task_id="download_orders",
-    bucket_name="data-prod",
+    task_id="download_orders"
+    bucket_name="data-prod"
     key="orders/{{ ds }}.parquet",          # ← Jinja
     local_path="/tmp/{{ ts_nodash }}_orders.parquet",
 )

@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Это самый dangerous failure mode — двойная активность. Mitigation: (1) increase scheduler_health_check_threshold до 60-120s для tolerance. (2) PgBouncer pooling — heartbeat не страдает от connection storm. (3) Tune Python GC (gc.set_threshold, или PyPy). (4) **Idempotent tasks как absolute requirement** — потому что double execution неизбежен иногда. (5) Monitoring GC pauses на scheduler-host. K8s executor лучше Celery для critical workloads — pod failure detection быстрее (через watch API), меньше окно для double execution.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-05-q4",

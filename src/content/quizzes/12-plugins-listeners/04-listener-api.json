@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Production scale 500+ DAGs: callback требует discipline (default_args, code review). Listener — central, no opt-in needed. OpenLineage, Datadog integration, Astronomer lineage — все используют Listener. Combine: Listener для generic (alerting, lineage, metrics) + per-task callback для DAG-specific cleanup.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m12-04-q3",
@@ -51,7 +51,7 @@
       "question": "OpenLineage provider использует именно Listener API для emit lineage events — это иллюстрирует правильный production use case Listener API.",
       "correctAnswer": true,
       "explanation": "apache-airflow-providers-openlineage внутри implementation: @hookimpl on_task_instance_running → emit START event, on_task_instance_success → COMPLETE, on_task_instance_failed → FAIL. Декларативное, system-wide, без opt-in per DAG. Это killer use case Listener API. Также Datadog Airflow integration, Astronomer's lineage, custom enterprise monitoring — все паттерн.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

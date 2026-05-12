@@ -51,7 +51,7 @@
       "question": "Capstone designed для smooth 3.x migration — most changes будут automatic через ruff AIR301/AIR302 fixes.",
       "correctAnswer": true,
       "explanation": "Capstone uses modern patterns: TaskFlow @task decorators (auto AIR301 fix imports), Datasets (semantic identical к Assets в 3.x), standalone DAG Processor (3.x mandatory — already enabled), no SubDAGs, no Flask-AppBuilder direct integration, Multiple Executors (preserved в 3.x). Это intentional design — capstone serves как template для production DAGs ready для 3.x migration. Effort estimate: low (1-2 weeks для full migration codebase).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Datasets — strict superset для DATA-DRIVEN cross-DAG dependency (95% cases). TriggerDagRunOperator остаётся valid для: (1) Manual ad-hoc triggers — user в UI запускает downstream вручную; (2) Programmatic — task вычисляет какой DAG триггерить через сложную logic; (3) One-time — bootstrap триггер при init. Cross-Airflow требует REST API + Connection (TriggerDagRunOperator поддерживает remote через config). Tight coupling — anti-pattern, использовать Datasets.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m08-05-q2",

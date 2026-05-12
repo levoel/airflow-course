@@ -47,7 +47,7 @@ Scheduler, Webserver — read from serialized_dag
     </FlowRow>
     <Arrow direction="down" label="DAG.to_json() — structure only, no code" />
     <FlowRow>
-      <DataBox label="JSON data" tooltip="Сериализованная structure: task_ids, python_callable_name (НЕ код!), arguments, dependencies, schedule. Compress опционально с zstandard (2.7+). НЕ включает: function bodies, Variables, Connections.">{dag_id, tasks: [...], schedule}</DataBox>
+      <DataBox label="JSON data" tooltip="Сериализованная structure: task_ids, python_callable_name (НЕ код!), arguments, dependencies, schedule. Compress опционально с zstandard (2.7+). НЕ включает: function bodies, Variables, Connections.">{`{dag_id, tasks: [...], schedule}`}</DataBox>
       <DataBox label="dag_hash = MD5(data)" tooltip="MD5 от sorted JSON. Используется для invalidation check: если hash совпадает с existing, никаких DB writes — огромная экономия при больших installations.">hash for change detection</DataBox>
     </FlowRow>
     <Arrow direction="down" label="compare hash with existing row" />

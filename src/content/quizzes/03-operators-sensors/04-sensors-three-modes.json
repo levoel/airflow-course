@@ -54,7 +54,7 @@
       "question": "`soft_fail=True` на sensor превращает timeout в state='skipped' вместо 'failed'. Это безопасный default для production, потому что не ломает DagRun.",
       "correctAnswer": false,
       "explanation": "Это **опасный default**. soft_fail=True маскирует реальные проблемы: sensor timeout → state=skipped → downstream skipped (по default trigger_rule=all_success). DAG в UI показывает успешный run (skipped tasks не делают DagRun failed), но данных нет — например, ожидали S3 file, файл не пришёл за 24h, sensor 'softly' прошёл, downstream нагрузка не сработала, никто не заметил. Если sensor критичен для бизнес-логики (есть данные = пайплайн работает, нет данных = должна сработать алёрта) — `soft_fail=False`. Используйте soft_fail только когда: (1) sensor реально опциональный (best-effort feature flag); (2) у вас есть отдельный alerting на skipped критичных tasks; (3) downstream корректно обрабатывает skipped без silent data loss.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

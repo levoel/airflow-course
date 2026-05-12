@@ -47,7 +47,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Decision framework: **Mapping value**: heavy items (parallelism wins), isolated retry critical, per-item logs needed, manageable N. **Batch value**: fast items (overhead dominates), huge N (scheduler death prevention), all-or-nothing failure mode, cross-element logic. **Chunked compromise**: medium-large N (200-2000), retains parallelism с low scheduler load. Quantitative example: 500 items × 5s each: Mapping ~3min wall time но scheduler heavy. Batch sequential ~42min. Chunked (20 TI × 25 items) ~165s + low scheduler load = best balance.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m07-exam-q4",

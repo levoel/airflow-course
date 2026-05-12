@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Aliases (Class:alias syntax) — две instances одного class с разными configs. Use cases: (1) Два Celery с разными brokers — например `fast_celery` использует Redis (быстрый, при потере OK), `critical_celery` использует RabbitMQ (durable); (2) Два K8s с разными namespaces — analytics_k8s, ml_k8s, finance_k8s (team isolation, separate RBAC); (3) Migration — старый и новый Celery cluster одновременно, постепенный переход. В DAG: `@task(executor='fast_celery')`.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m05-06-q4",

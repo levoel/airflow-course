@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "OL extractor работает как часть Listener API hooks (on_task_instance_running). Listener exception → task lifecycle ломается → TI помечается failed несмотря на работающую логику task. Это catastrophic — observability tooling ломает production. Mandatory pattern: try/except вокруг всего body, log как warning, return None при exception. Потеря одного lineage event acceptable. Также: NO side effects в extract (HTTP calls, DB writes), keep it pure — иначе непредсказуемые failures.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-04-q4",

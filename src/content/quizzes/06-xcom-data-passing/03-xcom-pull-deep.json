@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "include_prior_dates=True — SELECT с ORDER BY timestamp DESC LIMIT 1, ищет most recent XCom без ограничения текущим run_id. Полезно для idempotent backfill с stable lookup values. Anti-pattern: использование как кэш — это violation Airflow idempotency, при backfill ваше 'current' использует stale data (вчера/неделю назад), surprises debugging. Для cross-DagRun data — используйте Datasets (Module 08) или external state store.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m06-03-q4",

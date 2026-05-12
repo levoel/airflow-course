@@ -83,7 +83,7 @@
       "question": "Курс ориентирован на Airflow 2.10/2.11 (LTS) и намеренно не покрывает SubDAG operator (deprecated, anti-pattern), Smart Sensors (удалены), Flower (заменяется OTel в 2.10+) и Airflow 1.x.",
       "correctAnswer": true,
       "explanation": "Курс 2.10/2.11-first. SubDAG operator и Smart Sensors — anti-patterns / removed. Flower deprecated в пользу OTel metrics. Airflow 1.x устарел. SequentialExecutor только для тестов. Финальный модуль (M18) даёт upgrade path к Airflow 3.x как next step.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

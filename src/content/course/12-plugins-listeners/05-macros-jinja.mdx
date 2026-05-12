@@ -89,7 +89,7 @@ Example:
 
 ```python
 PostgresOperator(
-    task_id="load",
+    task_id="load"
     sql="""
         INSERT INTO orders_partitioned
         SELECT * FROM staging_orders
@@ -134,7 +134,7 @@ PostgresOperator(
 
 ```python
 PostgresOperator(
-    task_id="copy",
+    task_id="copy"
     sql="""
         COPY orders FROM 's3://bucket/orders.csv'
         WITH CREDENTIALS 'aws_access_key_id={{ conn.aws_default.login }};aws_secret_access_key={{ conn.aws_default.password }}'
@@ -152,12 +152,12 @@ Note: lookup происходит при template render — Connection долж
 
 ```python
 BashOperator(
-    task_id="bash",
+    task_id="bash"
     bash_command="echo 'env={{ var.value.environment }}'",
 )
 
 PythonOperator(
-    task_id="py",
+    task_id="py"
     python_callable=process,
     op_kwargs={"config": "{{ var.json.app_config }}"},  # JSON parsed
 )
@@ -171,7 +171,7 @@ PythonOperator(
 
 ```python
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     params={
         "environment": "production",
@@ -180,7 +180,7 @@ PythonOperator(
 )
 def my_dag():
     PostgresOperator(
-        task_id="query",
+        task_id="query"
         sql="SELECT * FROM events WHERE env = '{{ params.environment }}' LIMIT {{ params.batch_size }}",
     )
 ```
@@ -207,7 +207,7 @@ def partition_path(ds_str: str, layer: str = "raw") -> str:
 
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     user_defined_macros={
         "fiscal_year": fiscal_year,
@@ -216,7 +216,7 @@ def partition_path(ds_str: str, layer: str = "raw") -> str:
 )
 def my_dag():
     PostgresOperator(
-        task_id="report",
+        task_id="report"
         sql="""
             INSERT INTO fiscal_reports (fy, day, total)
             SELECT
@@ -229,7 +229,7 @@ def my_dag():
     )
 
     BashOperator(
-        task_id="export",
+        task_id="export"
         bash_command="aws s3 cp output.parquet {{ partition_path(ds, layer='processed') }}",
     )
 ```
@@ -255,7 +255,7 @@ def quote_sql_list(items: list) -> str:
 
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     user_defined_filters={
         "hash_int": hash_to_int,
@@ -264,7 +264,7 @@ def quote_sql_list(items: list) -> str:
 )
 def my_dag():
     PostgresOperator(
-        task_id="route",
+        task_id="route"
         sql="""
             -- Hash partition: shard_id = hash(date) % 16
             INSERT INTO shard_{{ ds | hash_int(16) }}.events
@@ -273,11 +273,11 @@ def my_dag():
     )
 
     PostgresOperator(
-        task_id="filter_list",
+        task_id="filter_list"
         sql="""
             SELECT * FROM products
             WHERE category IN ({{ params.categories | quote_sql }})
-        """,
+        """
         params={"categories": ["electronics", "books", "tools"]},
     )
 ```
@@ -309,18 +309,18 @@ from airflow.providers.postgres.operators.postgres import PostgresOperator
 DAG_DIR = os.path.dirname(__file__)
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     template_searchpath=[os.path.join(DAG_DIR, "sql")],
 )
 def my_dag():
     PostgresOperator(
-        task_id="daily_report",
+        task_id="daily_report"
         sql="reports/daily_orders.sql",  # ← path relative to template_searchpath
     )
 
     PostgresOperator(
-        task_id="setup",
+        task_id="setup"
         sql="ddl/create_orders.sql",
     )
 ```
@@ -399,7 +399,7 @@ def my_dag():
 
 ```python
 PostgresOperator(
-    sql="...",
+    sql="..."
     postgres_conn_id="postgres_{{ var.value.environment }}",  # ← postgres_prod / postgres_staging
 )
 ```

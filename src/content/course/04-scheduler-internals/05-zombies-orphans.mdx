@@ -98,7 +98,7 @@ def _find_zombies(self, session):
         callback_request = TaskCallbackRequest(
             full_filepath=ti.dag_model.fileloc,
             simple_task_instance=SimpleTaskInstance.from_ti(ti),
-            msg=f"Zombie detected: heartbeat expired",
+            msg=f"Zombie detected: heartbeat expired"
             is_failure_callback=True,
         )
         callback_queue.send(callback_request)
@@ -263,7 +263,7 @@ KubernetesExecutor использует **pod labels** для tracking. Pod с l
     </FlowRow>
     <Arrow direction="down" label="30s threshold elapsed" />
     <FlowRow>
-      <DataBox label="Scheduler-2 housekeeping" tooltip="Scheduler-2 в фазе 4 видит: scheduler-1 job latest_heartbeat < now() - 30s. Mark job state=failed. Найдены 50 orphan TIs.">scheduler_health_check_threshold</DataBox>
+      <DataBox label="Scheduler-2 housekeeping" tooltip="Scheduler-2 в фазе 4 видит: scheduler-1 job latest_heartbeat &lt; now() - 30s. Mark job state=failed. Найдены 50 orphan TIs.">scheduler_health_check_threshold</DataBox>
     </FlowRow>
     <Arrow direction="down" label="executor.try_adopt_task_instances(50 TIs)" />
     <FlowRow>

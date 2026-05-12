@@ -137,7 +137,7 @@ def get_files() -> list[str]:
 # bucket и region — constants для всех 3 mapped TI
 # filename — dynamic, разный для каждой
 upload_to_s3.partial(
-    bucket="my-bucket",
+    bucket="my-bucket"
     region="us-east-1",
 ).expand(
     filename=get_files(),
@@ -199,7 +199,7 @@ names = get_users()
 emails = get_emails()
 
 send_notification.partial(
-    smtp_host="smtp.gmail.com",
+    smtp_host="smtp.gmail.com"
     from_addr="airflow@company.com",
 ).expand_kwargs(
     names.zip(emails).map(lambda pair: {"name": pair[0], "email": pair[1]})
@@ -311,7 +311,7 @@ def summarize(results: list[dict]):
 
 shards = get_shards()
 results = process_shard.partial(
-    target_table="warehouse.users",
+    target_table="warehouse.users"
     extra_options={"timeout": 300, "batch_size": 10000},
 ).expand_kwargs(shards)
 summarize(results)

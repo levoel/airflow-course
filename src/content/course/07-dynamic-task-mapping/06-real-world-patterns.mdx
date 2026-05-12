@@ -33,7 +33,7 @@ from datetime import datetime
 import pandas as pd
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["s3", "etl"],
@@ -77,7 +77,7 @@ def s3_daily_processor():
         # Download to /tmp
         local_path = hook.download_file(
             key=key,
-            bucket_name="raw-data",
+            bucket_name="raw-data"
             local_path="/tmp",
         )
 
@@ -90,9 +90,9 @@ def s3_daily_processor():
         staging_key = key.replace("raw/", "staging/").replace(".parquet", "_v2.parquet")
         df.to_parquet(f"/tmp/staging.parquet")
         hook.load_file(
-            filename="/tmp/staging.parquet",
+            filename="/tmp/staging.parquet"
             key=staging_key,
-            bucket_name="processed-data",
+            bucket_name="processed-data"
             replace=True,
         )
 
@@ -175,7 +175,7 @@ def parallel_shard_processor():
         # Load to warehouse
         target_hook = PostgresHook(postgres_conn_id="warehouse")
         target_hook.insert_rows(
-            table=f"{target_schema}.events",
+            table=f"{target_schema}.events"
             rows=df.itertuples(index=False),
             commit_every=batch_size,
         )
@@ -195,7 +195,7 @@ def parallel_shard_processor():
 
     shards = get_active_shards()
     results = process_shard.partial(
-        target_schema="warehouse_events",
+        target_schema="warehouse_events"
         batch_size=10000,
     ).expand_kwargs(shards)
     quality_check(results)
@@ -269,7 +269,7 @@ def multi_region_deploy():
 
     targets = get_deploy_targets()
     results = deploy_region.partial(
-        artifact_uri="s3://artifacts/v1.2.3",
+        artifact_uri="s3://artifacts/v1.2.3"
         version="1.2.3",
     ).expand_kwargs(targets)
     post_deploy_check(results)
@@ -366,7 +366,7 @@ Pattern features:
 
 ```python
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2025, 1, 1),   # год назад — много backfill
     catchup=True,
     max_active_runs=2,                  # ← limit одновременных runs
@@ -453,7 +453,7 @@ Without ObjectStorage backend — каждая 50MB XCom попадает в Pos
     </FlowRow>
     <Arrow direction="down" label="aggregation" />
     <FlowRow>
-      <DataBox label="summarize_run (trigger_rule=all_done)" tooltip="Runs даже если некоторые mapped TI failed. Pulls list[N] от mapped TI (агрегация). Validates failure rate < 10% — иначе DAG fails. Sends metrics в monitoring.">success/failure stats</DataBox>
+      <DataBox label="summarize_run (trigger_rule=all_done)" tooltip="Runs даже если некоторые mapped TI failed. Pulls list[N] от mapped TI (агрегация). Validates failure rate &lt; 10% — иначе DAG fails. Sends metrics в monitoring.">success/failure stats</DataBox>
     </FlowRow>
   </FlowColumn>
 </DiagramContainer>
@@ -484,9 +484,9 @@ Without ObjectStorage backend — каждая 50MB XCom попадает в Pos
 | Mapped TI per run | `task_instance` count | warning > 500 |
 | Avg mapped TI duration | `task_instance.duration` | varies |
 | Failure rate per mapped task | state=failed count | warning > 5% |
-| Scheduler tick duration | Prometheus / metrics | p99 < 30s |
+| Scheduler tick duration | Prometheus / metrics | p99 &lt; 30s |
 | max_active_tis_per_dag saturation | scheduled state count | warning > 80% |
-| XCom backend latency | S3 latency / DB query time | p99 < 500ms |
+| XCom backend latency | S3 latency / DB query time | p99 &lt; 500ms |
 | DAG queue backlog | scheduled TI count | warning > 1000 |
 
 Alerts:
@@ -513,5 +513,5 @@ Alerts:
 
 <KnowledgeCheck
   question="Какой полный production-grade pattern для DAG ежедневной обработки 200-500 S3 files? Опиши обязательные элементы: limits, error handling, monitoring."
-  answer="**Pattern**: `list_files() → process_file.expand() → summarize(trigger_rule=all_done)`. **Обязательные элементы**: (1) **list_files** — sorted deterministic order (для consistent map_index), validates non-empty (fail fast если пусто), returns list[dict] с метаданными (size, etc); (2) **process_file** с **max_active_tis_per_dag=8-16** (concurrency limit — не overwhelm workers, downstream service, DB connections), **retries=3** с **retry_delay=300s** (S3 transient errors), потенциально pool='s3_etl' для cross-DAG limit; (3) Internal try/except в process_file для distinguishing soft failures (return dict с status=&apos;failed&apos;) vs hard failures (raise → mapped TI failed); (4) **summarize с trigger_rule=&apos;all_done&apos;** — runs даже если некоторые mapped failed, aggregates results, validates failure rate < 10% threshold (иначе DAG fail), sends metrics в monitoring (success/soft_fail/hard_fail counts). (5) **DAG-level limits**: max_active_runs=2-3 (backfill safety), max_active_tasks=16 (global). (6) **XCom strategy**: если каждый file produces large XCom (>48KB) — Custom Backend или XComObjectStorageBackend с threshold. (7) **Monitoring**: alerts на mapped_ti_count > 500, failure_rate > 10%, scheduler p99 > 30s. (8) **Backfill consciousness**: catchup=False или explicit limits, иначе 365 days × 500 mapped = 180k TI после deploy. **Avoid**: cartesian с 3+ axes, mapping для fast items (<1s — overhead dominates, batch better), no limits configuration."
+  answer="**Pattern**: `list_files() → process_file.expand() → summarize(trigger_rule=all_done)`. **Обязательные элементы**: (1) **list_files** — sorted deterministic order (для consistent map_index), validates non-empty (fail fast если пусто), returns list[dict] с метаданными (size, etc); (2) **process_file** с **max_active_tis_per_dag=8-16** (concurrency limit — не overwhelm workers, downstream service, DB connections), **retries=3** с **retry_delay=300s** (S3 transient errors), потенциально pool='s3_etl' для cross-DAG limit; (3) Internal try/except в process_file для distinguishing soft failures (return dict с status=&apos;failed&apos;) vs hard failures (raise → mapped TI failed); (4) **summarize с trigger_rule=&apos;all_done&apos;** — runs даже если некоторые mapped failed, aggregates results, validates failure rate &lt; 10% threshold (иначе DAG fail), sends metrics в monitoring (success/soft_fail/hard_fail counts). (5) **DAG-level limits**: max_active_runs=2-3 (backfill safety), max_active_tasks=16 (global). (6) **XCom strategy**: если каждый file produces large XCom (>48KB) — Custom Backend или XComObjectStorageBackend с threshold. (7) **Monitoring**: alerts на mapped_ti_count > 500, failure_rate > 10%, scheduler p99 > 30s. (8) **Backfill consciousness**: catchup=False или explicit limits, иначе 365 days × 500 mapped = 180k TI после deploy. **Avoid**: cartesian с 3+ axes, mapping для fast items (&lt;1s — overhead dominates, batch better), no limits configuration."
 />

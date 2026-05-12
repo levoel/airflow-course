@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Готовый XComObjectStorageBackend — universal, low-maintenance, multi-cloud (S3/GCS/Azure через fsspec). Хорош для общих JSON-serializable payload. Custom требуется когда: (1) pandas/numpy native format — Parquet сжимает 5-10× vs JSON, сохраняет dtypes, fast read; (2) custom security (per-DAG KMS keys, signing); (3) specific storage layout (Hive partitioning, lifecycle by team); (4) custom optimizations (chunking, streaming, async). Большинство team-ов начинают с готового, переходят на custom когда есть specific need.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m06-05-q4",

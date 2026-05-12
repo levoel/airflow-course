@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Bcrypt дорогой по design (защита от brute-force). На 4 vCPU webserver ~30-50 RPS auth-heavy запросов исчерпывают CPU. UI пользователи получают slow response, потому что gunicorn workers заняты bcrypt. **Fixes:** (1) JWT через custom backend — signature verify ~1-5ms; (2) Session cookie для UI (auto-cached); (3) Отдельный API webserver pool; (4) Cache successful auth в Redis на 60s через custom backend. Снижать bcrypt cost <10 — небезопасно.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m13-03-q2",

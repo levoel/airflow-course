@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Setup/Teardown introduced в 2.7. В 2.7-2.10.4 был bug: при middle tasks failure + retry exhausted, иногда teardown пропускался — production cost leak. Полностью fixed в 2.10.5 (Feb 2025). Production recommendation: 2.10.5+ или 2.11.x LTS. Если на older version — use trigger_rule='all_done' с осторожностью.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m02-06-q4",

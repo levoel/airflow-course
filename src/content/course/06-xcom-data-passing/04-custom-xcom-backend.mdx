@@ -302,7 +302,7 @@ Cons:
 | `pandas.DataFrame` | Parquet (snappy/zstd) | Columnar, типы preserved, compression |
 | `numpy.ndarray` | npy binary | Native, fast |
 | `pyarrow.Table` | Arrow IPC stream | Zero-copy в downstream |
-| `dict/list` < 1MB | JSON | Простой, debug-friendly |
+| `dict/list` &lt; 1MB | JSON | Простой, debug-friendly |
 | `Polars DataFrame` | Parquet или IPC | Zero-copy Arrow |
 
 Это даёт **5-50× меньше bytes на S3** vs JSON, и быстрее sed/des.
@@ -457,10 +457,10 @@ def test_serialize_pandas_df(mock_hook):
     df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"]})
     result = S3XComBackend.serialize_value(
         df,
-        key="return_value",
-        task_id="producer",
-        dag_id="test_dag",
-        run_id="2026-05-12T00:00:00",
+        key="return_value"
+        task_id="producer"
+        dag_id="test_dag"
+        run_id="2026-05-12T00:00:00"
         map_index=None,
     )
     # Should produce JSON ref
@@ -483,5 +483,5 @@ def test_serialize_small_dict_stays_in_db():
 
 <KnowledgeCheck
   question="Опиши hybrid Custom XCom Backend: какие values хранятся в DB, какие в S3, почему именно так? Какие 3 main failure mode и mitigation?"
-  answer="Hybrid backend: малые JSON-serializable (< 32KB, например status dicts, small lists) хранятся прямо в DB (как default XCom) — это zero S3 overhead, fast, low cost. Большие или сложные типы (pandas DataFrame, numpy arrays, > 32KB JSON) идут в S3 как Parquet/native format, в DB остаётся только JSON reference {&apos;uri&apos;: &apos;s3://...&apos;, &apos;type&apos;: &apos;pandas&apos;} ~200 bytes. Почему: best of both worlds — DB не раздувается на больших payload, S3 cost минимальный (не каждый XCom туда), latency маленьких pulls остаётся fast (no S3 hit). **3 failure modes**: (1) **S3 outage**: все large XCom unreadable, DAGs stuck. Mitigation: retry с exponential backoff, fallback на error state с явным alerting. (2) **Plugin import failure**: backend класс должен быть в PYTHONPATH ВСЕХ компонентов (scheduler, webserver, workers, triggerer). Mitigation: embed в Python package, install через pip в Dockerfile, не полагаться на plugins/ folder. (3) **Path traversal/PII leak**: атакующий с DB write access может inject malicious S3 URI. Mitigation: validate URI prefix в deserialize_value, IAM scope-down (worker может писать только под xcom/<dag_id>/...), SSE-KMS encryption, S3 lifecycle policy для auto-delete."
+  answer="Hybrid backend: малые JSON-serializable (&lt; 32KB, например status dicts, small lists) хранятся прямо в DB (как default XCom) — это zero S3 overhead, fast, low cost. Большие или сложные типы (pandas DataFrame, numpy arrays, > 32KB JSON) идут в S3 как Parquet/native format, в DB остаётся только JSON reference {&apos;uri&apos;: &apos;s3://...&apos;, &apos;type&apos;: &apos;pandas&apos;} ~200 bytes. Почему: best of both worlds — DB не раздувается на больших payload, S3 cost минимальный (не каждый XCom туда), latency маленьких pulls остаётся fast (no S3 hit). **3 failure modes**: (1) **S3 outage**: все large XCom unreadable, DAGs stuck. Mitigation: retry с exponential backoff, fallback на error state с явным alerting. (2) **Plugin import failure**: backend класс должен быть в PYTHONPATH ВСЕХ компонентов (scheduler, webserver, workers, triggerer). Mitigation: embed в Python package, install через pip в Dockerfile, не полагаться на plugins/ folder. (3) **Path traversal/PII leak**: атакующий с DB write access может inject malicious S3 URI. Mitigation: validate URI prefix в deserialize_value, IAM scope-down (worker может писать только под xcom/<dag_id>/...), SSE-KMS encryption, S3 lifecycle policy для auto-delete."
 />

@@ -83,7 +83,7 @@ from airflow.decorators import dag, task
 from datetime import datetime
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["etl", "orders"],

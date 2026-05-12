@@ -19,7 +19,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Фаза 2 — самый частый bottleneck. Она O(N) по числу TIs в active DagRuns. Mapped tasks через expand() могут создать 10k+ TIs на DAG. Profile через metrics scheduler.scheduler_loop_duration. Фикс: (1) reduce max_dagruns_per_loop_to_schedule. (2) Decompose DAGs — много мелких > один большой. (3) Add scheduler replicas (но critical section serialized — diminishing returns). (4) DB tuning — indexes на task_instance(state, dag_id), VACUUM, PgBouncer. Фаза 3 bottleneck реже — она tuned max_tis_per_query=16, lock держится миллисекунды.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-exam-q2",
@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Critical section serialized by design — это distributed mutex через row lock на slot_pool. Только один scheduler в section, другие получают lock_not_available и пропускают tick. Phases 1, 2, 4 могут параллелиться (DAG parsing distributed по DagFileProcessors), но обычно не bottleneck. Sweet spot 2-4 для medium-large. После — diminishing returns, DB становится bottleneck. Production action: profile сначала Postgres (slow queries, lock waits, autovacuum), только потом add schedulers. Часто 3 scheduler-а + хорошо tuned Postgres (PgBouncer, indexes, VACUUM) outperform 10 scheduler-ов с дефолт DB.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m04-exam-q3",

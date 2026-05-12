@@ -100,7 +100,7 @@ def execute(self, context):
 </Callout>
 
 Когда `poke` всё-таки оправдан:
-- Очень короткое ожидание (< 5 минут) — overhead reschedule бессмысленен.
+- Очень короткое ожидание (&lt; 5 минут) — overhead reschedule бессмысленен.
 - Условие должно выполниться **немедленно** или провалиться (например, инвариант проверки в начале pipeline).
 
 ---
@@ -124,7 +124,7 @@ def execute(self, context):
 1. Создаёт запись в таблице `task_reschedule` с `reschedule_date = now() + poke_interval`.
 2. Переводит TI обратно в state `up_for_reschedule` (новое состояние из 14 возможных).
 3. Освобождает worker slot — другие tasks могут запускаться.
-4. Через `poke_interval` secunds scheduler видит, что `task_reschedule.reschedule_date <= now()`, переводит TI снова в `scheduled`.
+4. Через `poke_interval` secunds scheduler видит, что `task_reschedule.reschedule_date &lt;= now()`, переводит TI снова в `scheduled`.
 5. Worker подбирает task, вызывает execute(), poke() снова.
 
 <DiagramContainer title="Жизненный цикл sensor в mode=reschedule" color="amber">
@@ -159,7 +159,7 @@ def execute(self, context):
     <FlowRow>
       <DataBox
         label="t=62s: scheduler пробуждает TI"
-        tooltip="Scheduler видит up_for_reschedule с reschedule_date <= now(), переводит в scheduled. Цикл повторяется."
+        tooltip="Scheduler видит up_for_reschedule с reschedule_date &lt;= now(), переводит в scheduled. Цикл повторяется."
       >
         scheduled (next attempt)
       </DataBox>
@@ -199,10 +199,10 @@ def execute(self, context):
 from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
 
 wait_s3 = S3KeySensor(
-    task_id="wait_for_data",
-    bucket_name="data-prod",
-    bucket_key="orders/{{ ds }}.parquet",
-    aws_conn_id="aws_default",
+    task_id="wait_for_data"
+    bucket_name="data-prod"
+    bucket_key="orders/{{ ds }}.parquet"
+    aws_conn_id="aws_default"
     deferrable=True,  # ← magic
     poke_interval=60,
     timeout=24 * 3600,
@@ -281,8 +281,8 @@ Lifecycle deferrable sensor:
 
 | Wait duration | Условие | Mode |
 |---|---|---|
-| < 5 min, async-able | например, S3 key за минуту | `deferrable=True` |
-| < 5 min, no async | например, legacy XML-RPC | `poke` (приемлемая блокировка) |
+| &lt; 5 min, async-able | например, S3 key за минуту | `deferrable=True` |
+| &lt; 5 min, no async | например, legacy XML-RPC | `poke` (приемлемая блокировка) |
 | 5 min — 6 h, async-able | Snowflake query running, S3 за час | `deferrable=True` |
 | 5 min — 6 h, no async | legacy provider | `reschedule` |
 | 6 h — 7 d, async-able | ожидание внешнего batch job | `deferrable=True` обязательно |
@@ -323,10 +323,10 @@ class PostgresRowSensor(BaseSensorOperator):
 
 ```python
 wait_data = PostgresRowSensor(
-    task_id="wait_for_orders",
-    conn_id="warehouse",
-    sql="SELECT COUNT(*) FROM orders WHERE order_date = '{{ ds }}'",
-    mode="reschedule",
+    task_id="wait_for_orders"
+    conn_id="warehouse"
+    sql="SELECT COUNT(*) FROM orders WHERE order_date = '{{ ds }}'"
+    mode="reschedule"
     poke_interval=120,
     timeout=6 * 3600,
 )
@@ -429,17 +429,17 @@ triggerer:
 ```python
 # Было
 S3KeySensor(
-    task_id="wait",
-    bucket_name="b",
-    bucket_key="k",
+    task_id="wait"
+    bucket_name="b"
+    bucket_key="k"
     mode="poke",
 )
 
 # Стало
 S3KeySensor(
-    task_id="wait",
-    bucket_name="b",
-    bucket_key="k",
+    task_id="wait"
+    bucket_name="b"
+    bucket_key="k"
     deferrable=True,
 )
 ```
@@ -453,7 +453,7 @@ AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true
 Этот флаг (2.7+) превращает все sensors с поддержкой deferrable в deferrable, не трогая DAG код.
 
 **Шаг 4 — мониторинг.** Метрики triggerer'а:
-- `triggerer.running_triggers` — должно быть < max_capacity (1000 default).
+- `triggerer.running_triggers` — должно быть &lt; max_capacity (1000 default).
 - `triggerer.heartbeat` — alive проверка.
 - `task_instance.duration` для deferred TI — теперь время в `deferred`, не блокирует worker.
 
@@ -481,7 +481,7 @@ AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true
 
 5. **Trigger non-serializable parameters**. `Trigger.serialize()` должен возвращать только JSON-сериализуемые типы. Если передаёте сложный объект (например, готовый boto3 client) — упадёт при reload trigger'а после restart triggerer'а. Сохраняйте только primitives, инстанциируйте clients внутри `run()`.
 
-6. **task_reschedule retention**. Каждый reschedule создаёт строку. По умолчанию они хранятся вечно. Через год у вас могут быть миллионы записей и `SELECT ... FROM task_reschedule` становится медленным. Включите `db_cleanup` job или ручную чистку: `DELETE FROM task_reschedule WHERE reschedule_date < now() - interval '30 days'`.
+6. **task_reschedule retention**. Каждый reschedule создаёт строку. По умолчанию они хранятся вечно. Через год у вас могут быть миллионы записей и `SELECT ... FROM task_reschedule` становится медленным. Включите `db_cleanup` job или ручную чистку: `DELETE FROM task_reschedule WHERE reschedule_date &lt; now() - interval '30 days'`.
 
 7. **`exponential_backoff=True` + слишком маленький `max_wait`**. Backoff удваивает интервал на каждом неудачном poke: 60, 120, 240, 480... Без `max_wait` достигает 60 * 2^N — через 10 циклов это 17 часов между poke. Условие выполнится, sensor проспит. Всегда `max_wait` если используете exponential.
 

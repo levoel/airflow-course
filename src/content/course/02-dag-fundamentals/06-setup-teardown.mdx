@@ -30,7 +30,7 @@ def spark_etl_OLD_WAY():
 
     # Teardown — manually с trigger_rule
     terminate_cluster = EmrTerminateJobFlowOperator(
-        task_id="terminate_cluster",
+        task_id="terminate_cluster"
         trigger_rule="all_done",  # ← запустить даже если что-то fail
     )
 
@@ -309,7 +309,7 @@ from airflow.decorators import dag, task
 from datetime import datetime, timedelta
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args={"owner": "ml", "retries": 1, "retry_delay": timedelta(minutes=5)},
@@ -321,7 +321,7 @@ def ml_training_pipeline():
         """Provision GPU cluster on EMR."""
         client = boto3.client("emr")
         response = client.run_job_flow(
-            Name="ml-training",
+            Name="ml-training"
             Instances={
                 "InstanceGroups": [
                     {"Name": "Master", "InstanceType": "m5.xlarge", "InstanceCount": 1},
@@ -330,7 +330,7 @@ def ml_training_pipeline():
                 "Ec2KeyName": "...",
                 "TerminationProtected": False,
             },
-            JobFlowRole="...",
+            JobFlowRole="..."
             ServiceRole="...",
         )
         return response["JobFlowId"]

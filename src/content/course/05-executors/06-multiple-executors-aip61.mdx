@@ -227,7 +227,7 @@ def multi_executor_pipeline():
 
     # Explicit K8s with GPU
     @task(
-        executor="KubernetesExecutor",
+        executor="KubernetesExecutor"
         executor_config={
             "pod_override": V1Pod(spec=V1PodSpec(containers=[...]))
         },
@@ -246,7 +246,7 @@ multi_executor_pipeline()
 from airflow.operators.python import PythonOperator
 
 heavy_task = PythonOperator(
-    task_id="heavy",
+    task_id="heavy"
     python_callable=my_func,
     executor="KubernetesExecutor",
 )

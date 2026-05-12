@@ -115,9 +115,9 @@ Airflow эмитит **~80 metrics**. Не нужно ставить alert на 
 
 | Metric | Тип | Что значит | Alert |
 |---|---|---|---|
-| `scheduler.scheduler_loop_duration` | histogram | Длительность одного scheduler tick. Default <5s | p95 > 30s alert |
+| `scheduler.scheduler_loop_duration` | histogram | Длительность одного scheduler tick. Default &lt;5s | p95 > 30s alert |
 | `dag_processing.total_parse_time` | gauge | Время на parse всех DAG файлов | > 60s critical |
-| `dag_processing.processes` | gauge | Активных DagFileProcessor processes | < 2 (если parsing_processes > 2) |
+| `dag_processing.processes` | gauge | Активных DagFileProcessor processes | &lt; 2 (если parsing_processes > 2) |
 | `dag_processing.import_errors` | gauge | Файлы с parse errors | > 0 alert для production |
 
 ### Executor / TaskInstance throughput
@@ -317,11 +317,11 @@ ti.duration{dag_id="etl_orders", task_id="extract", run_id="manual__2026-05-12T1
 
 **Правильный подход** — Airflow сам ограничивает high-cardinality labels:
 
-- `dag_id` — OK (typically <10k уникальных)
+- `dag_id` — OK (typically &lt;10k уникальных)
 - `task_id` — OK с dag_id
-- `state` — OK (<10 значений)
+- `state` — OK (&lt;10 значений)
 - `run_id` — НЕ tag, только в traces (где cardinality OK)
-- `try_number` — OK (<5)
+- `try_number` — OK (&lt;5)
 
 Если ваш custom metric добавляет dag_run_id как label — это будет проблема. Используйте exemplars (для drill-down к конкретному run через trace) вместо labels.
 
@@ -415,7 +415,7 @@ filter:
 
 | Аспект | Push (OTel/StatsD) | Pull (Prometheus scrape) |
 |---|---|---|
-| Latency | <1s до Collector | scrape_interval (15-60s) |
+| Latency | &lt;1s до Collector | scrape_interval (15-60s) |
 | Reliability | OTel gRPC has retry | Scrape failures → gap |
 | Short-lived processes | OK (push before exit) | Не работает (worker умер до scrape) |
 | Network direction | Out-of-cluster Collector | Prometheus → workers (firewall) |
@@ -450,6 +450,6 @@ filter:
 ---
 
 <KnowledgeCheck
-  question="Production Airflow 2.10 с OTel включён, Grafana показывает scheduler.scheduler_loop_duration p95 = 8s (norm <5s) растущим. Какой workflow для диагностики через OTel stack?"
+  question="Production Airflow 2.10 с OTel включён, Grafana показывает scheduler.scheduler_loop_duration p95 = 8s (norm &lt;5s) растущим. Какой workflow для диагностики через OTel stack?"
   answer="**Step 1: drill-down в metrics dimensions.** В Prometheus query поделить по hostname (per scheduler в HA setup): `histogram_quantile(0.95, rate(airflow_scheduler_loop_duration_bucket[5m])) by (hostname)` — увидеть, один scheduler hot или все. **Step 2: correlated metrics.** Смотреть параллельно: `dag_processing.total_parse_time` (если parsing медленный — replace dag-processor), `dag_processing.import_errors` (новый bad DAG ломает parser), `executor.open_slots` (если =0 длительно — TI накапливаются, scheduler работает с большим backlog). **Step 3: traces.** OTel traces от scheduler spans (если включены) покажут конкретные slow stages внутри loop: `_create_dagruns`, `_schedule_dag_run`, `_critical_section_enqueue`. **Step 4: drill-down к DB.** Если slow stage — DB query, смотреть `pg_stat_statements` для slowest queries (обычно SELECT на task_instance, dag_run). **Step 5: action.** В зависимости от root cause: scale scheduler (если CPU bound), tune Postgres (VACUUM, indexes), reduce DAG count, переход на standalone dag-processor. Этот workflow невозможен без OTel — StatsD не даёт correlation, нет traces, нет per-hostname breakdown."
 />

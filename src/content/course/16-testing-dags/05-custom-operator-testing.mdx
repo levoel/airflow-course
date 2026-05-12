@@ -132,9 +132,9 @@ from plugins.operators.snowflake_merge_operator import SnowflakeMergeOperator
 
 def test_init_with_valid_params():
     op = SnowflakeMergeOperator(
-        task_id="merge_orders",
-        source_table="staging.orders",
-        target_table="prod.orders",
+        task_id="merge_orders"
+        source_table="staging.orders"
+        target_table="prod.orders"
         merge_keys=["id"],
     )
     assert op.source_table == "staging.orders"
@@ -144,9 +144,9 @@ def test_init_with_valid_params():
 
 def test_init_with_custom_conn_id():
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="s",
-        target_table="t",
+        task_id="x"
+        source_table="s"
+        target_table="t"
         merge_keys=["id"],
         snowflake_conn_id="snowflake_prod",
     )
@@ -156,9 +156,9 @@ def test_init_inherits_base_operator_args():
     """BaseOperator args (retries, retry_delay) должны pass через."""
     from datetime import timedelta
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="s",
-        target_table="t",
+        task_id="x"
+        source_table="s"
+        target_table="t"
         merge_keys=["id"],
         retries=5,
         retry_delay=timedelta(minutes=10),
@@ -176,9 +176,9 @@ def test_init_inherits_base_operator_args():
 ```python
 def test_build_merge_sql_single_key():
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="staging.orders",
-        target_table="prod.orders",
+        task_id="x"
+        source_table="staging.orders"
+        target_table="prod.orders"
         merge_keys=["id"],
         execution_date_str="2026-05-12",
     )
@@ -189,8 +189,8 @@ def test_build_merge_sql_single_key():
 
 def test_build_merge_sql_composite_key():
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="s", target_table="t",
+        task_id="x"
+        source_table="s", target_table="t"
         merge_keys=["customer_id", "order_id"],
         execution_date_str="2026-05-12",
     )
@@ -200,9 +200,9 @@ def test_build_merge_sql_composite_key():
 def test_build_merge_sql_special_chars_in_table():
     """Tables с dots / quotes."""
     op = SnowflakeMergeOperator(
-        task_id="x",
+        task_id="x"
         source_table='"DATABASE"."SCHEMA"."TABLE"',
-        target_table="prod.orders",
+        target_table="prod.orders"
         merge_keys=["id"],
     )
     sql = op._build_merge_sql()
@@ -226,8 +226,8 @@ def context():
     ti = MagicMock()
     ti.xcom_push = MagicMock()
     return Context(
-        ds="2026-05-12",
-        run_id="manual__2026-05-12T00:00:00+00:00",
+        ds="2026-05-12"
+        run_id="manual__2026-05-12T00:00:00+00:00"
         task_instance=ti,
         dag=MagicMock(),
     )
@@ -241,9 +241,9 @@ def test_execute_happy_path(mock_hook_cls, context):
 
     # Execute
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="staging.orders",
-        target_table="prod.orders",
+        task_id="x"
+        source_table="staging.orders"
+        target_table="prod.orders"
         merge_keys=["id"],
         execution_date_str="2026-05-12",
     )
@@ -331,17 +331,17 @@ def test_template_rendering():
     from datetime import datetime
 
     dag = DAG(
-        dag_id="test_dag",
+        dag_id="test_dag"
         start_date=datetime(2026, 1, 1),
         schedule="@daily",
     )
 
     op = SnowflakeMergeOperator(
-        task_id="x",
-        source_table="staging.orders_{{ ds_nodash }}",
-        target_table="prod.orders",
+        task_id="x"
+        source_table="staging.orders_{{ ds_nodash }}"
+        target_table="prod.orders"
         merge_keys=["id"],
-        execution_date_str="{{ ds }}",
+        execution_date_str="{{ ds }}"
         dag=dag,
     )
 
@@ -445,7 +445,7 @@ def test_execute_idempotent_via_merge(mock_hook_cls, context):
     mock_hook_cls.return_value = mock_hook
 
     op = SnowflakeMergeOperator(
-        task_id="x", source_table="s", target_table="t",
+        task_id="x", source_table="s", target_table="t"
         merge_keys=["id"], execution_date_str="2026-05-12",
     )
 

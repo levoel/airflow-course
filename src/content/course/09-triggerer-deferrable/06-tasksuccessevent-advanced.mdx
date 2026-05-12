@@ -46,7 +46,7 @@ class MyTrigger(BaseTrigger):
 ```
 
 При yield `TaskSuccessEvent` triggerer:
-- UPDATE task_instance SET state='success', xcom_value={...}
+- `UPDATE task_instance SET state='success', xcom_value={...}`
 - DELETE FROM trigger
 - **НЕ** возвращает TI в scheduled — execute_complete пропускается
 
@@ -208,7 +208,7 @@ Sizing:
 
 | Concurrent triggers | Replicas | Total CPU | Total memory |
 |---|---|---|---|
-| < 1,000 | 2 (HA) | 1 vCPU | 2GB |
+| &lt; 1,000 | 2 (HA) | 1 vCPU | 2GB |
 | 1,000-5,000 | 2 (HA) | 2 vCPU | 4GB |
 | 5,000-15,000 | 3 | 4 vCPU | 8GB |
 | 15,000+ | 4+ | 8+ vCPU | 16GB+ |
@@ -272,7 +272,7 @@ Production triggerer требует мониторинга:
 | `airflow.triggerer.events_emitted` | Events за период | Sustained 0 → suspicious |
 | `airflow.triggerer.events_failed` | Failed triggers | Any sustained > 0 |
 | `airflow.triggerer.heartbeat` | Last heartbeat (job table) | > 30s stale |
-| `airflow.triggerer.capacity` | Triggerer total capacity | < running_triggers + 20% |
+| `airflow.triggerer.capacity` | Triggerer total capacity | &lt; running_triggers + 20% |
 | triggerer container CPU | Process CPU | > 80% sustained |
 | triggerer container memory | Memory usage | > 80% of limit |
 

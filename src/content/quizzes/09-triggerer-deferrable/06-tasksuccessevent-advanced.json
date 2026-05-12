@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Fault isolation: single triggerer asyncio loop shared all triggers — один bad trigger (blocking call, infinite loop, memory leak) affects all teams. Queue separation: triggerer --queues='team-a' processes only team-A triggers (matched by queue attribute), team-B unaffected. Trade-offs: extra pods/CPU/memory cost, operational complexity (separate dashboards/alerts), risk uneven utilization, default queue routing carefulness. Alternative mitigations: rigorous code review, linting (ruff ASYNC101 for blocking calls), per-trigger latency monitoring with alerts. Queue separation — operational safety net.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m09-06-q4",

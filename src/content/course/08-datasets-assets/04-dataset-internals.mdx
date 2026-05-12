@@ -431,7 +431,7 @@ WHERE timestamp < now() - interval '30 days';
 
 4. **`session_factory` не разделяет transactions для multi-statement updates**. SchedulerJob делает all-or-nothing transactions. Если в середине fan-out write случается DB error — никаких partial queue rows не остаётся.
 
-5. **Sentry/alerting on growing queue**. Поставьте метрику: `count(dataset_dag_run_queue) WHERE created_at < now() - 1h`. Если non-zero — есть stuck subscriptions.
+5. **Sentry/alerting on growing queue**. Поставьте метрику: `count(dataset_dag_run_queue) WHERE created_at &lt; now() - 1h`. Если non-zero — есть stuck subscriptions.
 
 6. **DAG rename ломает subscriptions**. Если изменить `dag_id` — `dag_schedule_dataset_reference` записан под старым именем, scheduler перестанет триггерить. Решение: full DAG migration с миграционным скриптом или удалением старых references.
 

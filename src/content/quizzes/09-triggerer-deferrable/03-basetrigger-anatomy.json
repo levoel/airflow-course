@@ -51,7 +51,7 @@
       "question": "Все kwargs custom trigger __init__ должны быть JSON-serializable, потому что они сохраняются в trigger.kwargs (JSONB column) и desserializing на каждом triggerer restart.",
       "correctAnswer": true,
       "explanation": "Critical constraint: serialize() возвращает dict, который JSON.dumps записывается в trigger.kwargs JSONB column. Non-serializable объекты (raw datetime, Decimal, sets, custom classes) ломаются на dumps. Стандартный pattern: __init__ принимает both raw type and serialized form (Union[datetime, str]), детектирует через isinstance, нормализует к raw type. Serialize() возвращает serialized form (isoformat). Это round-trip safe. Объекты с complex graph (e.g. Airflow Connection) — serialize только conn_id, в run() resolve Connection через id.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

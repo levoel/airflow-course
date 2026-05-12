@@ -321,7 +321,7 @@ Optimization: если key уже есть — **никакого defer**. Sync 
 ```python
 self.defer(
     trigger=S3KeyTrigger(...),
-    method_name="execute_complete",
+    method_name="execute_complete"
     timeout=None,  # Optional: hard timeout на defer
 )
 ```
@@ -355,16 +355,16 @@ from datetime import datetime
 from airflow.decorators import dag
 
 @dag(
-    schedule="@daily",
+    schedule="@daily"
     start_date=datetime(2026, 1, 1),
     catchup=False,
 )
 def my_pipeline():
     wait_for_data = S3KeySensorAsync(
-        task_id="wait_for_data",
-        bucket_key="data/{{ ds }}/extract.parquet",
-        bucket_name="my-warehouse",
-        aws_conn_id="aws_default",
+        task_id="wait_for_data"
+        bucket_key="data/{{ ds }}/extract.parquet"
+        bucket_name="my-warehouse"
+        aws_conn_id="aws_default"
         poke_interval=60,
         timeout=14400,  # 4 hours max
     )
@@ -420,9 +420,9 @@ Critical advantage: 100 одновременных waits = 0 worker slots бло
 ```python
 # Просто добавить deferrable=True
 ExternalTaskSensor(
-    task_id="wait_upstream",
-    external_dag_id="upstream_dag",
-    external_task_id="final_task",
+    task_id="wait_upstream"
+    external_dag_id="upstream_dag"
+    external_task_id="final_task"
     deferrable=True,  # ← теперь не блокирует worker slot
 )
 ```

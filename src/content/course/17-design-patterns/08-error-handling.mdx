@@ -43,7 +43,7 @@ Airflow defaults: `retries=0`, `retry_delay=300s`. Production требует thi
     </FlowRow>
     <Arrow direction="down" label="parallel paths from FAILED state" />
     <FlowRow>
-      <DataBox label="on_failure_callback (per-DAG)" tooltip="Function defined per-DAG. Runs synchronously в scheduler — keep fast (<2s timeout!). Wraps requests.post в try/except — alerting failure не должна сама raise. List of callbacks supported в 2.6+. Code duplication issue: 50 DAGs × own callback. Solution → Listener API.">Slack/Email per DAG</DataBox>
+      <DataBox label="on_failure_callback (per-DAG)" tooltip="Function defined per-DAG. Runs synchronously в scheduler — keep fast (&lt;2s timeout!). Wraps requests.post в try/except — alerting failure не должна сама raise. List of callbacks supported в 2.6+. Code duplication issue: 50 DAGs × own callback. Solution → Listener API.">Slack/Email per DAG</DataBox>
       <DataBox label="Listener API (global plugin)" tooltip="@hookimpl on_task_instance_failed в plugin. Single source of truth для alerting — нет duplication. Read DAG tags для tiered severity: 'critical' → PagerDuty; 'production' → Slack; staging → log. Plus on_scheduler_zombie_detected (2.6+) для zombie events. Production standard.">global, tiered routing</DataBox>
       <DataBox label="DLQ insert" tooltip="Внутри task except: INSERT INTO event_dlq (event_id, error_message, dag_id, run_id, failed_at) ON CONFLICT DO UPDATE. Persists failed item для manual review. Daily DLQ-review DAG (9am) alerts если >0 unresolved >24h old. Allows replay/cleanup без losing failed events.">persist для replay</DataBox>
     </FlowRow>
@@ -142,7 +142,7 @@ def alert_on_failure(context):
 *Logs*: <{ti.log_url}|View logs>
 """
     requests.post(
-        "https://hooks.slack.com/services/...",
+        "https://hooks.slack.com/services/..."
         json={"text": msg, "channel": "#airflow-alerts"},
     )
 
@@ -380,7 +380,7 @@ def retry_alert_informational(context):
     ti = context["task_instance"]
     if ti.try_number > 3:
         # Многократные retries — possibly something wrong
-        send_slack(context, channel="#airflow-warnings",
+        send_slack(context, channel="#airflow-warnings"
                    message=f"Task retry #{ti.try_number} — investigate?")
 ```
 

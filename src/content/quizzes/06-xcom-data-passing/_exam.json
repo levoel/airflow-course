@@ -47,7 +47,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Threshold -1 (default) = все XCom в Object Storage. Каждый pull = S3 latency 50-200ms. Лучше hybrid: threshold 1024-4096, small status в DB (sub-ms), large в S3. Lifecycle policy КРИТИЧНА — XCom files не очищаются automatically (в отличие от DB rows через FK CASCADE). Без policy через 6 месяцев — миллионы orphan blobs, S3 cost storm. Compression zstd — 4-7× ratio для JSON, fast CPU; gzip медленнее, lz4 huge на ratio.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m06-exam-q4",

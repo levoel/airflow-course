@@ -54,8 +54,8 @@ orders_ds = Dataset("s3://warehouse/orders/processed/")
 
 # === PRODUCER DAG ===
 @dag(
-    dag_id="orders_etl_producer",
-    schedule="@hourly",
+    dag_id="orders_etl_producer"
+    schedule="@hourly"
     start_date=datetime(2026, 1, 1),
     catchup=False,
 )
@@ -72,7 +72,7 @@ orders_producer()
 
 # === CONSUMER DAG ===
 @dag(
-    dag_id="orders_aggregator",
+    dag_id="orders_aggregator"
     schedule=[orders_ds],
     start_date=datetime(2026, 1, 1),
     catchup=False,
@@ -282,7 +282,7 @@ Datasets — **strict superset функциональности** для бол�
 
    # Classic
    my_op = PythonOperator(
-       task_id="my_task",
+       task_id="my_task"
        python_callable=my_func,
        outlets=[orders_ds],  # outlets уровня operator, не task_id
    )

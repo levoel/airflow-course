@@ -51,7 +51,7 @@
       "question": "Один triggerer process на 4-core VM может handle 5000-10000 concurrent triggers, потому что workloads I/O-bound (sleeps + polls) — single-threaded asyncio scaling от GIL не страдает.",
       "correctAnswer": true,
       "explanation": "Asyncio cooperative scheduling: тысячи triggers держат await asyncio.sleep, event loop переключается между ними efficiently. Workload в основном I/O wait — CPU usage 5-30% даже на 5k concurrent. Single-threaded означает нет GIL contention, никаких lock-ов между triggers. Scaling ceiling — capacity event loop на одном core (~10-20k concurrent в idle wait state). Beyond — добавить replica triggerer (HA pattern). Это фундаментальное преимущество asyncio vs thread-based concurrency: thread per trigger дал бы OOM на 1000+ из-за overhead thread stacks.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

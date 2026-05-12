@@ -26,7 +26,7 @@ topics: ["Testing", "DagBag", "Import Errors", "Structural Tests", "pytest"]
     </FlowRow>
     <Arrow direction="down" label="если import ok — двигаемся глубже" />
     <FlowRow>
-      <DataBox label="Layer 2: Unit tests" tooltip="pytest tests/unit/ с mocked Hooks, Connections, Variables. Тестирует business logic одного operator/function в изоляции. SQLite backend, UNIT_TEST_MODE=True, no scheduler. <100ms per test. Ловит logic bugs, edge cases, retry behavior. Запускается на каждый PR commit.">~2-5 min, mocked deps</DataBox>
+      <DataBox label="Layer 2: Unit tests" tooltip="pytest tests/unit/ с mocked Hooks, Connections, Variables. Тестирует business logic одного operator/function в изоляции. SQLite backend, UNIT_TEST_MODE=True, no scheduler. &lt;100ms per test. Ловит logic bugs, edge cases, retry behavior. Запускается на каждый PR commit.">~2-5 min, mocked deps</DataBox>
     </FlowRow>
     <Arrow direction="down" label="logic корректна — проверяем integration" />
     <FlowRow>
@@ -97,7 +97,7 @@ from airflow.models import DagBag
 def dagbag():
     """DagBag fixture — parsed один раз per pytest session."""
     return DagBag(
-        dag_folder="dags/",
+        dag_folder="dags/"
         include_examples=False,
         read_dags_from_db=False,
     )
@@ -247,7 +247,7 @@ def test_dag_serializable(dagbag):
 
 ## Speed test — parse time не должен взрываться
 
-В production parse каждого DAG-файла должен занимать < 1 секунды. Если top-level code тяжёлый — это замедляет scheduler.
+В production parse каждого DAG-файла должен занимать &lt; 1 секунды. Если top-level code тяжёлый — это замедляет scheduler.
 
 ```python
 import time
@@ -430,5 +430,5 @@ def test_dag_factory_produces_valid_dags(dagbag):
 
 <KnowledgeCheck
   question="Команда хочет настроить минимально работающий DAG validity test suite. Какие 3 теста — must-have, который ловит 80% production-багов?"
-  answer="Три must-have теста: (1) **test_no_import_errors** — самый важный. Один SELECT через DagBag().import_errors ловит typo в imports, missing providers в requirements.txt, syntax errors, неправильный start_date типа datetime.now(). Ловит ~70% production-инцидентов 'DAG не появился'. (2) **test_dag_has_tags** + **test_dag_has_owner** — структурные тесты. Без owner alert не дойдёт до правильного человека; без tags impossible filter в UI и difficult organize по командам. Ловит organizational discipline issues. (3) **test_no_cycles** или **test_dag_serializable** — defensive проверка что DAG валиден на уровне graph theory + serialization. Ловит lambda в python_callable, циклические dependencies (хоть Airflow сам detect, лучше catch в CI). Setup: pytest fixture dagbag with scope='session' (один parse), CI через GitHub Actions с airflow constraints file. Total runtime ~10-30s. Это даёт самый высокий ROI среди всех тестов — занимает день setup, экономит часы incident response. Дополнительно: тест на parse time (<2s per file) и tag whitelist для governance — после трёх основных."
+  answer="Три must-have теста: (1) **test_no_import_errors** — самый важный. Один SELECT через DagBag().import_errors ловит typo в imports, missing providers в requirements.txt, syntax errors, неправильный start_date типа datetime.now(). Ловит ~70% production-инцидентов 'DAG не появился'. (2) **test_dag_has_tags** + **test_dag_has_owner** — структурные тесты. Без owner alert не дойдёт до правильного человека; без tags impossible filter в UI и difficult organize по командам. Ловит organizational discipline issues. (3) **test_no_cycles** или **test_dag_serializable** — defensive проверка что DAG валиден на уровне graph theory + serialization. Ловит lambda в python_callable, циклические dependencies (хоть Airflow сам detect, лучше catch в CI). Setup: pytest fixture dagbag with scope='session' (один parse), CI через GitHub Actions с airflow constraints file. Total runtime ~10-30s. Это даёт самый высокий ROI среди всех тестов — занимает день setup, экономит часы incident response. Дополнительно: тест на parse time (&lt;2s per file) и tag whitelist для governance — после трёх основных."
 />

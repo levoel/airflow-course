@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "AIP-61 (2.10+) Multiple Executors добавляет complexity: routing decisions, debugging dual paths, monitoring 2 systems, NetworkPolicy для обоих executors. Justified когда: clear light/heavy split (capstone), need custom resources per task (GPUs), gradual migration к K8s. NOT justified: tiny deployments (<50 DAGs), homogeneous workloads. Migration к 3.x: AIP-61 supported + Edge Executor (AIP-69) addition. Capstone setup future-proof.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m18-04-q3",

@@ -51,7 +51,7 @@
       "question": "Команды могут оставаться на 2.10/2.11 LTS до конца 2027 — security patches будут продолжаться, не обязательно мигрировать в 3.x сразу.",
       "correctAnswer": true,
       "explanation": "Apache Airflow 2.10 LTS получает security fixes минимум до Q1 2027, 2.11 ещё дольше. Это дает командам 1-2 года для запланированной миграции. Рекомендация: мигрировать в 3.x когда (1) нужны specific 3.x features (Asset Partitions, AssetWatchers, @asset decorator); (2) custom plugins адаптированы; (3) есть staging env для testing. Раньше времени мигрировать не имеет смысла, особенно если основной use case — batch ETL без heavy backfill complexity. Подготовка: compat imports, factory functions для datasets, explicit DatasetAll/Any вместо bare list.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

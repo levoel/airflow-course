@@ -175,7 +175,7 @@ def _create_dagruns_for_range(self):
     dagruns = []
     for date in dates:
         dr = self.dag.create_dagrun(
-            run_id=f"backfill__{date}",
+            run_id=f"backfill__{date}"
             run_type=DagRunType.BACKFILL,
             data_interval_start=date,
             data_interval_end=self.dag.timetable.data_interval_end(date),

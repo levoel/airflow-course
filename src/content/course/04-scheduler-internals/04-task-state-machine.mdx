@@ -118,7 +118,7 @@ class State:
     </FlowRow>
     <Arrow direction="down" label="task.execute() raised exception" />
     <FlowRow>
-      <DataBox label="up_for_retry" tooltip="LocalTaskJob поймал exception. retries=3, try_number=1 < retries. Установил state=up_for_retry, увеличил try_number=2, записал next_retry_datetime = now() + retry_delay (с exponential_backoff если задано). Записал TI log с tracebackом.">retries=3, current try=1</DataBox>
+      <DataBox label="up_for_retry" tooltip="LocalTaskJob поймал exception. retries=3, try_number=1 &lt; retries. Установил state=up_for_retry, увеличил try_number=2, записал next_retry_datetime = now() + retry_delay (с exponential_backoff если задано). Записал TI log с tracebackом.">retries=3, current try=1</DataBox>
     </FlowRow>
     <Arrow direction="down" label="retry_delay elapsed" />
     <FlowRow>

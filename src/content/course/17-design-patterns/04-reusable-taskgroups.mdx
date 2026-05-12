@@ -164,8 +164,8 @@ def spark_etl_with_ephemeral_cluster():
         import boto3
         emr = boto3.client("emr")
         response = emr.run_job_flow(
-            Name=f"airflow-spark-{{{{ ds }}}}",
-            ReleaseLabel="emr-6.15.0",
+            Name=f"airflow-spark-{{{{ ds }}}}"
+            ReleaseLabel="emr-6.15.0"
             Instances={
                 "InstanceGroups": [
                     {"Name": "master", "InstanceRole": "MASTER",
@@ -175,7 +175,7 @@ def spark_etl_with_ephemeral_cluster():
                 ],
                 "KeepJobFlowAliveWhenNoSteps": True,
             },
-            JobFlowRole="EMR_EC2_DefaultRole",
+            JobFlowRole="EMR_EC2_DefaultRole"
             ServiceRole="EMR_DefaultRole",
         )
         return response["JobFlowId"]

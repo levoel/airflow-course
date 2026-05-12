@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Head-based sampling (random N% от start) — простой, но дешёвый: иногда теряет important traces (slow request не sampled). Tail-based — Collector ждёт complete trace, decision based on **полная картина**. Policies в OTel Collector: status_code=ERROR (всегда semplear), latency > threshold (slow traces), probabilistic 1% baseline. Trade-off: Collector нужно больше memory (buffer всех active traces 30s). Production cost: ~$0.10-0.50/GB stored vs $5-50/GB при head sampling 100%.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-05-q3",

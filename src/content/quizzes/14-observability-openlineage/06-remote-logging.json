@@ -15,7 +15,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "DB log handler — legacy, существует но **никогда не использовать** в production. Unbounded growth (нет natural retention в DB), lock contention с scheduler critical section, backup explosion. На большом cluster (10k DAGs) DB пухнет до 800GB+, 70% занимает log. Migration off: switch config к S3/GCS/ES, restart, затем cleanup log table через batched DELETE + VACUUM. Это самая частая 'production rescue' для Airflow installations.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-06-q2",

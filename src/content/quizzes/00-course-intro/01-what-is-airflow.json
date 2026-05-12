@@ -57,7 +57,7 @@
       "question": "Прежде чем выбирать Airflow, разумно рассмотреть Prefect 3 (dynamic workflows + Prefect Cloud), Dagster (asset-first), Argo Workflows (K8s-native) и Temporal (durable execution для long-running бизнес-процессов).",
       "correctAnswer": true,
       "explanation": "В 2026 году Airflow — лидер, но не монополист. Каждая альтернатива имеет свою нишу: Prefect 3 — для динамических ML iteration workflows, Dagster — для analytics engineering и dbt-heavy stack-а, Argo — для CI/CD и K8s-native fan-out, Temporal — для durable business workflows. Зрелый архитектор всегда сравнивает варианты в контексте конкретной команды и нагрузки. Airflow выигрывает там, где нужна зрелая экосистема (3000+ providers), смешанная batch + data-aware нагрузка, on-premise deployment и Python-сообщество.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

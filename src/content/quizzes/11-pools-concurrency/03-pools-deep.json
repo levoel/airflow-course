@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Multi-scheduler HA: только один scheduler входит в critical section через FOR UPDATE NOWAIT lock на slot_pool. Внутри section: recompute pool usage + UPDATE TI state='queued' атомарно в одной транзакции. Невозможно over-allocate — это фундаментальная гарантия Airflow.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-03-q3",

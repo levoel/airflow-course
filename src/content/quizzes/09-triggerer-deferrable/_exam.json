@@ -47,7 +47,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Cost analysis (1000 concurrent, timeout=4h, K8s executor): poke — каждый sensor блокирует worker slot full timeout. 1000 slots, ~40 worker pods, $2-3/hour just for waiting. Non-viable. reschedule — slots free между poke, но 60k task_reschedule INSERTs/hour, нужен db.r6g.xlarge+, scheduler latency растёт. $0.50/hour + DB upgrade cost. Borderline. deferrable — 0 worker slots, 1 triggerer pod handles all (5k+ capacity), 1000 rows в trigger table once. $0.10/hour. 20-30x cheaper than poke, 5x cheaper than reschedule. Latency 5-15s post-event для deferrable — same ballpark как другие. Clear winner. Migration: добавить deferrable=True per sensor + deploy triggerer (2 replicas HA).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m09-exam-q4",
@@ -75,7 +75,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Fundamental architectural distinction. Scheduler critical section (модуль 04): SELECT FOR UPDATE NOWAIT на slot_pool. Mutex — один scheduler внутри section, другие skip tick. Это для serialized decisions (pool limit allocation). Triggerer adoption: SELECT FOR UPDATE SKIP LOCKED на trigger rows. Work-stealing — каждый triggerer берёт available batch, пропускает locked другими. Это для parallel work distribution (тысячи independent waits). Workload-driven design: scheduler решает CPU-heavy decisions с shared resources → mutex; triggerer держит I/O-bound waits → parallel. PostgreSQL SQL feature usage отражает intent.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m09-exam-q6",
@@ -83,7 +83,7 @@
       "question": "TaskSuccessEvent (2.10+) подходит для CPU-heavy operators, где нужно делать transformation после ожидания.",
       "correctAnswer": false,
       "explanation": "TaskSuccessEvent — оптимизация для simple sensors с trivial execute_complete (validate + return). Triggerer завершает task directly: UPDATE TI=success + xcom=payload, skip worker resume. CPU-heavy work НЕ подходит — triggerer single-threaded asyncio loop, blocking CPU work замораживает все другие triggers. Нужен worker для heavy compute (CPU-intensive transformations, parsing large JSON, ML inference). Также не подходит когда execute_complete нужен access к Airflow context (Variables, Connections — обычно доступны на worker, partially на triggerer). Правильный use case TaskSuccessEvent: sensor который validates event status и returns XCom value — vast majority sensor cases. Heavy compute — keep standard TriggerEvent + worker resume pattern.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

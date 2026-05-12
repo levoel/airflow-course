@@ -21,7 +21,7 @@ DAG validity tests ловят синтаксические и структурн
 
 | Уровень | Что тестирует | Время | Что нужно |
 |---|---|---|---|
-| **Unit** | Logic одного operator/function, mocked dependencies | < 100ms | pytest, mock |
+| **Unit** | Logic одного operator/function, mocked dependencies | &lt; 100ms | pytest, mock |
 | **Integration** | DagRun на real Airflow с DB, real connections | 1-30s | sqlite+airflow init |
 | **E2E** | Полный pipeline через staging Airflow | minutes | full Airflow infra |
 
@@ -83,7 +83,7 @@ def test_fetch_orders_returns_count():
 
     # @task возвращает Task object — берём .function для direct call
     result = fetch_orders.function(
-        execution_date="2026-05-12",
+        execution_date="2026-05-12"
         hook=mock_hook,
     )
 
@@ -151,8 +151,8 @@ def context():
     """Minimal Airflow context for testing."""
     from airflow.utils.context import Context
     return Context(
-        ds="2026-05-12",
-        run_id="manual__2026-05-12T00:00:00+00:00",
+        ds="2026-05-12"
+        run_id="manual__2026-05-12T00:00:00+00:00"
         task_instance=MagicMock(),
         dag=MagicMock(),
     )
@@ -165,8 +165,8 @@ def test_s3_files_count_returns_count(mock_s3hook_cls, context):
     mock_s3hook_cls.return_value = mock_hook_instance
 
     op = S3FilesCountOperator(
-        task_id="count_files",
-        bucket="my-bucket",
+        task_id="count_files"
+        bucket="my-bucket"
         prefix="data/2026-05-12/",
     )
 
@@ -177,7 +177,7 @@ def test_s3_files_count_returns_count(mock_s3hook_cls, context):
     assert result == 3
     mock_s3hook_cls.assert_called_once_with(aws_conn_id="aws_default")
     mock_hook_instance.list_keys.assert_called_once_with(
-        bucket_name="my-bucket",
+        bucket_name="my-bucket"
         prefix="data/2026-05-12/",
     )
 

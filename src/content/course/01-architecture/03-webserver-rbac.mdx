@@ -173,7 +173,7 @@ airflow users delete --username alice
 
 ```python
 @dag(
-    dag_id="finance_etl",
+    dag_id="finance_etl"
     access_control={
         "FinanceTeam": {"can_read", "can_edit"},
         "Op": {"can_read"},
@@ -268,7 +268,7 @@ auth_backends = airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.ses
 
 | Deploy size | Workers | Worker class | Memory |
 |---|---|---|---|
-| Small (<100 DAGs) | 2 | sync | 2 GB |
+| Small (&lt;100 DAGs) | 2 | sync | 2 GB |
 | Medium (100-1000) | 4 | sync | 4 GB |
 | Large (1000-5000) | 6-8 | sync | 8-16 GB |
 | XL (>5000) | 8-12 | gevent | 16-32 GB |

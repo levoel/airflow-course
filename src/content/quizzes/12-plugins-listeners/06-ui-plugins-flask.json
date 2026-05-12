@@ -51,7 +51,7 @@
       "question": "Production pattern: для богатых interactive dashboards (Cost dashboard, complex monitoring) часто лучше внешний tool (Grafana, Metabase) + ссылка из Airflow UI через appbuilder_menu_items, чем строить custom AppBuilder view.",
       "correctAnswer": true,
       "explanation": "Grafana/Metabase оптимизированы для viz: rich charts, drill-down, alerts, dashboarding. AppBuilder view в 2.x — server-rendered, ограниченный JS, no real-time. Pattern: данные emit в Prometheus/InfluxDB → Grafana визуализирует → Airflow UI содержит link на Grafana panel. Best of both: Airflow для orchestration, специализированный tool для observability. В 3.1+ React plugins дадут возможность full SPA внутри Airflow UI — пока external tool лучше.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

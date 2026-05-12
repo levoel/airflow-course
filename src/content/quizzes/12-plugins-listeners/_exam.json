@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Pluggy-based design (тот же что pytest). Decoupling Airflow от subscribers. Per-task callbacks — fragmented, require discipline. Listener — central, automatic coverage. Use cases: generic alerting (Slack, PagerDuty), audit logging, OpenLineage emission, Datadog/custom monitoring. Listener синхронный — обязателен fast (≤100ms).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m12-exam-q3",

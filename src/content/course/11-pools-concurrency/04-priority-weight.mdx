@@ -217,7 +217,7 @@ DAG B всегда выигрывает первым в pool — потому ч
 
 ```python
 @dag(
-    dag_id="sla_critical_etl",
+    dag_id="sla_critical_etl"
     default_args={"weight_rule": "absolute"},  # ← все tasks в DAG используют absolute
 )
 def sla_critical():

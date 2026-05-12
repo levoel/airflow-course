@@ -263,7 +263,7 @@ import requests
 # Bearer token (obtained from /api/v2/security/login)
 token = "..."
 r = requests.get(
-    "https://airflow.example.com/api/v2/dags",
+    "https://airflow.example.com/api/v2/dags"
     headers={"Authorization": f"Bearer {token}"}
 )
 dags = r.json()["dags"]

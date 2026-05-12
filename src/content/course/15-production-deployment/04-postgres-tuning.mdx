@@ -253,7 +253,7 @@ SELECT partman.run_maintenance();
 ```
 
 **Что даёт partitioning:**
-- Чистка старых данных через `DROP TABLE log_y2025m10` (мгновенно), вместо `DELETE FROM log WHERE dttm < ...` (часы)
+- Чистка старых данных через `DROP TABLE log_y2025m10` (мгновенно), вместо `DELETE FROM log WHERE dttm &lt; ...` (часы)
 - Queries с фильтром по `dttm` сканируют только relevant partitions (partition pruning)
 - VACUUM работает per-partition — параллельно, быстрее
 - Indexes тоже per-partition — меньше bloat
@@ -316,7 +316,7 @@ airflow dags list -o json | jq -r '.[].dag_id' | xargs -I{} airflow dags unpause
 
 ## Production gotchas
 
-**Не используйте `airflow db clean` как замену partitioning.** `db clean` делает `DELETE FROM` — медленно, не возвращает space в OS, фрагментирует индексы. Подходит для small installations (<10 GB DB). Для больших — pg_partman.
+**Не используйте `airflow db clean` как замену partitioning.** `db clean` делает `DELETE FROM` — медленно, не возвращает space в OS, фрагментирует индексы. Подходит для small installations (&lt;10 GB DB). Для больших — pg_partman.
 
 **Backup metadata DB через `pg_dump` ломается на больших installations.** При 100+ GB DB `pg_dump` может занимать часы. Используйте RDS snapshots (instant, point-in-time recovery) или физический pg_basebackup + WAL archiving.
 
@@ -372,5 +372,5 @@ FROM pg_statio_user_tables;
 
 <KnowledgeCheck
   question="Production Airflow 2.10 — 1500 DAGs, 80k TI/day, RDS db.r6i.2xlarge (8 vCPU, 64 GB). Webserver UI открывает страницу `DAGs list` за 15 секунд (раньше 1-2 секунды). pg_stat_statements показывает топ-1 query — `SELECT ... FROM dag_run WHERE state = 'success' ORDER BY end_date DESC` занимает 80% общего времени. Что делать?"
-  answer="Проблема — `dag_run` таблица распухла из-за отсутствия cleanup/partitioning. 80k TI/day = ~2-5k DagRun/day = ~1.5M DagRun/year — без партиционирования queries сканируют миллионы строк. Шаги fix: (1) НЕМЕДЛЕННО — проверить наличие `idx_dag_run_state_dag_id` и `idx_dag_run_run_type_state`; если нет — CREATE INDEX CONCURRENTLY (без блокировки). (2) Проверить bloat: `SELECT n_dead_tup FROM pg_stat_user_tables WHERE relname='dag_run';` — если высокий, запустить `VACUUM ANALYZE dag_run` сразу. (3) Установить агрессивный autovacuum: `ALTER TABLE dag_run SET (autovacuum_vacuum_scale_factor=0.05, autovacuum_analyze_scale_factor=0.02);`. (4) Запустить `airflow db clean --keep-last 30` для удаления старых DagRun. (5) Долгосрочно — pg_partman partition dag_run по `start_date` monthly + retention 90 дней. (6) Дополнительно: проверить, что shared_buffers=25% RAM (16 GB), work_mem=32 MB, random_page_cost=1.1 (gp3 SSD). (7) Проверить PgBouncer — нет ли pool exhaustion (cl_waiting > 0). После всех шагов UI должен открываться за <2s. Урок: monitoring должен ловить рост dag_run раньше — alert на pg_relation_size('dag_run') > 5 GB."
+  answer="Проблема — `dag_run` таблица распухла из-за отсутствия cleanup/partitioning. 80k TI/day = ~2-5k DagRun/day = ~1.5M DagRun/year — без партиционирования queries сканируют миллионы строк. Шаги fix: (1) НЕМЕДЛЕННО — проверить наличие `idx_dag_run_state_dag_id` и `idx_dag_run_run_type_state`; если нет — CREATE INDEX CONCURRENTLY (без блокировки). (2) Проверить bloat: `SELECT n_dead_tup FROM pg_stat_user_tables WHERE relname='dag_run';` — если высокий, запустить `VACUUM ANALYZE dag_run` сразу. (3) Установить агрессивный autovacuum: `ALTER TABLE dag_run SET (autovacuum_vacuum_scale_factor=0.05, autovacuum_analyze_scale_factor=0.02);`. (4) Запустить `airflow db clean --keep-last 30` для удаления старых DagRun. (5) Долгосрочно — pg_partman partition dag_run по `start_date` monthly + retention 90 дней. (6) Дополнительно: проверить, что shared_buffers=25% RAM (16 GB), work_mem=32 MB, random_page_cost=1.1 (gp3 SSD). (7) Проверить PgBouncer — нет ли pool exhaustion (cl_waiting > 0). После всех шагов UI должен открываться за &lt;2s. Урок: monitoring должен ловить рост dag_run раньше — alert на pg_relation_size('dag_run') > 5 GB."
 />

@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Природа workload решает. Celery: 1-3s startup, high throughput, shared environment — для тысяч коротких tasks. Kubernetes: 5-30s cold start, full isolation, per-task resources/GPU — для heavy ML/Spark/dependency-isolated tasks. Hybrid через CeleryKubernetesExecutor (queue routing) или Multiple Executors (AIP-61, 2.10+) — best of both. В 2.x — главный production pattern для serious deployments.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m01-exam-q5",

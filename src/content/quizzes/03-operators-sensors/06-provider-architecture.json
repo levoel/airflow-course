@@ -54,7 +54,7 @@
       "question": "Custom provider должен быть установлен только в scheduler — остальные компоненты (worker, webserver, triggerer) получат код через scheduler-distributed serialized DAGs.",
       "correctAnswer": false,
       "explanation": "Provider должен быть установлен **во все** компоненты Airflow: scheduler, worker(s), webserver, triggerer. Причины: (1) Scheduler парсит DAGs и валидирует imports — без provider DAG падает с import error; (2) Workers выполняют tasks — execute() operator требует код provider; (3) Webserver рендерит UI, может вызывать hooks для UI field behaviour и Connection форм; (4) Triggerer запускает Trigger.run() — async версия operator deferrable. Самый частый bug — провайдер установлен в scheduler+worker, но забыли в triggerer → deferrable tasks падают с ImportError. Serialized DAG не содержит код, только structure (task names, deps, parameters) — каждый компонент сам импортирует Python модули.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -124,7 +124,7 @@ Production-grade Airflow 2.10/2.11 — это не один контейнер, 
     <FlowRow>
       <DataBox
         label="Workers (Celery)"
-        tooltip="CeleryExecutor: pool из N worker-ов (статичный или autoscaled через KEDA). Каждый worker: airflow celery worker, concurrency=16. Слушает Redis queues. Подходит для small-medium tasks (<10 min)."
+        tooltip="CeleryExecutor: pool из N worker-ов (статичный или autoscaled через KEDA). Каждый worker: airflow celery worker, concurrency=16. Слушает Redis queues. Подходит для small-medium tasks (&lt;10 min)."
       >
         Celery workers (N replicas, KEDA autoscale)
       </DataBox>
@@ -203,7 +203,7 @@ AZ-1 (us-east-1a)              AZ-2 (us-east-1b)              AZ-3 (us-east-1c)
 | Компонент | Тип HA | Failover time | Поведение при отказе |
 |---|---|---|---|
 | Scheduler | Active-Active (row locks) | ~30s (heartbeat threshold) | Второй scheduler adopt-ит orphan TI, новые TI ставятся другим scheduler |
-| Webserver | Stateless N+1 | <5s (LB health check) | Запросы маршрутизируются на живые replicas |
+| Webserver | Stateless N+1 | &lt;5s (LB health check) | Запросы маршрутизируются на живые replicas |
 | Triggerer | Active-Active (assignment) | ~30s | Trigger reassigned через `airflow triggerer recheck-triggers` |
 | DAG Processor | Single-active или Active-Active (file claim) | До 5 min | DAGs не reparsed, но scheduler работает на старом serialized_dag |
 | PostgreSQL | Primary + standby (Multi-AZ) | 60-120s | Кратковременное окно — все компоненты retry connection |

@@ -51,7 +51,7 @@
       "question": "Создание read-only Postgres user (airflow_readonly) с SELECT на public schema — best practice для analytics queries и monitoring дашбордов в production.",
       "correctAnswer": true,
       "explanation": "В production никогда не подключайтесь к metadata DB из приложений как `airflow` user — у него full access ко всему metadata (Connections с decrypted passwords, Variables, audit logs). Создайте read-only user с минимальными правами для: analytics queries, monitoring dashboards (Grafana datasource), data quality checks. Это базовый security hygiene.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

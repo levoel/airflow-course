@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "c",
       "explanation": "Hybrid optimal. 1000 коротких tasks через Celery: total time 5s × 1000 / N workers — быстро, дёшево. 10 ML через K8s: per-task GPU resources, custom image. Routing через queue. Альтернатива в 2.10+: Multiple Executors (AIP-61) — executor=CeleryExecutor,KubernetesExecutor, @task(executor='K8sExecutor'). Чистый K8s для всего был бы дорог: 1000 × 15s overhead = 4 часа waste на startup. Чистый Celery не даст GPU.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m01-04-q3",

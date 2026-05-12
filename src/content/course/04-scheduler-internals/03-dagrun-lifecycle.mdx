@@ -204,7 +204,7 @@ for dag_id, entries in queue_entries:
     if all_required_datasets_ready(required_datasets, entries):
         create_dagrun(
             dag_id=dag_id,
-            run_id=f"dataset_triggered__{now()}",
+            run_id=f"dataset_triggered__{now()}"
             run_type=DagRunType.DATASET_TRIGGERED,
             state=DagRunState.QUEUED,
             # data_interval = (max(event.timestamp), now())

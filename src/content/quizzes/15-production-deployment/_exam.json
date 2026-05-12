@@ -47,7 +47,7 @@
       ],
       "correctAnswer": "c",
       "explanation": "Только Astronomer удовлетворяет all требованиям: multi-cloud (AWS+GCP+Azure regions), CeleryKubernetesExecutor mixed (light на Celery, heavy на K8s), fastest new version rollout (engineers Astronomer = major Airflow contributors). MWAA — only Celery, slow rollout. Composer — GCP only. Self-host работает но требует 3× SRE для трёх clouds — экономически невыгодно. Astro premium ($1500-3000/mo) compensated отсутствием SRE overhead.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m15-exam-q4",

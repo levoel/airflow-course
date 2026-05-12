@@ -61,7 +61,7 @@ def _create_dagruns_for_dags(self, session):
     for dag in dags:
         dag_run = create_dagrun(
             dag_id=dag.dag_id,
-            run_id=f"scheduled__{dag.next_dagrun}",
+            run_id=f"scheduled__{dag.next_dagrun}"
             logical_date=dag.next_dagrun,
             data_interval=dag.timetable.data_interval,
             state=DagRunState.QUEUED,

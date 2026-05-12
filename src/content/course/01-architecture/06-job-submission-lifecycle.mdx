@@ -331,7 +331,7 @@ except Exception:
 session.commit()
 ```
 
-`up_for_retry` → next tick scheduler видит, что `next_retry_datetime <= now()` и переводит обратно в `scheduled` (Шаг 3 повторяется).
+`up_for_retry` → next tick scheduler видит, что `next_retry_datetime &lt;= now()` и переводит обратно в `scheduled` (Шаг 3 повторяется).
 
 ---
 

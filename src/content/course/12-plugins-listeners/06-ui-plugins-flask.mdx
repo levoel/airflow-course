@@ -152,7 +152,7 @@ class MyOrgDashboardView(AppBuilderBaseView):
             paused_dags = session.query(DagModel).filter(DagModel.is_paused == True).count()
 
         return self.render_template(
-            "my_org_dashboard.html",
+            "my_org_dashboard.html"
             total_dags=total_dags,
             active_dags=active_dags,
             paused_dags=paused_dags,
@@ -258,7 +258,7 @@ my_org_provider/
 bp = Blueprint(
     "my_org",
     __name__,
-    template_folder="/path/to/templates",
+    template_folder="/path/to/templates"
     static_folder="/path/to/static",
 )
 ```

@@ -258,16 +258,16 @@ af = AirflowClient()  # читает AIRFLOW_URL, AIRFLOW_API_TOKEN из env
 
 # Trigger + wait
 run = af.trigger_dag(
-    "etl_orders",
-    run_id="ops-runbook-2026-05-12",
+    "etl_orders"
+    run_id="ops-runbook-2026-05-12"
     conf={"source": "manual"}
 )
 final = af.wait_for_dag_run("etl_orders", run["dag_run_id"])
 
 # Iterate all failed TI за день
 for ti in af.paginate(
-    "/api/v1/dags/~/dagRuns/~/taskInstances",
-    items_key="task_instances",
+    "/api/v1/dags/~/dagRuns/~/taskInstances"
+    items_key="task_instances"
     params={"state": "failed", "start_date_gte": "2026-05-12T00:00:00Z"}
 ):
     print(ti["dag_id"], ti["task_id"])
@@ -291,8 +291,8 @@ stuck = []
 since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
 
 for ti in af.paginate(
-    "/api/v1/dags/~/dagRuns/~/taskInstances",
-    items_key="task_instances",
+    "/api/v1/dags/~/dagRuns/~/taskInstances"
+    items_key="task_instances"
     params={
         "state": "queued",
         "queued_at_gte": since,  # с 2.10+
@@ -348,8 +348,8 @@ def expected_duration(dag_id: str, percentile: float = 0.95) -> float:
     """p95 длительности последних 30 успешных runs."""
     durations = []
     for run in af.paginate(
-        f"/api/v1/dags/{dag_id}/dagRuns",
-        items_key="dag_runs",
+        f"/api/v1/dags/{dag_id}/dagRuns"
+        items_key="dag_runs"
         params={"state": "success", "order_by": "-end_date"},
         page_size=30
     ):
@@ -366,8 +366,8 @@ def expected_duration(dag_id: str, percentile: float = 0.95) -> float:
 
 # Все running DAGs
 running = list(af.paginate(
-    "/api/v1/dags/~/dagRuns/~/taskInstances",
-    items_key="task_instances",
+    "/api/v1/dags/~/dagRuns/~/taskInstances"
+    items_key="task_instances"
     params={"state": "running"}
 ))
 
@@ -519,8 +519,8 @@ since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
 triggers = Counter()
 for ti in af.paginate(
-    "/api/v1/dags/~/dagRuns",
-    items_key="dag_runs",
+    "/api/v1/dags/~/dagRuns"
+    items_key="dag_runs"
     params={
         "start_date_gte": since,
         "run_type": "manual",

@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Pragmatic recommendation: focus 2.x foundations first. Reasons: (1) Production reality — 90% deployments на 2.x в 2026; (2) Job market — tests 2.x knowledge; (3) 3.x evolutionary — TaskFlow, Datasets, scheduler concepts identical; (4) 2.11 LTS supported до 2027; (5) Understanding 'why 3.x' requires 2.x context. Plan: 2.x deep (6 months) → 3.x transition (3 months). Migration knowledge valuable — companies hire engineers who understand BOTH versions.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m18-10-q4",
@@ -51,7 +51,7 @@
       "question": "Senior Airflow engineer должен know альтернативы (Dagster, Prefect, Temporal, Argo) даже если стоит на Airflow в работе.",
       "correctAnswer": true,
       "explanation": "Architectural breadth distinguishes senior engineers. Knowing alternatives: (1) Make better decisions ('Airflow vs Dagster для этого ML pipeline'); (2) Recognize Airflow's strengths/weaknesses honestly; (3) Avoid 'hammer-nail' fallacy (every problem looks like cron); (4) Interview discussions value perspective; (5) Migration projects sometimes require evaluation other tools. Senior signal — 'I know when NOT to use Airflow'. Doesn't mean expert in all — strong Airflow + working knowledge alternatives.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

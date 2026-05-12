@@ -157,7 +157,7 @@ from requests.auth import HTTPBasicAuth
 GITHUB_RUN_ID = "github-actions-12345"
 
 resp = requests.post(
-    "https://airflow.example.com/api/v1/dags/etl_orders/dagRuns",
+    "https://airflow.example.com/api/v1/dags/etl_orders/dagRuns"
     auth=HTTPBasicAuth("ci_user", "..."),
     json={
         "dag_run_id": f"ci__{GITHUB_RUN_ID}",
@@ -170,7 +170,7 @@ if resp.status_code == 409:
     # Уже триггерили этот build ранее — это OK, не падаем
     print("DAG run already exists, fetching state")
     run_resp = requests.get(
-        f"https://airflow.example.com/api/v1/dags/etl_orders/dagRuns/ci__{GITHUB_RUN_ID}",
+        f"https://airflow.example.com/api/v1/dags/etl_orders/dagRuns/ci__{GITHUB_RUN_ID}"
         auth=HTTPBasicAuth("ci_user", "...")
     )
 elif resp.status_code >= 400:

@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Quantitative: Full mapping 500 TI: overhead heavy (50s scheduling, 250s worker startup для Celery), 2500+ DB rows, scheduler load. Batch (1 task): wall time 42min sequential, не parallel. Chunked (20 TI × 25 items each): parallelism через 16 workers даёт ~165s wall time + 40 DB rows. Best balance. Sweet spot chunk 10-50 items — достаточно parallelism, manageable scheduler load. Если item heavy (>30s) — можно меньше chunk, ближе к full mapping. Если items fast (ms) — больше chunk или full batch.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m07-05-q4",
@@ -51,7 +51,7 @@
       "question": "Mapped TI delivers isolated retry per item — главное преимущество vs batch processing. Если 1 из 500 items fails, можно retry только эту 1 TI с её retry count, не re-do весь batch. Это decisive для long-running heterogeneous items с individual transient errors.",
       "correctAnswer": true,
       "explanation": "Да, isolated retry — главный value mapping. В batch (один task для 500 items): 1 failure → весь batch failed → retry перерабатывает все 500 (если код не idempotent с checkpoint logic). В mapping: process[247] fails → retry именно её (свой retries count, retry_delay), остальные 499 success. Critical для: items с heterogeneous failure modes (некоторые transient API errors, другие OK), expensive processing (don&apos;t redo all on 1 failure), DAG где partial success acceptable + tracking what failed. Если retry not important (all-or-nothing, items быстрые, code idempotent) — batch проще и быстрее.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

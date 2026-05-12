@@ -19,7 +19,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Capstone демонстрирует full breadth Airflow 2.x: 8+ killer features в одном production-grade pipeline. Datasets event-driven (модуль 08), Dynamic Mapping (модуль 07), Deferrable (модуль 09), Multiple Executors (модуль 05, AIP-61), Custom XCom (модуль 06), OpenLineage (модуль 14), HA (модуль 04, 15), Secrets (модуль 10). Each feature solves specific real problem. Capstone serves как production template — designed для smooth 3.x migration (модуль 18.07-09).",
-      "bloomLevel": "synthesizing"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m18-exam-q2",
@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "c",
       "explanation": "Recommended migration window 2026 deployments на 2.x — Q1-Q2 2027. Reasoning: (1) 2.11 LTS support до ~Q3 2027 — рrushes нет; (2) 3.x maturity — by Q2 2026 3.2 (Multi-Team AIP-67) released, ecosystem catching up, providers updated; (3) Sufficient time для preparation — 6-12 months ruff fixes, staging testing; (4) Avoid 2.11 EOL crunch. Earlier migration (Q4 2026) acceptable если нужны 3.x features (HITL, DAG Versioning, Multi-Team). Later (Q4 2027) — risk hitting 2.11 EOL without time для smooth migration.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m18-exam-q5",
@@ -83,7 +83,7 @@
       "question": "Этот курс covered Airflow 2.10/2.11 LTS deeply. Senior engineer должен также know альтернативы (Dagster, Prefect, Temporal, Argo) даже если работает только с Airflow.",
       "correctAnswer": true,
       "explanation": "Architectural breadth — sign senior engineer. Knowing альтернативы: (1) Better tool choice decisions ('Airflow vs Dagster для аналитики', 'Airflow vs Temporal для business processes'); (2) Honest assessment Airflow's strengths/weaknesses; (3) Avoid 'hammer-nail' fallacy; (4) Interview discussions value perspective; (5) Migration evaluations sometimes need alternatives. Senior signal — 'I know когда NOT use Airflow'. Доesn't mean expert all — strong Airflow + working knowledge alternatives. This course module 18.10 surveys Dagster (asset-first), Prefect 3 (dynamic), Temporal (durable execution), Argo (K8s-native).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

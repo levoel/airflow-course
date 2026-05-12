@@ -59,11 +59,11 @@ CREATE INDEX idx_xcom_task_id ON xcom (dag_id, task_id, run_id);
 <DiagramContainer title="XCom push/pull через metadata DB" color="blue">
   <FlowColumn>
     <FlowRow>
-      <DataBox label="Worker — execute(producer)" tooltip="Worker запускает TaskInstance producer. Внутри callable выполняется return value (или ti.xcom_push). _PythonDecoratedOperator после return автоматически делает push.">return {'key': 'value'}</DataBox>
+      <DataBox label="Worker — execute(producer)" tooltip="Worker запускает TaskInstance producer. Внутри callable выполняется return value (или ti.xcom_push). _PythonDecoratedOperator после return автоматически делает push.">{`return {'key': 'value'}`}</DataBox>
     </FlowRow>
     <Arrow direction="down" label="serialize_value()" />
     <FlowRow>
-      <DataBox label="XComEncoder.encode → JSON bytes" tooltip="Default — JSON через airflow.serialization.serde. Поддерживает dict/list/str/int/float/bool/datetime/Decimal. Custom типы — через encoder hooks или pickle (legacy).">b'{&quot;key&quot;: &quot;value&quot;}'</DataBox>
+      <DataBox label="XComEncoder.encode → JSON bytes" tooltip="Default — JSON через airflow.serialization.serde. Поддерживает dict/list/str/int/float/bool/datetime/Decimal. Custom типы — через encoder hooks или pickle (legacy).">{`b'{"key": "value"}'`}</DataBox>
     </FlowRow>
     <Arrow direction="down" label="INSERT INTO xcom" />
     <FlowRow>
@@ -75,12 +75,12 @@ CREATE INDEX idx_xcom_task_id ON xcom (dag_id, task_id, run_id);
     </FlowRow>
     <Arrow direction="down" label="deserialize_value()" />
     <FlowRow>
-      <DataBox label="XComDecoder.decode → Python obj" tooltip="JSON bytes → Python dict. Если custom XCom backend — вызывается user-defined deserialize_value. TaskFlow подставляет результат в function argument.">{'key': 'value'}</DataBox>
+      <DataBox label="XComDecoder.decode → Python obj" tooltip="JSON bytes → Python dict. Если custom XCom backend — вызывается user-defined deserialize_value. TaskFlow подставляет результат в function argument.">{`{'key': 'value'}`}</DataBox>
     </FlowRow>
   </FlowColumn>
 </DiagramContainer>
 
-Ключевое: **XCom transit через DB**. Это значит DB hit на каждый push и pull. Для маленьких payload (< 1KB) — незаметно. Для больших — DB становится bottleneck.
+Ключевое: **XCom transit через DB**. Это значит DB hit на каждый push и pull. Для маленьких payload (&lt; 1KB) — незаметно. Для больших — DB становится bottleneck.
 
 ---
 
@@ -162,7 +162,7 @@ Pickle поддерживает **любой** Python object, но имеет д
 Реальный production incident: команда положила pandas df 200MB через @task return. DAG parsing замедлился (scheduler читает recent XCom для UI hint), web UI стал отваливаться на 10s timeout, replication lag PG replica — 5min.
 
 **Rule of thumb**:
-- < 1KB — OK, нет вопросов
+- &lt; 1KB — OK, нет вопросов
 - 1KB-48KB — OK, не задумывайтесь
 - 48KB-1MB — работает, но review (может быть anti-pattern)
 - > 1MB — migrate на Custom Backend (S3/GCS), см. урок 04
@@ -199,7 +199,7 @@ def my_callable(**context):
     return "another_value"  # → key='return_value' если do_xcom_push=True
 
 PythonOperator(
-    task_id="multi_push",
+    task_id="multi_push"
     python_callable=my_callable,
     do_xcom_push=True,  # default
 )
@@ -211,8 +211,8 @@ PythonOperator(
 
 ```python
 PythonOperator(
-    task_id="no_xcom",
-    python_callable=lambda: "huge_string",
+    task_id="no_xcom"
+    python_callable=lambda: "huge_string"
     do_xcom_push=False,  # ← return НЕ попадёт в XCom
 )
 ```
@@ -242,7 +242,7 @@ PythonOperator(
 **Mitigation:**
 - `do_xcom_push=False` для tasks где return не используется
 - `[core] xcom_cleanup_on_dagrun_delete = True` (default) — XCom удаляется при cleanup DagRun
-- Cron job для `DELETE FROM xcom WHERE timestamp < now() - interval '90 days'`
+- Cron job для `DELETE FROM xcom WHERE timestamp &lt; now() - interval '90 days'`
 
 ### Gotcha 2: complex types через TaskFlow
 
@@ -316,5 +316,5 @@ ORDER BY 1;
 
 <KnowledgeCheck
   question="Почему рекомендуется лимит ~48KB на XCom value, если PostgreSQL bytea допускает до 1GB? Какие конкретные performance impacts?"
-  answer="48KB — soft practical threshold, состоит из нескольких факторов. (1) MySQL row size ~64KB — XCom 48KB + metadata fits в один row, иначе TOAST/overflow pages. (2) DB performance: SELECT с большими bytea медленно через ORM hydration; scheduler делает много XCom queries при scheduling, UI rendering. (3) Network roundtrip: worker hydrates весь row в Python memory при pull. (4) Логирование: Airflow логирует XCom value в task log (truncated до 1KB, но дорого считать size). (5) UI: webserver показывает XCom blob в task instance details — большие blobs ломают rendering. Реальные impact на 100MB: producer тратит seconds на JSON serialize, DB IO spike + replication lag, worker RAM spike при pull. Production rule: < 1KB OK, 1-48KB OK без думать, 48KB-1MB review pattern, > 1MB обязательно Custom Backend на S3/GCS."
+  answer="48KB — soft practical threshold, состоит из нескольких факторов. (1) MySQL row size ~64KB — XCom 48KB + metadata fits в один row, иначе TOAST/overflow pages. (2) DB performance: SELECT с большими bytea медленно через ORM hydration; scheduler делает много XCom queries при scheduling, UI rendering. (3) Network roundtrip: worker hydrates весь row в Python memory при pull. (4) Логирование: Airflow логирует XCom value в task log (truncated до 1KB, но дорого считать size). (5) UI: webserver показывает XCom blob в task instance details — большие blobs ломают rendering. Реальные impact на 100MB: producer тратит seconds на JSON serialize, DB IO spike + replication lag, worker RAM spike при pull. Production rule: &lt; 1KB OK, 1-48KB OK без думать, 48KB-1MB review pattern, > 1MB обязательно Custom Backend на S3/GCS."
 />

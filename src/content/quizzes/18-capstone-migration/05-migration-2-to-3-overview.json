@@ -51,7 +51,7 @@
       "question": "В 2026 большинство production deployments на 2.10/2.11 LTS и могут отложить migration к 3.x до 2027.",
       "correctAnswer": true,
       "explanation": "2.11 LTS support до ~Q3 2027 — security fixes и patches. 2026 — большинство production остаётся на 2.x. 3.0 released early 2025, 3.1 late 2025 (HITL), 3.2 mid 2026 (Multi-Team) — ecosystem всё ещё maturing. Reasonable migration window: Q1-Q2 2027 когда 3.2+ stable, ecosystem (providers, tools) caught up, но time before 2.11 EOL. Spешка не нужна — major version upgrade — strategic planning event, не reactive.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

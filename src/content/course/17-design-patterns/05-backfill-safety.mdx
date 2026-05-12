@@ -137,7 +137,7 @@ def fetch_orders():
 ```python
 @dag(
     start_date=datetime(2020, 1, 1),
-    schedule="@daily",
+    schedule="@daily"
     catchup=True,  # ❌ — DAG попытается прогнать с 2020!
 )
 ```
@@ -184,8 +184,8 @@ Run для 2026-05-12 обрабатывает данные **за 2026-05-12**,
     </FlowRow>
     <Arrow direction="down" />
     <FlowRow>
-      <DataBox label="data_interval_start = 2026-05-12 00:00" tooltip="Начало временного окна которое run представляет. Tasks должны фильтровать data WHERE created_at >= data_interval_start AND created_at < data_interval_end. Это foundation backfill-safety: при backfill за 2024-06-15 получит data_interval_start=2024-06-15, не сегодняшнюю date.">window start (UTC)</DataBox>
-      <DataBox label="data_interval_end = 2026-05-13 00:00" tooltip="Конец временного окна (exclusive). Для @daily — следующий день в начале. Это момент когда interval 'closes' и run actually starts wall-clock. Tasks используют < data_interval_end (не <=) для избежания overlap с next run.">window end (UTC)</DataBox>
+      <DataBox label="data_interval_start = 2026-05-12 00:00" tooltip="Начало временного окна которое run представляет. Tasks должны фильтровать data WHERE created_at >= data_interval_start AND created_at &lt; data_interval_end. Это foundation backfill-safety: при backfill за 2024-06-15 получит data_interval_start=2024-06-15, не сегодняшнюю date.">window start (UTC)</DataBox>
+      <DataBox label="data_interval_end = 2026-05-13 00:00" tooltip="Конец временного окна (exclusive). Для @daily — следующий день в начале. Это момент когда interval 'closes' и run actually starts wall-clock. Tasks используют &lt; data_interval_end (не &lt;=) для избежания overlap с next run.">window end (UTC)</DataBox>
     </FlowRow>
     <Arrow direction="down" label="window completes → wall-clock trigger" />
     <FlowRow>

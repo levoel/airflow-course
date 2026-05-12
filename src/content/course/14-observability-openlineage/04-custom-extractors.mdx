@@ -67,15 +67,15 @@ class MyExtractor(BaseExtractor):
         return OperatorLineage(
             inputs=[
                 Dataset(
-                    namespace=f"s3://{op.source_bucket}",
+                    namespace=f"s3://{op.source_bucket}"
                     name=op.source_path,
                     facets={}
                 )
             ],
             outputs=[
                 Dataset(
-                    namespace=f"snowflake://{op.snowflake_account}",
-                    name=f"{op.target_database}.{op.target_schema}.{op.target_table}",
+                    namespace=f"snowflake://{op.snowflake_account}"
+                    name=f"{op.target_database}.{op.target_schema}.{op.target_table}"
                     facets={}
                 )
             ],
@@ -189,7 +189,7 @@ class S3ToSnowflakeExtractor(BaseExtractor):
         )
 
         source_dataset = Dataset(
-            namespace=f"s3://{op.source_bucket}",
+            namespace=f"s3://{op.source_bucket}"
             name=op.source_prefix,
         )
 
@@ -477,23 +477,23 @@ column_lineage = ColumnLineageDatasetFacet(
         "total_revenue": ColumnLineageDatasetFacetFieldsAdditional(
             inputFields=[
                 ColumnLineageDatasetFacetFieldsAdditionalInputFields(
-                    namespace="postgres://warehouse",
-                    name="raw.orders",
+                    namespace="postgres://warehouse"
+                    name="raw.orders"
                     field="amount",
                 )
             ],
-            transformationType="AGGREGATION",
+            transformationType="AGGREGATION"
             transformationDescription="SUM(amount)",
         ),
         "order_date": ColumnLineageDatasetFacetFieldsAdditional(
             inputFields=[
                 ColumnLineageDatasetFacetFieldsAdditionalInputFields(
-                    namespace="postgres://warehouse",
-                    name="raw.orders",
+                    namespace="postgres://warehouse"
+                    name="raw.orders"
                     field="created_at",
                 )
             ],
-            transformationType="DIRECT",
+            transformationType="DIRECT"
             transformationDescription="DATE(created_at)",
         ),
     }
@@ -528,11 +528,11 @@ from my_company.operators.s3_to_snowflake import S3ToSnowflakeOperator
 
 def test_extract_basic():
     op = S3ToSnowflakeOperator(
-        task_id="test",
-        source_bucket="raw-data",
-        source_prefix="orders/2026-05-12/",
-        target_table="ANALYTICS.PUBLIC.ORDERS",
-        stage="MY_STAGE",
+        task_id="test"
+        source_bucket="raw-data"
+        source_prefix="orders/2026-05-12/"
+        target_table="ANALYTICS.PUBLIC.ORDERS"
+        stage="MY_STAGE"
         file_format="PARQUET",
     )
 

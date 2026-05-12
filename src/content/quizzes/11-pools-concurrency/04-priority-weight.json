@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Downstream bias — корень DAG с большим хвостом выигрывает. Это не bug, это design. Mitigation: либо explicit поднять priority_weight на DAG A корень (override default), либо переключить weight_rule='absolute' где own value — финальный ranking без учёта структуры графа.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m11-04-q3",

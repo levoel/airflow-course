@@ -257,7 +257,7 @@ Variable.get внутри task body исполняется только когд
 
 ```python
 PostgresOperator(
-    task_id="extract",
+    task_id="extract"
     sql="SELECT * FROM orders WHERE batch_size = {{ var.value.batch_size }}",
     # var.value.batch_size — Jinja template, resolved at runtime, не parse
 )
@@ -299,7 +299,7 @@ export AIRFLOW_VAR_API_ENDPOINT="https://api.example.com/v2"
 | Schema | free-form string/JSON | structured (host, port, login, password, extra) |
 | Encryption | optional (Fernet, key based) | password/extra encrypted, остальное plaintext |
 | Hook resolution | нет | Hook.get_connection() уже знает как использовать |
-| ENV convention | AIRFLOW_VAR_<KEY> | AIRFLOW_CONN_<KEY> |
+| ENV convention | AIRFLOW_VAR_&lt;KEY&gt; | AIRFLOW_CONN_&lt;KEY&gt; |
 | UI editing | да, simple form | да, structured form с conn_type-specific fields |
 | Use case | feature flags, configs, schedule overrides | DB / API / cloud credentials |
 

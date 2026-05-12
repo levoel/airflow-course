@@ -87,7 +87,7 @@ def process_all_files():
     </FlowRow>
     <Arrow direction="down" label="N > 100?" />
     <FlowRow>
-      <DataBox label="N маленькое (< 50)" tooltip="Под 50 mapped TI — OK, не bottleneck. Можно mapping.">Mapping OK</DataBox>
+      <DataBox label="N маленькое (&lt; 50)" tooltip="Под 50 mapped TI — OK, не bottleneck. Можно mapping.">Mapping OK</DataBox>
       <DataBox label="N большое (100-1000)" tooltip="Серая зона. Зависит от других вопросов.">Депends</DataBox>
       <DataBox label="N огромное (>1000)" tooltip="Strong сигнал что mapping anti-pattern. Сначала рассмотрите batch.">Probably batch</DataBox>
     </FlowRow>
@@ -285,7 +285,7 @@ Mitigation:
 
 | Scenario | Approach |
 |---|---|
-| Process 1000 fast items (<1s each) | Batch — overhead dominates |
+| Process 1000 fast items (&lt;1s each) | Batch — overhead dominates |
 | Process 100 slow items (>30s each) | Mapping — parallelism wins |
 | Need per-item retry | Mapping (only way) |
 | Process unbounded N (could be 10k) | Batch with internal parallelism (multiprocessing) |

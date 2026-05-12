@@ -51,7 +51,7 @@
       "question": "Consumer DAG paused (is_paused=TRUE). Producer продолжает эмитить dataset events. dataset_dag_run_queue для этого consumer-а будет расти неограниченно пока DAG paused.",
       "correctAnswer": false,
       "explanation": "Queue НЕ растёт неограниченно — PRIMARY KEY (dataset_id, target_dag_id) делает таблицу idempotent. Один row на пару, дальнейшие emissions ON CONFLICT DO NOTHING. Если consumer paused и producer эмитит 1000 раз — queue имеет максимум 1 row на каждый отдельный dataset, на который подписан consumer. После unpause scheduler создаст один DagRun (не 1000). Это design protection от 'volcano effect' при long-paused consumers. Implications для backfill: размышляйте о semantics — pending events не collapsуются в multiple historical runs.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

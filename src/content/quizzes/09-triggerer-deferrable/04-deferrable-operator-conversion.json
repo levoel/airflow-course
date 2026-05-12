@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Initial check — performance optimization. Overhead defer flow: serialize trigger (~10ms), INSERT trigger row, triggerer adopt (~1s), schedule (~5s), worker resume execute_complete (~5-15s) = total 20-30s. Если key уже exists (common case для production где data успело прийти), sync check 100ms + return эффективнее. Не обязательная часть API, но best practice. Также — для better UX: task завершается быстро при ready condition, не висит в state=deferred 30s 'для красоты'.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m09-04-q3",
@@ -51,7 +51,7 @@
       "question": "В 2.10+ большинство popular sensors (S3KeySensor, ExternalTaskSensor, HttpSensor) имеют параметр deferrable=True — не нужно писать custom triggers для standard cases.",
       "correctAnswer": true,
       "explanation": "В 2.7+ Airflow добавил deferrable=True parameter pattern для built-in operators. К 2.10 покрытие практически полное: standard provider (DateTimeSensor, TimeDeltaSensor, ExternalTaskSensor, BashOperator), AWS (S3KeySensor, EmrServerlessStartJobOperator, AthenaOperator), Google (BigQueryInsertJobOperator, GCSObjectExistenceSensor), HTTP (HttpSensor), Postgres (PostgresOperator long queries), K8s (KubernetesPodOperator). Custom triggers writes только для in-house APIs / unusual cases. Production migration часто = добавить deferrable=True per operator + deploy triggerer. AIRFLOW__OPERATORS__DEFAULT_DEFERRABLE=true глобально включает все — но careful про deploy order (triggerer первым).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Главная innovation OpenLineage в Airflow: lineage **emit-ится автоматически** для всех standard SQL operators. SQL parser (openlineage-sql Rust crate) reads SQL, extracts INSERT INTO targets, SELECT FROM sources, JOIN tables, GROUP BY columns. Result: full DAG → tables → columns lineage граф в backend (Marquez/DataHub). До OL это требовало either commercial tools (Atlan $100k+/year) или manual lineage code. С OL — free, automatic. Это standard с 2024+ — game-changer для compliance/governance.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-exam-q3",
@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Critical safety principle для всех observability code. OL extractor работает как Listener hook (on_task_instance_running). Exception → task lifecycle ломается → TI failed → user видит false failure. Pattern: ```def extract(self): try: return self._extract_impl() except Exception as e: self.log.warning(f'OL extract failed: {e}', exc_info=True) return None``` Это применимо также к OTel auto-instrumentation, custom plugins, listeners — observability never breaks production.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-exam-q5",
@@ -75,7 +75,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Workflow showcases full observability triad: metric (signal) → exemplar (correlation) → trace (drill-down) → log (detail). Each step uses different OTel pillar. Tempo TraceQL поверх traces enables `{service.name='airflow-scheduler' && duration > 20s}` queries. Span tree показывает где время потеряно (parse, scheduling, critical section, DB). Это **главная ценность** distributed tracing — без него на debug проблем уходят часы.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m14-exam-q6",
@@ -97,7 +97,7 @@
       "question": "OTel cardinality control — best practice: dag_id, task_id, state в metric labels (low cardinality, aggregatable), но run_id, request_id — только в traces (где cardinality fine). Иначе Prometheus storage blow-up через unbounded series growth.",
       "correctAnswer": true,
       "explanation": "Prometheus time series count = product unique label combinations. dag_id (~10k) × task_id (~20) × state (~5) = ~1M series — manageable. Добавить run_id (UUID, новый каждый run) → series растёт unbounded — millions/day. **Это разрушает Prometheus**: storage explosion, slow queries, OOM. **Right approach:** high-cardinality (run_id, request_id, user_id) → в **traces** через span attributes. Tempo handle high cardinality by design (indexed by trace_id, not labels). Metrics — для aggregated trends, traces — для individual request investigation. Это fundamental separation в OTel design.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

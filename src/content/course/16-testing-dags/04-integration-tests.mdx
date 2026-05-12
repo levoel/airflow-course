@@ -21,7 +21,7 @@ Unit tests проверяют логику в изоляции с mocked depende
 |---|---|
 | Mocked Hooks, Connections | Real Connection из DB (SQLite OK) |
 | Mocked context | Real Context от scheduler |
-| `< 100ms` | 1-30 секунд |
+| `&lt; 100ms` | 1-30 секунд |
 | No Airflow init | `airflow db init` обязательно |
 | Один operator/function | Один task или весь DAG |
 | Logic correctness | Real execution path |
@@ -208,8 +208,8 @@ def orders_db_connection(postgres_container):
     @provide_session
     def _create_conn(session=None):
         conn = Connection(
-            conn_id="orders_db",
-            conn_type="postgres",
+            conn_id="orders_db"
+            conn_type="postgres"
             host=postgres_container.get_container_host_ip(),
             port=int(postgres_container.get_exposed_port(5432)),
             login=postgres_container.username,
@@ -410,7 +410,7 @@ def test_data_interval():
 
 ## Production gotchas
 
-**Integration tests slow — выделить отдельный CI job.** Unit tests должны быть <5 min, integration — может быть до 30 min. Запускайте integration tests на push в main, не на каждый PR commit. Используйте `pytest -m integration` для разделения.
+**Integration tests slow — выделить отдельный CI job.** Unit tests должны быть &lt;5 min, integration — может быть до 30 min. Запускайте integration tests на push в main, не на каждый PR commit. Используйте `pytest -m integration` для разделения.
 
 **`airflow dags test` пишет в DB — нужен clean state.** Между test runs delete DagRuns:
 
@@ -439,5 +439,5 @@ def clean_dagruns():
 
 <KnowledgeCheck
   question="Команда хочет настроить полный CI testing pipeline для Airflow. Что должно быть в каком CI job — какой минимальный workflow, который ловит большинство production-багов до merge?"
-  answer="Минимальный 3-stage workflow: **Stage 1 (PR-блокирующий, < 30s)** — DAG validity tests (test_no_import_errors через DagBag, structural tests, tags/owner checks). Запускается на каждый PR commit. Покрывает 70% багов 'DAG не появился в UI'. **Stage 2 (PR-блокирующий, < 5 min)** — Unit tests с mocked Hooks (pytest tests/unit/ -v). Проверяет business logic operators. Использует SQLite + UNIT_TEST_MODE=True для скорости. **Stage 3 (post-merge, < 30 min)** — Integration tests через airflow dags test полностью на каждом merged DAG. Запускается на push в main, не блокирует PR (slow). Использует Postgres container (testcontainers) + moto/wiremock для external services. Опционально: **Stage 4 (nightly)** — E2E tests на staging Airflow с real connections к sample data, 5-10 critical DAGs полным циклом. Tooling: GitHub Actions с matrix для Python 3.11/3.12, services: postgres, env vars через secrets, constraints file для pinned dependencies. Key configs: AIRFLOW__CORE__LOAD_EXAMPLES=False, AIRFLOW__CORE__EXECUTOR=LocalExecutor (Postgres) или SequentialExecutor (SQLite). pytest markers: -m unit / -m integration / -m e2e. После настройки, среднее время от bug commit до catch — < 1 минута (stage 1) vs дни без tests. ROI огромный — один день setup экономит недели incident response."
+  answer="Минимальный 3-stage workflow: **Stage 1 (PR-блокирующий, &lt; 30s)** — DAG validity tests (test_no_import_errors через DagBag, structural tests, tags/owner checks). Запускается на каждый PR commit. Покрывает 70% багов 'DAG не появился в UI'. **Stage 2 (PR-блокирующий, &lt; 5 min)** — Unit tests с mocked Hooks (pytest tests/unit/ -v). Проверяет business logic operators. Использует SQLite + UNIT_TEST_MODE=True для скорости. **Stage 3 (post-merge, &lt; 30 min)** — Integration tests через airflow dags test полностью на каждом merged DAG. Запускается на push в main, не блокирует PR (slow). Использует Postgres container (testcontainers) + moto/wiremock для external services. Опционально: **Stage 4 (nightly)** — E2E tests на staging Airflow с real connections к sample data, 5-10 critical DAGs полным циклом. Tooling: GitHub Actions с matrix для Python 3.11/3.12, services: postgres, env vars через secrets, constraints file для pinned dependencies. Key configs: AIRFLOW__CORE__LOAD_EXAMPLES=False, AIRFLOW__CORE__EXECUTOR=LocalExecutor (Postgres) или SequentialExecutor (SQLite). pytest markers: -m unit / -m integration / -m e2e. После настройки, среднее время от bug commit до catch — &lt; 1 минута (stage 1) vs дни без tests. ROI огромный — один день setup экономит недели incident response."
 />

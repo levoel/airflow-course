@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "DatasetAlias (2.9+) — правильный инструмент для runtime-determined URIs. На parse time alias имеет name, concrete URIs регистрируются в runtime для каждого tenant. Consumer subscribed на alias видит ВСЕ tenant events (OR semantics). Static 50 datasets — anti-pattern (registry bloat, не масштабируется при адду нового клиента — нужен DAG redeploy). Один shared Dataset — теряется per-tenant lineage. TriggerDagRunOperator — tight coupling. В 3.x этот паттерн станет cleaner через Asset Partitions, но в 2.x — DatasetAlias.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m08-exam-q3",
@@ -61,7 +61,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Datasets — strict superset для data-driven cross-DAG. Преимущества: (1) Decoupled — producer не знает consumers (TriggerDagRunOperator anti-pattern: hardcoded имена downstream); (2) Zero worker overhead — queue в DB, не sensor polling; (3) Native lineage UI; (4) Scaling O(1) с indexed JOINs vs O(N*M) sensor polling. Latency 5-15s scheduler tick — медленнее TriggerDagRunOperator (sub-second), но decoupling+observability перевешивают. TriggerDagRunOperator остаётся valid только для manual/programmatic/one-time scenarios.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m08-exam-q5",
@@ -83,7 +83,7 @@
       "question": "Чтобы code был maximally compatible с 3.x rename Dataset→Asset, нужно немедленно мигрировать на Airflow 3.0 — нельзя оставаться на 2.x.",
       "correctAnswer": false,
       "explanation": "Airflow 2.10/2.11 LTS — стабильный target минимум до конца 2027. Не нужно мигрировать сразу. Smart prep для maximum compat: (1) compat imports — try Asset from airflow.sdk except: from airflow import Dataset as Asset — single file change при migration; (2) explicit DatasetAll/DatasetAny вместо bare list — clear semantics; (3) factory function для Dataset() construction — single point of change; (4) document URI conventions; (5) enable OpenLineage already — на 3.x lineage будет богаче. Эти шаги делают будущую migration delta минимальной. Migrate когда есть business need для 3.x features или EOL approaching, не раньше.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -106,7 +106,7 @@ def choose(**context) -> str | list[str]:
     return "task_c"                    # запустить только одну
 
 BranchPythonOperator(
-    task_id="branch",
+    task_id="branch"
     python_callable=choose,
 )
 ```
@@ -315,7 +315,7 @@ Sensor sometimes flaky — если он failed после всех retries, в�
 
 ```python
 sensor = MyDataSensor(
-    task_id="wait_data",
+    task_id="wait_data"
     retries=3,
     retry_delay=timedelta(minutes=10),
 )
@@ -323,12 +323,12 @@ sensor = MyDataSensor(
 main_load = MainLoadTask(task_id="main_load")
 
 fallback_load = FallbackLoadTask(
-    task_id="fallback_load",
+    task_id="fallback_load"
     trigger_rule="all_failed",  # ← запустится ТОЛЬКО если sensor failed после всех retries
 )
 
 end = EmptyOperator(
-    task_id="end",
+    task_id="end"
     trigger_rule="none_failed_min_one_success",  # хотя бы один success
 )
 

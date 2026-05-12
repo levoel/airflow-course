@@ -54,7 +54,7 @@
       "question": "KubernetesPodOperator и KubernetesExecutor — это одно и то же; нельзя использовать KubernetesPodOperator если ваш Airflow работает на LocalExecutor.",
       "correctAnswer": false,
       "explanation": "Это две **независимые** вещи. KubernetesExecutor определяет где **сами Airflow tasks** запускаются (каждая task → отдельный pod). KubernetesPodOperator — это operator, который запускает **custom pods** независимо от executor. Можно использовать KubernetesPodOperator на LocalExecutor — worker через kubernetes Python client отправит pod в кластер, дождётся completion, прочитает logs. Это полезный pattern для команд, которые не хотят переходить на KubernetesExecutor (со всеми его tuning сложностями), но хотят запускать тяжёлые tasks (Spark driver, GPU jobs) в отдельных K8s pods. Обратное тоже верно — на KubernetesExecutor можно НЕ использовать KubernetesPodOperator (все tasks и так в pods).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

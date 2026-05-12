@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "После Phase 4 (Unpause + DagRuns на green) DB содержит данные новой версии — все DagRuns/TI/XCom за hold period. Restore из snapshot откатит DB на момент перед migration — потеря всех этих данных. Helm --atomic откатывает только K8s manifests, не DB. Production правило: предпочитайте fix forward. Если bug — hotfix на green, не rollback. Поэтому критично тестирование на staging минимум 1 неделю.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m15-06-q3",

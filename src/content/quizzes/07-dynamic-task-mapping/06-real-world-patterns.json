@@ -51,7 +51,7 @@
       "question": "trigger_rule='all_done' на aggregator task — общий production pattern, позволяет aggregate даже когда некоторые mapped TI failed (получает None для failed) + validate failure rate в aggregator с threshold (fail DAG если > 10%) — это намного лучше чем default 'all_success' где 1 failed mapped блокирует всю processing.",
       "correctAnswer": true,
       "explanation": "Да, золотой production pattern. Default all_success — 1 failed из 500 mapped TI → aggregator skipped → весь DAG считается partially failed, нет visibility. all_done — aggregator runs независимо, получает list[N | None] (None для failed TI). Внутри aggregator: count successes/failures, validate threshold (fail DAG если > X% failed), send metrics, log details. Это даёт: (1) partial success visibility, (2) graceful degradation, (3) actionable failure analytics, (4) configurable tolerance (95% success acceptable?). Pattern усиливается метриками — push к Prometheus/Datadog для alerting на failure rate trends.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

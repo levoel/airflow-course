@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Different use cases. TaskGroup: логическая группировка related tasks для visualization — extract+transform+load в один group. Tasks static, известны при parse. Dynamic Task Mapping: N задач определяется runtime — например, обработать N файлов из S3 prefix (где N не известно при parse). Можно combine: TaskGroup с mapped tasks внутри. Don't confuse them — different problems.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m02-07-q4",

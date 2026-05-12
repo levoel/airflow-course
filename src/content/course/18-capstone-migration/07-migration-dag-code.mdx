@@ -227,7 +227,7 @@ def create_subdag(parent_dag_name, child_dag_name, start_date):
 @dag(...)
 def parent_dag():
     subdag_task = SubDagOperator(
-        task_id="my_subdag",
+        task_id="my_subdag"
         subdag=create_subdag("parent_dag", "my_subdag", start_date),
     )
 ```
@@ -410,7 +410,7 @@ from datetime import datetime, timedelta
 orders_dataset = Dataset("s3://lake/orders/")
 
 @dag(
-    schedule_interval="@daily",
+    schedule_interval="@daily"
     start_date=datetime(2024, 1, 1),
     catchup=False,
     sla_miss_callback=alert_sla,

@@ -83,7 +83,7 @@
       "question": "Команда готовящаяся к 3.x migration в течение года должна включить в CI ruff проверки AIR301 и AIR302 (initially warning, потом strict) плюс `airflow upgrade-check`.",
       "correctAnswer": true,
       "explanation": "Preparation к 3.x migration — это not one-time event, а continuous process. AIR301 detect deprecated imports, AIR302 — deprecated APIs. ruff с --fix может auto-rename simple cases. airflow upgrade-check показывает remaining issues. Strategy: (1) Initially baseline текущие warnings + warning в CI; (2) Постепенно убирать существующие; (3) Strict mode когда warnings = 0; (4) Staging на 2.11 LTS (включает все 3.x compat helpers) — production может оставаться 2.10 пока ready; (5) Quarterly upgrade drill на staging. К moment real migration codebase уже 3.x-compatible — week-long planned event вместо months-long pain.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

@@ -360,7 +360,7 @@ Most auto-fixable. Edge cases (`{{ execution_date }}` в string templates) — m
 from airflow.operators.subdag import SubDagOperator
 
 subdag_task = SubDagOperator(
-    task_id="my_subdag",
+    task_id="my_subdag"
     subdag=create_subdag(parent_dag_name, "my_subdag", start_date),
 )
 

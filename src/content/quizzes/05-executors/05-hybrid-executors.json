@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Hybrid (CeleryKubernetes/LocalKubernetes) — 2.3 release, фиксированная пара executors, routing скрытый в `queue` param (что путает — queue был для priority routing within executor). AIP-61 — 2.10 release, явный API `@task(executor='X')`, до N executors, aliases (`Class:alias` для двух instances одного executor). На 2.10+ — AIP-61 preferred. Hybrid ещё OK для legacy 2.3-2.9 или если ровно 2 executors. Migration hybrid → AIP-61 простой (backward compat через queue routing).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m05-05-q3",

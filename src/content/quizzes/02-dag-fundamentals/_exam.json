@@ -33,7 +33,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "TaskFlow преимущества: (1) Type hints для inputs/outputs — IDE autocomplete, type-checking; (2) Implicit dependency через function calls — `process(extract())` создаёт A→B; (3) Automatic XCom resolution — нет manual xcom_pull; (4) Чище код. Performance ~95% от Classic (тонкая обёртка). Mix Classic для provider operators, TaskFlow для Python logic — production pattern.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m02-exam-q3",
@@ -75,7 +75,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Custom Timetable (AIP-39, 2.2+) для сложных расписаний: business days с holidays, fiscal calendar, market hours, event-based (quarterly reports на конкретные даты). Cron покрывает 95% cases — не пишите Timetable когда cron подходит (он добавляет complexity: serialization, unit tests, может ломать parsing).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m02-exam-q6",

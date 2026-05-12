@@ -124,7 +124,7 @@ WHERE run_id = '...'
 
 ```python
 value = ti.xcom_pull(
-    task_ids="producer",
+    task_ids="producer"
     include_prior_dates=True,
 )
 ```

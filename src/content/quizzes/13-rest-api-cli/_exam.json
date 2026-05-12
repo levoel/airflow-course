@@ -47,7 +47,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Главная проблема basic_auth в production — bcrypt cost на каждый request (security feature, но bottleneck). JWT signature verify асимптотически быстрее: RS256 ~1-5ms, ED25519 ~0.5-2ms. Auth performance не bottleneck → webserver scales. JWT также не требует DB lookup (claims внутри token) — можно cache verification keys. Тradeoff: token rotation сложнее, нужна JWKS endpoint от OAuth provider.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m13-exam-q4",
@@ -75,7 +75,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Правильный pattern для dashboards: OTel metrics push → Prometheus scrape → Grafana visualization. Polling REST API для real-time dashboards — антипаттерн, потому что каждый GET — heavy SQL query + marshmallow JSON serialization. На N concurrent users это N RPS на webserver. Listener API (модуль 12) даёт push events для state changes — нулевой polling overhead. Long-term migration: переход на observability stack (модуль 14).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m13-exam-q6",

@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "Mix их когда нужно — это нормальный production pattern. @task для pure Python data flow. Classic operators для: (1) Provider-specific actions (нет смысла оборачивать PostgresOperator в @task); (2) Tasks без data flow — `a >> b >> c` чище чем function nesting; (3) Когда нужны explicit attributes (executor_config для K8s, trigger_rule, pool через kwargs).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m02-03-q4",

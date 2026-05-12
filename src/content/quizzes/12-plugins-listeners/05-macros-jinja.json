@@ -43,7 +43,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "template_searchpath=[absolute_path] — Airflow при render sql='file.sql' (ending в .sql или другом template_ext) ищет file. Production: SQL вне Python = syntax tools работают, code review лучше, reuse, testability. CI с sqlfluff lint на raw .sql files. Inline SQL OK для коротких queries, .sql files — для всё что >10 lines.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m12-05-q4",

@@ -29,7 +29,7 @@
       ],
       "correctAnswer": "b",
       "explanation": "K8s deployment имеет fixed overhead: control plane (EKS $0.10/h, GKE similar), minimum nodes для kube-system + airflow pods, image pulls (ECR — egress если cross-region), per-pod logs. Worker pods себе хорошо — Spot/Preemptible instances dramatically снижают cost. Для idle deployments K8s дороже Local (control plane всегда платится), но при high load — efficient (zero idle workers). Multiple Executors (Celery + K8s) — самая дорогая опция (~$480/mo medium load).",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     },
     {
       "id": "airflow-m05-07-q3",

@@ -51,7 +51,7 @@
       "question": "`delete_worker_pods=True` гарантирует, что pod будет удалён после завершения. Если PDB (PodDisruptionBudget) configured — это override-нёт PDB и pods будут удалены.",
       "correctAnswer": false,
       "explanation": "PDB может ПОМЕШАТЬ удалению pods. PDB защищает minimum N pods от disruption (для voluntary disruption — eviction). При попытке delete pod, который попадает под PDB constraint — K8s API отказывает. На airflow-worker pods PDB не нужен (они ephemeral, одиночные). Result — pods накапливаются, eventually node ENOSPC. Fix: убрать PDB на airflow-worker label, или явно exclude. Также проверять `kubectl get pods --field-selector status.phase=Succeeded -n airflow` периодически.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

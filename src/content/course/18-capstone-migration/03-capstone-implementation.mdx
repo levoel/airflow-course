@@ -200,7 +200,7 @@ ICEBERG_CATALOG = "glue"
     catchup=False,                     # ALWAYS False для новых DAGs — модуль 17.05
     max_active_runs=3,                 # Resource control
     tags=["capstone", "production", "critical", "etl"],
-    description="Real-time orders ETL: Kafka CDC → S3 → Spark → Iceberg → ClickHouse",
+    description="Real-time orders ETL: Kafka CDC → S3 → Spark → Iceberg → ClickHouse"
     default_args={
         "owner": "data-eng@example.com",
         "retries": 3,
@@ -279,13 +279,13 @@ def capstone_orders_etl():
         # Atomic write через tmp + rename (модуль 17.02)
         tmp_key = f"{s3_key}.tmp"
         s3.put_object(
-            Bucket="datalake",
+            Bucket="datalake"
             Key=tmp_key,
             Body=json.dumps(records).encode(),
             ContentType="application/json",
         )
         s3.copy_object(
-            Bucket="datalake",
+            Bucket="datalake"
             CopySource={"Bucket": "datalake", "Key": tmp_key},
             Key=s3_key,
         )
@@ -392,7 +392,7 @@ def capstone_orders_etl():
     # =========================================================================
 
     @task(
-        executor="CeleryExecutor",
+        executor="CeleryExecutor"
         inlets=[iceberg_gold_daily_revenue],
         outlets=[clickhouse_dashboards],
     )
@@ -411,8 +411,8 @@ def capstone_orders_etl():
 
         # Write to ClickHouse
         client = clickhouse_connect.get_client(
-            host="clickhouse.internal",
-            username="airflow",
+            host="clickhouse.internal"
+            username="airflow"
             password="{{ var.value.clickhouse_password }}",
         )
 
@@ -624,5 +624,5 @@ backend_kwargs = {"url":"https://vault.internal:8200","mount_point":"airflow","a
 
 <KnowledgeCheck
   question="Capstone использует custom XCom backend (S3) для large dataframes. Какие потенциальные проблемы у этого подхода и как их митигировать?"
-  answer="S3 custom XCom backend — powerful tool, но имеет tradeoffs. Problems: (1) **Performance latency** — S3 PUT/GET добавляет 50-200ms per XCom операция vs <5ms для DB XCom. На DAG с 50 tasks pushing/pulling XComs — 5-15s additional latency. Mitigation: SIZE_THRESHOLD=4KB (small XComs остаются в DB), reserve S3 только для >4KB; (2) **Cost** — S3 requests $0.0004 per 1000 PUT (Standard tier). 1M XCom operations/month = $0.40 — negligible. PLUS storage cost: pickled objects ~10x raw size, accumulates. Mitigation: S3 Lifecycle policy — DELETE objects after 14 days; (3) **Pickle deserialize security risk** — pickle может execute arbitrary code on deserialize. Если attacker может write к S3 bucket с XCom — RCE possible. Mitigation: bucket policies restrict write только к airflow service account, S3 versioning, audit log; (4) **Cleanup gaps** — DAG deletes TaskInstance, но S3 object orphan. Mitigation: lifecycle rule (delete >14 days), separate cleanup DAG ('orphan XCom remover'), or use S3 events trigger cleanup; (5) **No transactional consistency** — если task fails between S3 put и DB write, S3 object orphan. Mitigation: write order — first S3 put, then DB reference (если fail в DB, retry overwrites S3); (6) **Debugging harder** — XCom value в Airflow UI shows `{_s3_xcom: True, key: '...'}` reference, не actual value. Mitigation: custom UI plugin для preview, OR airflow CLI `airflow tasks states xcom --include-s3`; (7) **Cross-region S3** — workers в us-east, S3 bucket в us-west = 100+ ms latency. Mitigation: same-region S3 bucket. **Алternative**: JSON XCom backend (JSON file на disk) — для very small clusters. Snowflake/Bigquery XCom backend — для cloud DW shops. (8) **Migration path к 3.x** — XCom backend API сохраняется в 3.x, no changes нужны. Production trade-off: S3 XCom backend ускоряет DAG (no DB column limit), but adds operational complexity. Recommend только если actually need >48KB XComs (large pandas dataframes). Для most workloads — default DB XCom sufficient."
+  answer="S3 custom XCom backend — powerful tool, но имеет tradeoffs. Problems: (1) **Performance latency** — S3 PUT/GET добавляет 50-200ms per XCom операция vs &lt;5ms для DB XCom. На DAG с 50 tasks pushing/pulling XComs — 5-15s additional latency. Mitigation: SIZE_THRESHOLD=4KB (small XComs остаются в DB), reserve S3 только для >4KB; (2) **Cost** — S3 requests $0.0004 per 1000 PUT (Standard tier). 1M XCom operations/month = $0.40 — negligible. PLUS storage cost: pickled objects ~10x raw size, accumulates. Mitigation: S3 Lifecycle policy — DELETE objects after 14 days; (3) **Pickle deserialize security risk** — pickle может execute arbitrary code on deserialize. Если attacker может write к S3 bucket с XCom — RCE possible. Mitigation: bucket policies restrict write только к airflow service account, S3 versioning, audit log; (4) **Cleanup gaps** — DAG deletes TaskInstance, но S3 object orphan. Mitigation: lifecycle rule (delete >14 days), separate cleanup DAG ('orphan XCom remover'), or use S3 events trigger cleanup; (5) **No transactional consistency** — если task fails between S3 put и DB write, S3 object orphan. Mitigation: write order — first S3 put, then DB reference (если fail в DB, retry overwrites S3); (6) **Debugging harder** — XCom value в Airflow UI shows `{_s3_xcom: True, key: '...'}` reference, не actual value. Mitigation: custom UI plugin для preview, OR airflow CLI `airflow tasks states xcom --include-s3`; (7) **Cross-region S3** — workers в us-east, S3 bucket в us-west = 100+ ms latency. Mitigation: same-region S3 bucket. **Алternative**: JSON XCom backend (JSON file на disk) — для very small clusters. Snowflake/Bigquery XCom backend — для cloud DW shops. (8) **Migration path к 3.x** — XCom backend API сохраняется в 3.x, no changes нужны. Production trade-off: S3 XCom backend ускоряет DAG (no DB column limit), but adds operational complexity. Recommend только если actually need >48KB XComs (large pandas dataframes). Для most workloads — default DB XCom sufficient."
 />

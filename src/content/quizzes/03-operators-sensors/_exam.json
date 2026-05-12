@@ -83,7 +83,7 @@
       "question": "Custom operator с template_fields=('s3_key',) и инстансом класса-наследника, который добавил новый атрибут `region` в __init__, автоматически унаследует template_fields и Jinja-рендеринг будет работать для `region` без явного объявления.",
       "correctAnswer": false,
       "explanation": "template_fields — tuple на уровне **класса**, не на инстансе. Subclass должен явно объявить полный набор: `template_fields = (*Parent.template_fields, 'region')`. Если этого не сделать, добавленный в __init__ атрибут region НЕ пройдёт Jinja — в нём останется raw '{{ ds }}' строкой. В UI Rendered Templates tab атрибут не появится. Симптом — operator parses, но шаблонные выражения не работают в новых полях subclass. Этот pitfall часто встречается при наследовании от provider operators.",
-      "bloomLevel": "evaluative"
+      "bloomLevel": "analytical"
     }
   ]
 }

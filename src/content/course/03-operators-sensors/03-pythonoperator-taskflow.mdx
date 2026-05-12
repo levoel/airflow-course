@@ -70,7 +70,7 @@ def my_func(positional, *, named, ds=None, ti=None):
     print(positional, named, ds, ti)
 
 PythonOperator(
-    task_id="t",
+    task_id="t"
     python_callable=my_func,
     op_args=["arg1"],
     op_kwargs={"named": "value", "rendered": "{{ ds }}"},
@@ -191,7 +191,7 @@ from datetime import datetime
 def venv_demo():
     @task.virtualenv(
         requirements=["pandas==1.5.3", "scikit-learn==1.2.0"],
-        python_version="3.10",
+        python_version="3.10"
         system_site_packages=False,
         use_dill=False,
     )
@@ -235,7 +235,7 @@ PythonVirtualenvOperator создаёт venv **на каждый запуск ta
 
 ```python
 @task.external_python(
-    python="/opt/airflow/venvs/ml-py310/bin/python",
+    python="/opt/airflow/venvs/ml-py310/bin/python"
     expect_airflow=False,
 )
 def train_model():
@@ -269,10 +269,10 @@ USER airflow
 from airflow.providers.cncf.kubernetes.operators.pod import KubernetesPodOperator
 
 run_etl = KubernetesPodOperator(
-    task_id="run_etl",
-    name="etl-{{ ds_nodash }}",
-    namespace="airflow-tasks",
-    image="myregistry/etl-job:1.2.3",
+    task_id="run_etl"
+    name="etl-{{ ds_nodash }}"
+    namespace="airflow-tasks"
+    image="myregistry/etl-job:1.2.3"
     cmds=["python", "/app/etl.py"],
     arguments=["--date={{ ds }}", "--env=prod"],
     env_vars={"AWS_REGION": "us-east-1"},
@@ -318,6 +318,6 @@ KubernetesPodOperator vs KubernetesExecutor — две независимых в
 ---
 
 <KnowledgeCheck
-  question="Ваша команда хочет запускать ML training task с deps `pandas==1.5.3` и `scikit-learn==1.2.0`, которые конфликтуют с worker image (там pandas 2.1). Task запускается каждый час и должна стартовать быстро (< 2s overhead). Какой operator выбрать и почему не другие?"
+  question="Ваша команда хочет запускать ML training task с deps `pandas==1.5.3` и `scikit-learn==1.2.0`, которые конфликтуют с worker image (там pandas 2.1). Task запускается каждый час и должна стартовать быстро (&lt; 2s overhead). Какой operator выбрать и почему не другие?"
   answer="Выбор — **ExternalPythonOperator** (или `@task.external_python`) с pre-built venv в worker Docker image. Создаём в Dockerfile `RUN python3.10 -m venv /opt/airflow/venvs/ml && /opt/airflow/venvs/ml/bin/pip install pandas==1.5.3 scikit-learn==1.2.0`, в task указываем `python='/opt/airflow/venvs/ml/bin/python'`. Overhead — subprocess.Popen к готовому интерпретатору, около 100-500ms. Почему не другие: (1) **PythonOperator** не подходит — конфликт deps с worker; (2) **PythonVirtualenvOperator** не подходит — создаёт venv на каждом execute, `pip install` ~30-60s, не уложимся в 2s; (3) **KubernetesPodOperator** перебор — startup pod 10-30s, требует K8s cluster и image push pipeline; (4) **DockerOperator** медленнее (image start 2-10s) и сложнее в deploy на K8s worker. ExternalPython даёт ровно то, что нужно: deps isolation + минимальный startup. Trade-off: venv нужно поддерживать в Docker image, синхронизировать обновления."
 />

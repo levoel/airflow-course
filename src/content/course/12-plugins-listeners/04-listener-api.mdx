@@ -117,7 +117,7 @@ def _trigger_pagerduty(severity: str, summary: str, source: str, custom_details:
         log.warning("PAGERDUTY_ROUTING_KEY not set, skipping PD")
         return
     requests.post(
-        "https://events.pagerduty.com/v2/enqueue",
+        "https://events.pagerduty.com/v2/enqueue"
         json={
             "routing_key": routing_key,
             "event_action": "trigger",
@@ -160,8 +160,8 @@ class AirflowEventListener:
 
         # Slack notification всегда
         _send_slack(
-            channel="#airflow-failures",
-            text=f"Task FAILED: `{dag_id}.{task_id}` (run={run_id}, try {try_number})",
+            channel="#airflow-failures"
+            text=f"Task FAILED: `{dag_id}.{task_id}` (run={run_id}, try {try_number})"
             attachments=[{
                 "color": "#cc0000",
                 "fields": [
@@ -174,9 +174,9 @@ class AirflowEventListener:
         # PagerDuty только для critical DAG-ов
         if dag_id in CRITICAL_DAGS:
             _trigger_pagerduty(
-                severity="critical",
-                summary=f"Airflow task failed: {dag_id}.{task_id}",
-                source="airflow-listener",
+                severity="critical"
+                summary=f"Airflow task failed: {dag_id}.{task_id}"
+                source="airflow-listener"
                 custom_details={
                     "dag_id": dag_id,
                     "task_id": task_id,
@@ -192,15 +192,15 @@ class AirflowEventListener:
         # Notification для completed runs critical DAGs
         if dag_run.dag_id in CRITICAL_DAGS:
             _send_slack(
-                channel="#airflow-success",
+                channel="#airflow-success"
                 text=f"DAG run SUCCESS: `{dag_run.dag_id}` ({dag_run.run_id})",
             )
 
     @hookimpl
     def on_dag_run_failed(self, dag_run: "DagRun", msg: str | None = None):
         _send_slack(
-            channel="#airflow-failures",
-            text=f"DAG RUN FAILED: `{dag_run.dag_id}` ({dag_run.run_id})",
+            channel="#airflow-failures"
+            text=f"DAG RUN FAILED: `{dag_run.dag_id}` ({dag_run.run_id})"
             attachments=[{
                 "color": "#cc0000",
                 "fields": [
@@ -210,9 +210,9 @@ class AirflowEventListener:
         )
         if dag_run.dag_id in CRITICAL_DAGS:
             _trigger_pagerduty(
-                severity="critical",
-                summary=f"Airflow DAG run failed: {dag_run.dag_id}",
-                source="airflow-listener",
+                severity="critical"
+                summary=f"Airflow DAG run failed: {dag_run.dag_id}"
+                source="airflow-listener"
                 custom_details={
                     "dag_id": dag_run.dag_id,
                     "run_id": dag_run.run_id,
@@ -224,7 +224,7 @@ class AirflowEventListener:
     def on_starting(self, component):
         log.info("Airflow component starting: %s", component)
         _send_slack(
-            channel="#airflow-ops",
+            channel="#airflow-ops"
             text=f"Airflow `{component}` is starting up.",
         )
 
@@ -232,7 +232,7 @@ class AirflowEventListener:
     def before_stopping(self, component):
         log.info("Airflow component stopping: %s", component)
         _send_slack(
-            channel="#airflow-ops",
+            channel="#airflow-ops"
             text=f"Airflow `{component}` is shutting down.",
         )
 

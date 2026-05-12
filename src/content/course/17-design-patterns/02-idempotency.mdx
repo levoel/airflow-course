@@ -88,7 +88,7 @@ def load_orders(date: str):
 | DB | Синтаксис |
 |---|---|
 | PostgreSQL 15+ | MERGE INTO (нативно) |
-| PostgreSQL < 15 | INSERT ... ON CONFLICT (UPSERT) |
+| PostgreSQL &lt; 15 | INSERT ... ON CONFLICT (UPSERT) |
 | Snowflake | MERGE INTO |
 | BigQuery | MERGE |
 | ClickHouse | ALTER TABLE ... UPDATE/INSERT |
@@ -213,7 +213,7 @@ spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version: 2
 
 ```python
 SparkSubmitOperator(
-    task_id="transform",
+    task_id="transform"
     conf={
         "spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version": "2",
         # Better: использовать S3A directly committers
@@ -330,7 +330,7 @@ def aggregate_daily_revenue(data_interval_start: datetime, data_interval_end: da
 def send_notification_idempotent(order_id: str):
     """Использует idempotency_key — Twilio/Stripe/Slack support этого."""
     response = requests.post(
-        "https://api.twilio.com/...",
+        "https://api.twilio.com/..."
         headers={"Idempotency-Key": f"order-{order_id}"},
         json={"message": f"Order {order_id} shipped"},
     )
