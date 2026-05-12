@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.env
+.venv
+venv/
+env/
+ENV/
+
+# Airflow runtime
+logs/
+plugins/__pycache__/
+airflow.db
+airflow.cfg
+unittests.cfg
+webserver_config.py
+airflow-webserver.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
