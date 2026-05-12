@@ -1,0 +1,40 @@
+# Helm values для CeleryExecutor (warm workers baseline).
+executor: CeleryExecutor
+
+images:
+  airflow:
+    repository: apache/airflow
+    tag: 2.10.5-python3.11
+    pullPolicy: IfNotPresent
+
+workers:
+  replicas: 2
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+
+scheduler:
+  replicas: 1
+
+webserver:
+  replicas: 1
+
+postgresql:
+  enabled: false
+
+redis:
+  enabled: false
+
+# Подключение к Postgres/Redis запущенным через docker compose снаружи KIND
+data:
+  metadataConnection:
+    host: host.docker.internal
+    user: airflow
+    pass: airflow
+    db: airflow
+    port: 5432
+
+brokerUrl: redis://host.docker.internal:6379/0

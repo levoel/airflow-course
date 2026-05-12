@@ -173,6 +173,35 @@ Run для 2026-05-12 обрабатывает данные **за 2026-05-12**,
 
 Это subtle but critical: `execution_date` для DAG = `data_interval_start`, не время запуска. Run для "12 мая" реально запускается ночью с 12 на 13.
 
+<DiagramContainer title="data_interval semantics: start_date, data_interval_start/end" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="@dag(start_date=datetime(2024, 1, 1), schedule='@daily')" tooltip="start_date — hardcoded дата first scheduling window. Не datetime.now() (non-deterministic, ломает DagRun creation). Не должна быть в будущем. Обычно ставится на дату deployment или раньше. Менять start_date в production — drastic operation (требует cleanup DagRuns).">hardcoded date</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="scheduler creates DagRun for each interval" />
+    <FlowRow>
+      <DataBox label="execution_date = 2026-05-12 00:00" tooltip="Marker для DagRun — обычно = data_interval_start. В 2.x это term still used. В 3.x replaced на logical_date. Для @daily schedule: каждый день создаётся DagRun с execution_date в начале window. Это marker, не время запуска.">DagRun marker</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="data_interval_start = 2026-05-12 00:00" tooltip="Начало временного окна которое run представляет. Tasks должны фильтровать data WHERE created_at >= data_interval_start AND created_at < data_interval_end. Это foundation backfill-safety: при backfill за 2024-06-15 получит data_interval_start=2024-06-15, не сегодняшнюю date.">window start (UTC)</DataBox>
+      <DataBox label="data_interval_end = 2026-05-13 00:00" tooltip="Конец временного окна (exclusive). Для @daily — следующий день в начале. Это момент когда interval 'closes' и run actually starts wall-clock. Tasks используют < data_interval_end (не <=) для избежания overlap с next run.">window end (UTC)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="window completes → wall-clock trigger" />
+    <FlowRow>
+      <DataBox label="actual run starts: 2026-05-13 00:00:30 (wall-clock)" tooltip="Scheduler запускает run после того как data_interval_end достигнут. Это ~30 секунд delay в зависимости от scheduler tick. Run для 'May 12' реально стартует ночью с 12 на 13. Tasks fill data за прошедший интервал.">post-interval wall-clock</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="task receives context" />
+    <FlowRow>
+      <DataBox label="task(data_interval_start, data_interval_end)" tooltip="Best practice: declare params в signature. Airflow auto-injects values. Или get_current_context()['data_interval_start']. ВАЖНО: НЕ datetime.now() — break backfill. Backfill за 2024-06-15 inject 2024-06-15/2024-06-16, не сегодня. Task deterministic относительно interval, независимо от wall-clock.">context-driven, wall-clock independent</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="backfill scenario" />
+    <FlowRow>
+      <DataBox label="airflow dags backfill orders_etl --start-date 2024-03-01 --end-date 2024-05-31" tooltip="Explicit CLI backfill за 3 месяца. Airflow создаёт DagRuns marked run_type='backfill' за каждый scheduled interval. data_interval для каждого — historical. Параллельно до max_active_runs. Backfill-safe DAG → correct historical data. Non-safe (datetime.now()) → catastrophe (current data inserted с historical execution_date).">explicit historical fill</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ```python
 @task
 def process_day(data_interval_start, data_interval_end):

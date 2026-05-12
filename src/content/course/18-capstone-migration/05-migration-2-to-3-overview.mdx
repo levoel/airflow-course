@@ -13,6 +13,32 @@ Airflow 3.0 — самый большой architectural shift в истории 
 
 Airflow 3.0 released ~Q1 2025, 3.1 (HITL, многоe др.) ~Q4 2025, 3.2 (Multi-Team AIP-67) ~Q2 2026. В 2026 большинство production deployments всё ещё на 2.10/2.11 (LTS) — migration recommended planned event в 2026-2027.
 
+<DiagramContainer title="Architectural shifts 2.x → 3.x — что фундаментально меняется" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Webserver layer" tooltip="В 2.x — Flask + Flask-AppBuilder + Jinja templates, server-rendered UI. В 3.x — FastAPI API Server (async, OpenAPI) + отдельный React UI (reactive, no full reloads). Custom Flask plugins/views broken — нужен rewrite в React+FastAPI.">Flask + FAB → FastAPI + React UI</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Worker → DB boundary (AIP-72 Task SDK)" tooltip="Самое фундаментальное изменение. В 2.x workers имеют direct SQLAlchemy session к metadata DB — Variable.get, Connection.get, XCom — всё через прямой SQL. Security risk: malicious DAG может query/modify любые таблицы. В 3.x — Task SDK boundary: workers общаются через REST API к API server, никакого direct DB access.">Direct DB access → Task SDK REST API</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="DAG Processor (AIP-66)" tooltip="В 2.x — DagFileProcessor запускается inline внутри scheduler (default), heavy parsing замедляет scheduling main loop. В 3.x — standalone DAG Processor mandatory, отдельный процесс с own concurrency. Plus DAG Bundles — pluggable sources (Git/S3/HTTP) вместо gitSync sidecar.">Inline в scheduler → standalone mandatory + DAG Bundles</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Datasets → Assets (AIP-74/75)" tooltip="Rename для better semantic alignment с industry. Dataset class → asset function. Plus AssetAny/AssetAll explicit semantics для multi-asset triggers. Auto-OL integration. Migration via ruff AIR301 в большинстве cases.">Dataset class → asset function + AssetAny/All</DataBox>
+      <DataBox label="execution_date → logical_date (AIP-83)" tooltip="execution_date был deprecated alias с 2.6. В 3.x — fully removed. Templates {{ execution_date }} → {{ logical_date }}. ds alias всё работает. Auto-fix через ruff AIR302.">{{ execution_date }} → {{ logical_date }}</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="FAB removed (AIP-79)" tooltip="Flask-AppBuilder bundled в 2.x — auth через webserver_config.py. В 3.x — FAB убран, pluggable AuthManager providers. Backward compat через apache-airflow-providers-fab (drop-in для most cases). Custom OIDC/OAuth — implement AuthManager interface.">Built-in FAB → pluggable AuthManager providers</DataBox>
+      <DataBox label="REST API v1 → v2" tooltip="v1 (Flask-RESTful) → v2 (FastAPI + OpenAPI). Endpoints /api/v1/* → /api/v2/*. Response format mostly same но HATEOAS _links, camelCase в places. Bearer token предпочтительный auth. Auto-generated Python client через openapi spec.">/api/v1/* → /api/v2/* (OpenAPI)</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Big picture — почему 3.x

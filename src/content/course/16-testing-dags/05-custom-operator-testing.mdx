@@ -87,6 +87,40 @@ WHEN NOT MATCHED THEN INSERT (*) VALUES (src.*);
 4. `execute()` error handling (hook raises)
 5. Template rendering для template_fields
 
+<DiagramContainer title="Custom operator lifecycle: test points через execute()" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="__init__(self, ...)" tooltip="Scheduler создаёт operator instance во время DAG parse. Параметры сохраняются как self.attrs. Test point #1: assert op.source_table == 'X', op.retries == 3 — проверка что BaseOperator args (retries, retry_delay) pass через **kwargs.">test param storage</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG parse → serialized_dag" />
+    <FlowRow>
+      <DataBox label="render_template_fields(context)" tooltip="Перед execute Airflow runtime применяет Jinja к каждому template_field. {{ ds }} → '2026-05-12'. Test point #2: op.render_template_fields({'ds_nodash': '20260512', 'dag': dag, 'task': op}) — проверка что rendering работает И что field в template_fields tuple.">test Jinja rendering</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="scheduler enqueue → worker picks" />
+    <FlowRow>
+      <DataBox label="pre_execute hooks" tooltip="Optional lifecycle hook BaseOperator.pre_execute(context). Редко используется в custom operators — обычно validation идёт внутри execute. Здесь скорее на уровне @task.before_execute (3.x) или on_execute_callback.">rarely tested</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="execute(self, context)" tooltip="Main method. Test point #3 (happy path): mock Hook class, call op.execute(context), assert return value, hook.run called с правильным SQL. Test point #4 (error): hook.run.side_effect = Exception → assert pytest.raises с правильным message + caplog.">test happy + error paths</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="внутри execute: build SQL + hook.run" />
+    <FlowRow>
+      <DataBox label="_build_merge_sql()" tooltip="Pure function — easy для testing. Test point #5: вызывайте напрямую с разными merge_keys (single, composite, special chars), assert правильный SQL в output. Не нужен mock — это deterministic.">test SQL building</DataBox>
+      <DataBox label="hook.run(sql)" tooltip="Mocked в test. mock_hook.run.return_value = 42 (rows merged). Assert mock_hook.run.call_args[0][0] содержит ожидаемое SQL. mock_hook_cls.assert_called_once_with(snowflake_conn_id='...') — verify Hook constructed правильно.">test mock interactions</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="xcom_push(key, value)" tooltip="context['task_instance'].xcom_push — MagicMock в test. assert_any_call(key='rows_merged', value=42) проверяет что operator pushed правильный XCom. Implicit return value тоже push-ится в default 'return_value' key.">test XCom push</DataBox>
+      <DataBox label="return value" tooltip="Возвращаемое значение становится default XCom (key='return_value'). Test point: result = op.execute(context); assert result == 42. Простой и важный assertion — проверяет contract.">test return contract</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="post_execute → state=success" />
+    <FlowRow>
+      <DataBox label="on_success_callback / on_failure_callback" tooltip="Callbacks runs после execute. Если operator определяет custom callback логику — testable через context['task'].on_failure_callback(context). Чаще callback на DAG-level — там test через integration.">test callback chains</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Test 1 — `__init__` validation

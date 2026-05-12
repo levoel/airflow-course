@@ -15,6 +15,34 @@ topics: ["Testing", "DagBag", "Import Errors", "Structural Tests", "pytest"]
 
 ---
 
+## Test pyramid для Airflow
+
+Перед deep dive — карта где DAG validity tests располагаются в общей testing pyramid. Каждый уровень имеет свой trade-off между speed, coverage и cost.
+
+<DiagramContainer title="Test pyramid: DAG validity → unit → integration → E2E" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Layer 1: DAG validity" tooltip="DagBag().import_errors — единственный test, который ловит ~70% production-инцидентов 'DAG не появился в UI'. Не требует running Airflow, занимает 10-30 секунд на 100 DAGs. Запускается на каждый PR commit, blocking merge. Ловит import errors, typo, missing providers, неправильный start_date.">~30s, 70% prod bugs</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="если import ok — двигаемся глубже" />
+    <FlowRow>
+      <DataBox label="Layer 2: Unit tests" tooltip="pytest tests/unit/ с mocked Hooks, Connections, Variables. Тестирует business logic одного operator/function в изоляции. SQLite backend, UNIT_TEST_MODE=True, no scheduler. <100ms per test. Ловит logic bugs, edge cases, retry behavior. Запускается на каждый PR commit.">~2-5 min, mocked deps</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="logic корректна — проверяем integration" />
+    <FlowRow>
+      <DataBox label="Layer 3: Integration tests" tooltip="airflow tasks test / airflow dags test с real Airflow init (SQLite или Postgres через testcontainers). Real Connections, real XCom, real scheduler logic. Mocked external services через moto/wiremock. 1-30s per test. Ловит integration bugs (Hook + Connection, XCom flow, trigger_rules). Запускается post-merge или nightly.">~10-30 min, real Airflow</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="integration ok — full pipeline check" />
+    <FlowRow>
+      <DataBox label="Layer 4: E2E tests" tooltip="Полный pipeline на staging Airflow с real connections к sample data sources. 5-10 critical DAGs через full lifecycle. Slow (минуты), expensive (real cloud resources). Запускается nightly или manually before release. Ловит configuration drift, infra issues, real external service integration bugs.">~hours, staging Airflow</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Stratifу tests по этой pyramid — основа стратегии CI/CD (модуль 16.07). Чем выше уровень, тем шире coverage, медленнее, дороже. Чем ниже — быстрее, дешевле, более targeted. Большая часть значения извлекается из Layer 1.
+
+---
+
 ## Зачем нужен DAG validity test
 
 Без тестов поток выглядит так:

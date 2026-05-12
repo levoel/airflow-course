@@ -78,6 +78,56 @@ def spark_etl_NEW_WAY():
 
 ## Семантика Setup/Teardown
 
+<DiagramContainer title="Setup/Teardown lifecycle — happy path" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="create_cluster.as_setup()" tooltip="Setup task запускается первым. Provisions ephemeral resource (EMR cluster, K8s namespace, Snowflake warehouse). Возвращает identifier (cluster_id) через XCom для downstream использования.">SETUP: provision resource</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="setup success → middle tasks scheduled" />
+    <FlowRow>
+      <DataBox label="step1 (work)" tooltip="Middle tasks — actual business logic. Получают cluster_id через XCom от setup. Выполняются как обычно с дефолтным trigger_rule=all_success между ними.">main work</DataBox>
+      <DataBox label="step2 (work)" tooltip="Все middle tasks в scope teardown. Их failures не блокируют teardown — он всё равно запустится. Но влияют на final DagRun state (failed если хотя бы один упал).">main work</DataBox>
+      <DataBox label="step3 (work)" tooltip="После завершения (success или failure) всех middle tasks scheduler triggers teardown — независимо от их состояния, благодаря implicit trigger_rule на teardown.">main work</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="all middle reach terminal state" />
+    <FlowRow>
+      <DataBox label="terminate_cluster.as_teardown(setups=create_cluster)" tooltip="Teardown запускается ВСЕГДА — даже если middle tasks failed, даже если setup partially failed. Должен быть idempotent (handle 'уже удалено' gracefully). setups= параметр явно линкует к setup для proper scope.">TEARDOWN: cleanup resource</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="DagRun state = success" tooltip="DagRun success только если все middle tasks AND teardown success. Если teardown failed — DagRun=failed (это критично vs старый trigger_rule=all_done где teardown failure не отражался).">final state reflects teardown</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+<DiagramContainer title="Setup/Teardown — failure scenarios" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Scenario A: middle task fails" tooltip="step2 raises exception, retries exhausted. step3 получает upstream_failed (default trigger_rule). Несмотря на это teardown всё равно запускается.">step1 OK, step2 FAIL, step3 upstream_failed</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="middle done (any terminal state)" />
+    <FlowRow>
+      <DataBox label="terminate_cluster runs" tooltip="Teardown триггерится даже при failures — это его основная семантика. Cluster удаляется. Cost leak предотвращён. Это главное преимущество над manual trigger_rule=all_done.">cleanup successful, DagRun=failed</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="==========================" />
+    <FlowRow>
+      <DataBox label="Scenario B: setup fails" tooltip="create_cluster raises (AWS quota exceeded, network error). Middle tasks все skipped (upstream_failed). Но teardown всё равно запускается — для cleanup partial state (например EMR JobFlow created но в TERMINATED_WITH_ERRORS).">setup FAIL → middle skipped</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="teardown runs anyway" tooltip="Это нужно для cleanup partial setup state. Teardown должен gracefully handle случай 'ресурс не существует' (try/except на cluster_not_found). Без этого orphan resources накапливаются.">handles partial setup gracefully</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="==========================" />
+    <FlowRow>
+      <DataBox label="Scenario C: teardown fails" tooltip="Cluster terminate API call failed (e.g., network glitch, EMR throttling). Это серьёзно — может быть real cost leak. DagRun помечается failed, alerting должен сработать.">all middle OK, terminate FAIL</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="DagRun = failed" tooltip="Главное отличие от старого trigger_rule=all_done: teardown failure ПРОПАГИРУЕТСЯ в DagRun state. Это позволяет alerting корректно сработать. Operations team видит failure, manual cleanup runbook запускается.">cost leak visibility</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ### Правила выполнения
 
 | Сценарий | Setup | Middle tasks | Teardown | DagRun |

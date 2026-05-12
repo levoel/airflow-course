@@ -13,6 +13,33 @@ topics: ["Migration", "DAG Code", "Task SDK", "Imports", "Assets"]
 
 Этот урок — practical guide с before/after examples для каждого common pattern в production codebase.
 
+<DiagramContainer title="DAG code migration — imports rename и API renames" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="2.x DAG file" tooltip="Production DAG в Airflow 2.x — типичный TaskFlow-based file с imports из airflow.decorators, airflow.models, и airflow.Dataset. Содержит execution_date references, schedule_interval, возможно sla= parameters.">from airflow.decorators import dag, task</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="ruff AIR301 auto-fix" />
+    <FlowRow>
+      <DataBox label="Imports rename (AIR301)" tooltip="Frequency: almost every DAG. Auto-fix: yes. airflow.decorators import dag, task → airflow.sdk import dag, task. airflow.models import Variable, Connection → airflow.sdk import Variable, Connection. Single ruff command fixes hundreds files. Body identical.">airflow.decorators → airflow.sdk</DataBox>
+      <DataBox label="Dataset → asset (AIR301 partial)" tooltip="Frequency: каждый DAG с Datasets feature. Auto-fix: partial — basic cases handled. from airflow import Dataset → from airflow.sdk import asset. Dataset(...) class → asset(...) function/decorator. Multi-dataset triggers: schedule=[a, b] → schedule=AssetAny(a, b) для explicit semantics.">Dataset class → asset function</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="ruff AIR302 auto-fix" />
+    <FlowRow>
+      <DataBox label="execution_date → logical_date (AIR302)" tooltip="Legacy DAGs. Auto-fix: yes для Python code. execution_date parameter, next/prev_execution_date variants, all renamed. {{ ds }} alias всё работает. Edge case: {{ execution_date }} в SQL string templates — manual grep required, ruff не trogает strings.">parameter + Jinja templates</DataBox>
+      <DataBox label="schedule_interval → schedule (AIR302)" tooltip="Legacy DAGs (2.4+ recommended schedule уже). Auto-fix: yes. Identical semantic, just renamed parameter. @dag(schedule_interval='@daily') → @dag(schedule='@daily'). Cron strings unchanged.">parameter rename</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="manual rewrite required" />
+    <FlowRow>
+      <DataBox label="SubDAG → TaskGroup" tooltip="Rare в modern codebases (TaskGroup standard с 2.x). Auto-fix: NO — manual rewrite. SubDagOperator removed в 3.x. Tasks stay в parent DAG, no separate DagRun, no deadlock от recursive slot consumption, single executor.">SubDagOperator removed</DataBox>
+      <DataBox label="sla removal → Listener API" tooltip="Production DAGs typically had SLA для critical tasks. Auto-fix: NO. sla= parameter и sla_miss_callback removed (AIP-89). Replacement: Listener API hooks (on_task_instance_completed). Часто better — централизованный monitoring rules, не embedded в DAG code.">@task(sla=...) → Listener</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="3.x DAG file (clean)" tooltip="Total lines changed per typical DAG: ~6. Ruff --fix handles большинство. Manual: SubDAG (rare), SLA (medium), context['execution_date'] string lookups (edge case). Plus custom operators: from airflow.sdk import BaseOperator (new path), @apply_defaults removed.">from airflow.sdk import dag, task, Variable</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Change 1: TaskFlow API imports

@@ -27,6 +27,30 @@ DAG validity tests ловят синтаксические и структурн
 
 Unit test НЕ запускает scheduler, НЕ читает реальный DB, НЕ требует Airflow init. Он импортирует operator класс и вызывает `execute(context)` с mocked context.
 
+<DiagramContainer title="Unit test flow: TaskFlow .function direct call + mock patch" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="@task decorator" tooltip="Airflow TaskFlow @task оборачивает function в Task object. Прямой импорт даёт Task instance — не вызываемая функция. Атрибут .function (или .__wrapped__) — оригинальная python-функция без обёртки. Для unit test нужна именно она.">fetch_orders (Task object)</DataBox>
+      <DataBox label="classic Operator" tooltip="Класс наследует BaseOperator с execute(self, context). Instance создаётся в test, execute вызывается напрямую с mocked context. Hook внутри patcher-ится через mocker.patch на module path, где импортирован — НЕ на оригинальный provider path.">S3FilesCountOperator</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="extract callable / instantiate" />
+    <FlowRow>
+      <DataBox label=".function attribute" tooltip="fetch_orders.function — оригинальная python-функция. Вызывается с обычными args. Альтернатива: fetch_orders.__wrapped__ (если @task сохраняет ссылку). Если функция принимает hook param — dependency injection идеальна для test.">fetch_orders.function(date, hook=mock)</DataBox>
+      <DataBox label="op.execute(context)" tooltip="Прямой вызов execute с MagicMock(spec=Context). Context может быть partial — операторы обычно нуждаются в task_instance, ds, run_id. Возвращаемое значение — implicit XCom push (но XCom не пишется без scheduler).">op.execute(mock_context)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="patch hook на module-where-used" />
+    <FlowRow>
+      <DataBox label="mocker.patch('plugins.my_op.S3Hook')" tooltip="Critical: patch там где импортирован символ, не где определён. plugins/my_op.py делает 'from airflow...s3 import S3Hook' — patcher должен указать plugins.my_op.S3Hook. Patching airflow.providers...s3.S3Hook не работает — local reference уже создан.">patch where USED, not defined</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="assertions" />
+    <FlowRow>
+      <DataBox label="return value" tooltip="result == expected — что function вернула. Это implicit XCom value (в runtime через TaskInstance, в test просто return).">assert result == 42</DataBox>
+      <DataBox label="mock calls" tooltip="mock.assert_called_once_with(...) — что Hook был вызван с правильными параметрами. Проверяет SQL string, connection_id, метод и args. Самая важная assertion для verifying operator behavior.">mock.assert_called_with(...)</DataBox>
+      <DataBox label="caplog (logs)" tooltip="pytest caplog fixture перехватывает logger output. caplog.at_level('INFO') + assertion 'Found N objects' проверяет что operator залогировал важное событие. Полезно для observability tests.">assert "Found 2" in caplog.text</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Базовый unit test для TaskFlow @task

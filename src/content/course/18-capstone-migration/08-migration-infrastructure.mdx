@@ -11,6 +11,44 @@ topics: ["Infrastructure", "DAG Processor", "FastAPI", "FAB", "REST API v2", "He
 
 DAG code migrated (previous lessons), но это только половина работы. 3.x фундаментально меняет **infrastructure**: standalone DAG Processor становится mandatory, webserver — это FastAPI API server, FAB убран в pluggable auth providers, REST API v1 deprecated в пользу v2. Этот урок — practical guide для infrastructure migration в Helm-based deployments.
 
+<DiagramContainer title="Infrastructure changes 2.x → 3.x — Helm chart components transformation" color="slate">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="webserver (Flask + FAB)" tooltip="2.x: Flask + Flask-AppBuilder, Gunicorn WSGI, Jinja templates server-rendered. webserverConfig для FAB auth (AUTH_TYPE = AUTH_OAUTH etc). Custom Flask views работают.">Flask + Jinja templates</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="renamed → React UI separate" />
+    <FlowRow>
+      <DataBox label="apiServer (FastAPI)" tooltip="3.x: webserver renamed к apiServer. FastAPI async + OpenAPI auto-generated spec. React UI как static files отдельно. Custom Flask views broken — нужен React+FastAPI rewrite. Helm values: webserver → apiServer.">FastAPI + React UI</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="dagProcessor.enabled: true (optional)" tooltip="2.x: DAG Processor может быть inline (default) или standalone (opt-in). Heavy DAGs (TensorFlow imports) замедляют scheduler main loop в inline mode. Capstone deployment уже enables standalone — preview к 3.x.">inline в scheduler по умолчанию</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="always-on в 3.x" />
+    <FlowRow>
+      <DataBox label="dagProcessor (mandatory)" tooltip="3.x: standalone DAG Processor mandatory. No 'enabled' option. Separate process с own concurrency, dedicated к parsing. Scheduler — pure scheduling logic, faster ticks. Multiple replicas для multiple DAG bundles.">standalone обязателен</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="dags.gitSync sidecar" tooltip="2.x: gitSync sidecar container в каждом pod (scheduler, worker, webserver). Init container git pull-ит DAGs из repo. Single source. Overhead — sidecar в каждом pod.">git pull в каждом pod</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="replaced AIP-66" />
+    <FlowRow>
+      <DataBox label="dagBundles (AIP-66)" tooltip="3.x: pluggable DAG sources. dagBundles array — GitDagBundle, S3DagBundle, HTTPDagBundle. Multi-source: production DAGs из Git, experimental из S3, dev local. Per-bundle refresh intervals и versioning. DAG Processor pulls centrally — no sidecar.">multi-source pluggable</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="FAB built-in auth" tooltip="2.x: Flask-AppBuilder bundled, webserver_config.py с AUTH_TYPE = AUTH_OAUTH, OAUTH_PROVIDERS. Built-in DB users + OIDC/LDAP. RBAC через FAB roles.">webserver_config.py</DataBox>
+      <DataBox label="REST API v1 (Flask-RESTful)" tooltip="2.x: /api/v1/* endpoints. Basic auth common. Response format snake_case.">/api/v1/*</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="AIP-79 + FastAPI" />
+    <FlowRow>
+      <DataBox label="Pluggable AuthManager (AIP-79)" tooltip="3.x: FAB removed. AuthManager providers: apache-airflow-providers-fab (drop-in compat), AwsIamAuthManager, custom OIDC/JWT. [api] auth_backends config. Migration option 1: install fab provider — 30 min. Option 2: custom AuthManager — major rewrite.">auth_backends provider</DataBox>
+      <DataBox label="REST API v2 (FastAPI OpenAPI)" tooltip="3.x: /api/v2/* endpoints. Bearer JWT preferred. HATEOAS _links. camelCase в places. v1 deprecated parallel 6-12 months. apache-airflow-client Python package auto-generated от OpenAPI spec.">/api/v2/*</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Change 1: Standalone DAG Processor — mandatory

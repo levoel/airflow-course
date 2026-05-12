@@ -27,6 +27,34 @@ Production Airflow — это не «happy path» execution, это правил
 
 Airflow defaults: `retries=0`, `retry_delay=300s`. Production требует thinking about retries per task.
 
+<DiagramContainer title="Error handling strategies: retries → DLQ → alerts → callbacks" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Task execute() raises exception" tooltip="Task failed. Тип exception определяет path: AirflowFailException → no retry (terminal — auth failed, invalid input); AirflowSkipException → SKIPPED state (data quality, late data); standard Exception → retry pipeline активируется (если retries > 0). Smart code raises правильный тип.">classify exception</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="if retries > 0 left" />
+    <FlowRow>
+      <DataBox label="Retry с exponential backoff" tooltip="delay_n = min(retry_delay × 2^(n-1), max_retry_delay). Attempt 2: 1 min, 3: 2 min, 4: 4 min, 5: 8 min, capped к max_retry_delay=1h. Total ~31 min для 5 retries. Plus jitter (random 0-30s) против thundering herd когда downstream DB outage и все tasks retry в same minute.">backoff + jitter</DataBox>
+      <DataBox label="on_retry_callback fires" tooltip="Callback на каждом retry — informational level alert. Production rule: не page SRE на retries (alert fatigue), только log/Slack #warnings. Если try_number > 3 — может Slack #warnings с 'investigate?'. PagerDuty reserved для final failure.">log only, no page</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="if all retries exhausted" />
+    <FlowRow>
+      <DataBox label="Task state = FAILED" tooltip="Final state. Все retries exhausted. on_failure_callback triggered (если defined). Listener API @hookimpl on_task_instance_failed fires (если plugin registered). state persistence в metadata DB. Downstream tasks check trigger_rule — обычно skipped если all_success default.">terminal state</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="parallel paths from FAILED state" />
+    <FlowRow>
+      <DataBox label="on_failure_callback (per-DAG)" tooltip="Function defined per-DAG. Runs synchronously в scheduler — keep fast (<2s timeout!). Wraps requests.post в try/except — alerting failure не должна сама raise. List of callbacks supported в 2.6+. Code duplication issue: 50 DAGs × own callback. Solution → Listener API.">Slack/Email per DAG</DataBox>
+      <DataBox label="Listener API (global plugin)" tooltip="@hookimpl on_task_instance_failed в plugin. Single source of truth для alerting — нет duplication. Read DAG tags для tiered severity: 'critical' → PagerDuty; 'production' → Slack; staging → log. Plus on_scheduler_zombie_detected (2.6+) для zombie events. Production standard.">global, tiered routing</DataBox>
+      <DataBox label="DLQ insert" tooltip="Внутри task except: INSERT INTO event_dlq (event_id, error_message, dag_id, run_id, failed_at) ON CONFLICT DO UPDATE. Persists failed item для manual review. Daily DLQ-review DAG (9am) alerts если >0 unresolved >24h old. Allows replay/cleanup без losing failed events.">persist для replay</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="downstream behavior" />
+    <FlowRow>
+      <DataBox label="Downstream tasks: trigger_rule check" tooltip="Default 'all_success' → downstream SKIPPED если upstream failed. 'all_done' → runs regardless. 'one_failed' → runs если any upstream failed (useful для cleanup tasks). Setup/Teardown semantic — teardown auto-runs after success/failure. Choose trigger_rule mindfully для cleanup tasks.">SKIPPED / cleanup runs</DataBox>
+      <DataBox label="Tiered alerting routing" tooltip="Alertmanager / custom gateway routes based on: time of day (night → PagerDuty, day → Slack), DAG owner (alert correct team), severity (critical → page; production → notify; dev → log only). Reduces alert fatigue 80%. Test alerts quarterly через chaos drill.">PagerDuty | Slack | Splunk</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Pattern 1: Exponential backoff

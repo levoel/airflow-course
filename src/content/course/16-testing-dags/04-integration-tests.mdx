@@ -32,6 +32,27 @@ Integration tests проверяют:
 - Что DAG schedule logic работает (data_interval, etc)
 - Что retry/trigger_rules ведут себя как ожидается
 
+<DiagramContainer title="Integration test tooling: tasks test vs dags test vs pytest-airflow" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="airflow tasks test" tooltip="CLI команда для одного task в isolation. Loads DAG из dag_folder, создаёт fake DagRun + TaskInstance in-memory, не пишет state в DB (если без --mark-success). Вызывает operator.execute(context) с real Context. Streams logs к stdout. НЕ использует executor — inline execution. НЕ trigger downstream.">single task, no DB state</DataBox>
+      <DataBox label="airflow dags test" tooltip="CLI команда для весь DagRun. Создаёт реальный DagRun в DB. Запускает tasks в правильном порядке dependencies. XCom передаётся через DB. Trigger rules, retries, branching работают. SequentialExecutor inline — НЕ Celery/K8s. Самый powerful tool — full DagRun локально без scheduler.">full DagRun, sequential</DataBox>
+      <DataBox label="pytest-airflow plugin" tooltip="Community plugin для tighter pytest integration. Fixture airflow_dag даёт inited Airflow + parsed DAG. Берёт boilerplate (init DB, set env vars, create test environment). Менее mature чем raw airflow dags test, но удобнее для test suite organization.">pytest fixture wrapper</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="что они проверяют" />
+    <FlowRow>
+      <DataBox label="Hook ↔ Connection" tooltip="tasks test использует real Connection из metadata DB. Operator делает Hook(conn_id='X') → лезет в DB → получает credentials → connects к real (или mocked через moto/wiremock) service. Проверяет full path который unit test обходит mocking-ом.">real Hook + real Connection</DataBox>
+      <DataBox label="XCom between tasks" tooltip="dags test пишет XCom values в DB и читает в downstream tasks. Тестирует serialization, custom XCom backend (S3, etc), правильность task_ids в xcom_pull. В unit test это всё mocked — integration ловит реальные bugs.">XCom serialization + DB</DataBox>
+      <DataBox label="data_interval semantics" tooltip="airflow dags test --data-interval-start/-end явно задаёт interval. Проверяет что DAG правильно использует data_interval_start/end (не datetime.now). Критично для custom Timetable, backfill-safety, partition-based queries.">data_interval + Timetable</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DB backend choice" />
+    <FlowRow>
+      <DataBox label="SQLite (fast)" tooltip="0s setup (in-memory или файл). SequentialExecutor only — SQLite не поддерживает LocalExecutor concurrent writes. Different DB engine от production — schema поведение может отличаться. Хорошо для local dev, fast CI smoke tests.">~0s init, single writer</DataBox>
+      <DataBox label="Postgres testcontainers" tooltip="testcontainers-python запускает ephemeral Postgres в Docker per test session. 5-10s setup. Same DB engine как production. Real concurrency. LocalExecutor работает. Container умирает в конце pytest run. Production-like testing — recommended для critical tests.">~5-10s init, prod-like</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## `airflow tasks test` — один task в isolation

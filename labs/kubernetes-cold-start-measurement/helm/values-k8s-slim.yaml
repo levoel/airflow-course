@@ -1,0 +1,26 @@
+# Helm values для KubernetesExecutor + slim image (minimal layers).
+executor: KubernetesExecutor
+
+images:
+  airflow:
+    repository: airflow-slim
+    tag: lab
+    pullPolicy: IfNotPresent
+
+scheduler:
+  replicas: 1
+webserver:
+  replicas: 1
+
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+
+data:
+  metadataConnection:
+    host: host.docker.internal
+    user: airflow
+    pass: airflow
+    db: airflow
+    port: 5432

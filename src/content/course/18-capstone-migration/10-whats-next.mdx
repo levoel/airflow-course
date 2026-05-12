@@ -13,6 +13,29 @@ topics: ["Resources", "Community", "Alternatives", "Career"]
 
 Этот курс covered Airflow 2.10/2.11 LTS deep — но industry exquisite Airflow alternatives. Знать их — sign senior engineer.
 
+<DiagramContainer title="Orchestration ecosystem map — где Airflow и его альтернативы" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Airflow 2.x/3.x" tooltip="General-purpose batch ETL orchestrator. Tasks → DAG pattern. Python-based, PostgreSQL state store. Largest community, most mature (since 2014). Best for: data engineering pipelines, scheduled ETL, cross-tool orchestration. Industry standard в 2026. Cloud SaaS: Astronomer.">Industry standard — batch ETL</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="когда выбрать другое?" />
+    <FlowRow>
+      <DataBox label="Dagster — asset-first" tooltip="Software-defined assets вместо tasks. Каждая asset = Python function что produces data с type signatures, schema validation, lineage. Strengths: type-safe data flow, materializations clear в UI, strong testing story, IO Managers. Weaknesses: smaller ecosystem, less mature operations side. When: analytics engineering (dbt + Python), ML pipelines, strong typing culture.">Analytics engineering / ML</DataBox>
+      <DataBox label="Prefect 3 — dynamic Pythonic" tooltip="Workflows как Python functions с @flow decorator. Workflow structure can decide at runtime (early exits, conditional branches). Strengths: Pythonic, no parse-time quirks, dynamic shape, Prefect Cloud SaaS hybrid execution. Weaknesses: less enterprise (RBAC, multi-tenancy), smaller provider ecosystem. When: dynamic workflows где structure depends on runtime data.">Dynamic workflows</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Temporal — durable execution" tooltip="Не data orchestrator — durable execution framework. Workflows survive crashes, retries, weeks-long durations. Multi-language (Python, Go, Java, TS). Strengths: truly durable, long-running workflows (days, weeks, months), strong typing. Used by Uber, Stripe, Snap. Weaknesses: no operators для Spark/Postgres etc, different mental model. When: business processes (loan approval, multi-day sagas), need durability guarantees.">Business processes (multi-day)</DataBox>
+      <DataBox label="Argo Workflows — K8s-native" tooltip="Workflow как Kubernetes CRD. YAML или Hera Python SDK. Strengths: K8s-native (no separate scheduler infra), highly parallel (millions short tasks), tight K8s integration (volumes, secrets). Weaknesses: YAML-heavy, fewer batch ETL features, smaller data engineering community. When: K8s-first organizations, ML pipelines (Kubeflow uses Argo), highly parallel scientific computing.">K8s parallel jobs</DataBox>
+      <DataBox label="Kestra — YAML declarative" tooltip="Declarative YAML workflows + plugins ecosystem. Targets developer experience. Strengths: YAML-first (non-Python users), strong UI/DAG visualization, growing fast 2024-2026. Weaknesses: newer (less battle-tested), smaller ecosystem. When: mixed-language teams, prefer declarative YAML, willing bet on growing tool.">Mixed-language teams</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="senior engineer mindset" />
+    <FlowRow>
+      <DataBox label="Right tool for right job" tooltip="The best Airflow engineer не тот, кто знает все operators — это тот, кто знает когда не использовать Airflow. Senior architecture decisions: Airflow для general batch ETL, Dagster для asset-first analytics/ML, Temporal для long-running business processes, Argo для K8s-native parallel jobs. Знать все 5 = architectural breadth → senior data engineer.">Senior data engineer = breadth + depth</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Что вы освоили в этом курсе

@@ -152,6 +152,31 @@ class _PythonDecoratedOperator(PythonOperator):
 2. **XCom resolution** автоматический — при вызове `transform(raw)` где `raw` это return от `extract`, Airflow знает что нужно сделать xcom_pull
 3. **Auto-push результата** в XCom после execute
 
+<DiagramContainer title="@task wrapper architecture — parse vs runtime" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="@task def transform(raw)" tooltip="Пользовательский Python function декорирован @task. Сам callable не выполняется при parse — только регистрируется как python_callable в _PythonDecoratedOperator instance.">user function</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="parse time: decorator wraps" />
+    <FlowRow>
+      <DataBox label="_PythonDecoratedOperator instance" tooltip="Subclass PythonOperator. task_id derived от function name (transform). Holds python_callable reference, op_args/op_kwargs (могут быть XComArg). Сериализуется в serialized_dag как PythonOperator с extra metadata.">task_id='transform', python_callable=transform</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="transform(raw) called in @dag body" />
+    <FlowRow>
+      <DataBox label="XComArg(extract_task)" tooltip="raw на самом деле не string — это XComArg placeholder, который ссылается на task 'extract'. При parse Airflow строит dependency edge extract → transform, embedding XComArg в op_args нового task.">placeholder ref, not value</DataBox>
+      <DataBox label="Dependency edge created" tooltip="Airflow добавляет implicit dependency extract.set_downstream(transform). Это эквивалентно extract >> transform в classic стиле, но генерируется автоматически из function call chain.">extract → transform</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="runtime: execute(context)" />
+    <FlowRow>
+      <DataBox label="_resolve_xcom_args()" tooltip="При actual execution worker процесса XComArg resolved: делает xcom_pull(task_ids='extract', key='return_value') из metadata DB. Получает реальное значение, передаёт в callable.">xcom_pull from DB</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="callable executed, returns value" />
+    <FlowRow>
+      <DataBox label="xcom_push('return_value', result)" tooltip="После успешного execute результат функции автоматически push в XCom table с key='return_value'. Downstream tasks смогут его pull-нуть через тот же resolution механизм.">auto-push to xcom table</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## XCom semantics в TaskFlow

@@ -32,6 +32,32 @@ extract() >> validation >> load()
 
 `group_id` создаёт namespace: внутри `validation` task `check_row_count` имеет full id `validation.check_row_count`.
 
+<DiagramContainer title="TaskGroup factory + Setup/Teardown wrap" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="make_validation_group(table, min_rows, group_id)" tooltip="Factory function returns TaskGroup. Параметризован table_name, expected_min_rows, schema_check flag, group_id. Внутри определяет @task функции с captured params. Reusable — можно вызвать N раз в одном DAG с разными targets. group_id обязательно unique per call.">parameterized TaskGroup factory</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="instantiate × N для разных tables" />
+    <FlowRow>
+      <DataBox label="validate_orders (group)" tooltip="Один instance factory call с table_name='staging.orders', expected_min_rows=1000, group_id='validate_orders'. Внутри: check_row_count → check_freshness → check_schema. Все task_ids имеют prefix 'validate_orders.'. В UI — collapsible block.">staging.orders</DataBox>
+      <DataBox label="validate_customers (group)" tooltip="Идентичная структура, другие params: table='staging.customers', min_rows=100. group_id='validate_customers' — unique чтобы не conflict с другими instances. Reuses factory code — нет copy-paste.">staging.customers</DataBox>
+      <DataBox label="validate_products (group)" tooltip="schema_check=False — opt-out от schema validation для этой table. Factory имеет условную логику включения check_schema task. group_id='validate_products'. Демонстрирует flexibility factory pattern.">staging.products, no schema</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="композиция с Setup/Teardown" />
+    <FlowRow>
+      <DataBox label="create_cluster.as_setup()" tooltip="Setup task — создаёт EMR cluster с deterministic name (airflow-{{ ds }}). XCom return — cluster_id для downstream. Setup/Teardown семантически: если setup failed, downstream skipped, teardown тоже skipped (не пытается terminate non-existent). С 2.10.5+ — production ready.">create EMR cluster</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="TaskGroup: spark_jobs (main work)" tooltip="Внутри TaskGroup — три parallel Spark jobs: job_orders, job_customers, job_products. Все depend на cluster.output (XCom). TaskGroup group_id='spark_jobs' — UI группировка. Teardown ждёт пока все три complete (success или failure).">parallel Spark jobs</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="terminate_cluster.as_teardown(setups=cluster, on_failure_fail_dagrun=True)" tooltip="Teardown — terminate EMR cluster. on_failure_fail_dagrun=True (default) — если teardown failed (cluster не terminated), DagRun становится failed → alert triggers → SRE видит проблему day-of. Без Setup/Teardown это решалось через trigger_rule='all_done' — но dagRun success при teardown failure (cost leak).">cost-safe termination</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Pattern 1: TaskGroup factory function

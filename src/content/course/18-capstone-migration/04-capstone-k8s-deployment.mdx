@@ -11,6 +11,33 @@ topics: ["Deployment", "Kubernetes", "Helm", "HA", "Multiple Executors", "AIP-61
 
 DAG код готов (предыдущий урок). Теперь production deployment: Helm chart с HA setup (2 scheduler + 2 triggerer), Multiple Executors (Celery + Kubernetes mixed), KEDA для autoscaling, GitOps через ArgoCD. Этот урок — концентрация модуля 15 (Production deployment) applied к capstone.
 
+<DiagramContainer title="Capstone K8s deployment — Helm + multi-executors + GitOps" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="GitOps source — ArgoCD Application" tooltip="ArgoCD watches Git repo с Helm values. На merge PR — CI builds Docker image (tag = git SHA), updates values-capstone-prod.yaml, ArgoCD detects change и syncs к cluster через helm upgrade. Automated rolling restart.">ArgoCD → Helm chart (values-capstone-prod.yaml)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="helm upgrade → rolling restart" />
+    <FlowRow>
+      <DataBox label="Webserver × 3 (HA)" tooltip="3 replicas Flask webserver за NGINX Ingress с TLS через cert-manager. defaultUser disabled (модуль 15.08), expose_config: False, secure_cookie: True. behind ALB.">Flask + ALB + TLS</DataBox>
+      <DataBox label="Scheduler × 2 (HA)" tooltip="2 schedulers с pod anti-affinity (разные nodes). HA через PostgreSQL row-level locks на slot_pool (модуль 04). Critical section serialized — second scheduler получает lock_not_available, пропускает tick.">HA через row-locks (модуль 04)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="DAG Processor × 1 standalone" tooltip="Standalone DAG Processor preview к 3.x mandatory (AIP-66). Изолирован от scheduler loop — heavy parsing (TensorFlow imports, factories) не замедляет scheduling phase. В 3.x становится обязательным.">preview к 3.x (AIP-66)</DataBox>
+      <DataBox label="Triggerer × 2 (HA)" tooltip="2 triggerers для deferrable sensors (модуль 09). asyncio event loop держит активные triggers. HA через SELECT FOR UPDATE SKIP LOCKED — каждый trigger picks отдельный triggerer.">asyncio + SKIP LOCKED</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Multiple Executors AIP-61" />
+    <FlowRow>
+      <DataBox label="Celery workers × 2-16 (KEDA autoscale)" tooltip="KEDA scales Celery workers based на Redis queue length. Idle = 2 workers, 100 tasks queued = scale до 10, max 16. Cooldown 300s. Light tasks (consume_kafka, notify) идут сюда.">KEDA + Redis queue length</DataBox>
+      <DataBox label="K8s Executor pods (per-task)" tooltip="Heavy tasks (spark_transform) запускаются как own K8s pod с custom resources через executor_config pod_override. 2 CPU / 4Gi limits, dedicated serviceAccount airflow-spark-runner. Ephemeral — pod destroyed после task.">spark_transform — own pod (4Gi)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="PgBouncer transaction mode → RDS" />
+    <FlowRow>
+      <DataBox label="PgBouncer × 2 + RDS PostgreSQL Multi-AZ" tooltip="PgBouncer в transaction mode (модуль 15.04) для connection pooling — multiple Executors + KEDA scale 2-16 = нужны ~80-100 backend connections. RDS Multi-AZ для failover. External Secrets sync credentials из Vault через ESO.">connection pool + Vault secrets</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Architecture deployment (recap)

@@ -28,6 +28,38 @@ Approval workflows — это pipelines где требуется human decision
 
 Common pattern: DAG прогоняет computation → waits for human approval → executes destructive/important action.
 
+<DiagramContainer title="Sensor-based approval flow: poke → approval table → resume" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="compute_loan_details task" tooltip="Upstream computation task — рассчитывает amount, fees, terms. Возвращает dict через XCom. Этот результат — input для approval (manager видит amount чтобы принимать решение). Task должен complete success до того как sensor начнётся.">computation completes</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="approval task starts" />
+    <FlowRow>
+      <DataBox label="wait_for_approval sensor (first poke)" tooltip="@task.sensor с poke_interval=300 (5 min), timeout=86400 (24h), mode='reschedule' (CRITICAL: освобождает worker между pokes vs poke mode которая занимает worker 24h), retries=0 (approval либо есть либо нет). На first poke: row не существует → INSERT approval row с status='pending' + notify approver через Slack/email.">create row + notify</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="INSERT ON CONFLICT DO NOTHING" />
+    <FlowRow>
+      <DataBox label="approvals table: status='pending'" tooltip="External Postgres table с unique constraint на (dag_id, run_id, task_id) — idempotent. Fields: approval_id, status, decided_by, decision_reason, expires_at. Notify только при first poke (check new row) — избегать Slack spam при subsequent pokes.">state in external DB</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="approver открывает Slack/UI" />
+    <FlowRow>
+      <DataBox label="Approver clicks Approve в Slack" tooltip="Slack button → webhook к FastAPI backend → POST /api/approvals/{id}/approve. Backend executes UPDATE: status='approved', decided_by=user, decided_at=now WHERE approval_id=X AND status='pending'. Idempotent — если уже approved, rowcount=0.">approved by manager</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="sensor next poke (5 min later)" />
+    <FlowRow>
+      <DataBox label="sensor reads approval row" tooltip="poke_interval=300s — каждые 5 минут sensor выполняет SELECT status FROM approvals WHERE approval_id=X. Между pokes worker свободен (mode='reschedule'). 5 min — sweet spot: не spam DB, разумный feedback latency после approval.">SELECT status FROM approvals</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="status='approved' → is_done=True" />
+    <FlowRow>
+      <DataBox label="PokeReturnValue(is_done=True, xcom_value)" tooltip="Status='approved' → return PokeReturnValue с xcom_value={'approved_by': decided_by, 'reason': reason}. Sensor exits success. Downstream task получает approval result через XCom. Status='rejected' → AirflowFailException (no retry). Status='expired' → AirflowFailException. Status='pending' → is_done=False (continue poking).">sensor returns success</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="downstream resumes" />
+    <FlowRow>
+      <DataBox label="disburse task executes" tooltip="Destructive/important action — execute только после approval. Pulls approval_result от sensor через XCom. INSERT INTO disbursements с approved_by/approved_at для audit trail. Compliance: every disbursement traceable обратно к specific manager decision + timestamp.">execute important action</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Design: external approval table

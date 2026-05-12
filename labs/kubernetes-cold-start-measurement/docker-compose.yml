@@ -1,0 +1,36 @@
+# Postgres и Redis для Airflow metadata DB / Celery broker.
+# Развёртываются ВНЕ Kubernetes для скорости и упрощения lab.
+# Airflow components (scheduler, workers, webserver) деплоятся в KIND через Helm.
+#
+# Postgres экспонируется на host network, KIND кластер подключается к нему
+# через extraHosts ("host.k3d.internal" → host gateway).
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: airflow-lab-postgres
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: airflow-lab-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  postgres-data:

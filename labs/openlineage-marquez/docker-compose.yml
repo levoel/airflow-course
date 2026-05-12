@@ -1,0 +1,131 @@
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.5-python3.11
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY:-46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${WEBSERVER_SECRET_KEY:-a-secret-key-for-webserver}
+    # OpenLineage конфигурация — HTTP transport в Marquez.
+    AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "http://marquez:5000", "endpoint": "api/v1/lineage"}'
+    AIRFLOW__OPENLINEAGE__NAMESPACE: "airflow-lab"
+    AIRFLOW__OPENLINEAGE__DISABLED: "false"
+    # Подключение к source DB для PostgresOperator-ов в DAG-ах.
+    AIRFLOW_CONN_SOURCE_DB: "postgres://etl:etl@source-db:5432/etl"
+    _PIP_ADDITIONAL_REQUIREMENTS: "apache-airflow-providers-openlineage>=1.10.0 apache-airflow-providers-postgres>=5.10.0 openlineage-airflow>=1.20.0"
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    marquez-api:
+      condition: service_started
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  # Отдельная Postgres для Marquez — спецификация Marquez требует свою DB.
+  marquez-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "marquez"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - marquez-data:/var/lib/postgresql/data
+
+  marquez-api:
+    image: marquezproject/marquez:0.48.0
+    ports:
+      - "5000:5000"
+      - "5001:5001"  # admin port
+    environment:
+      MARQUEZ_PORT: 5000
+      MARQUEZ_ADMIN_PORT: 5001
+      MARQUEZ_DB_HOST: marquez-db
+      MARQUEZ_DB_PORT: 5432
+      MARQUEZ_DB_USER: marquez
+      MARQUEZ_DB_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    entrypoint: ["/opt/marquez/wait-for-it.sh", "marquez-db:5432", "--", "./entrypoint.sh"]
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.48.0
+    ports:
+      - "3000:3000"
+    environment:
+      MARQUEZ_HOST: marquez-api
+      MARQUEZ_PORT: 5000
+      WEB_PORT: 3000
+    depends_on:
+      - marquez-api
+
+  # Source/Sink Postgres — где живут реальные данные ETL.
+  source-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: etl
+      POSTGRES_PASSWORD: etl
+      POSTGRES_DB: etl
+    ports:
+      - "5433:5432"
+    volumes:
+      - source-data:/var/lib/postgresql/data
+      - ./sql/init:/init:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "etl"]
+      interval: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username airflow --password airflow \
+          --firstname Admin --lastname User \
+          --role Admin --email admin@example.com
+    restart: "no"
+
+  webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  marquez-data:
+  source-data:

@@ -11,6 +11,31 @@ topics: ["Capstone", "Implementation", "Datasets", "Dynamic Mapping", "Deferrabl
 
 Этот урок — полная implementation capstone DAG из предыдущего урока. Production-grade Python код объединяющий все killer-темы курса. Code в этом уроке can быть скопирован в production codebase почти as-is — после adjusting к вашим infrastructure specifics.
 
+<DiagramContainer title="Capstone DAG implementation flow — все killer-темы курса в одном pipeline" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="schedule=[3 Kafka Datasets]" tooltip="Dataset-driven scheduling из модуля 08. DAG триггерится когда Debezium/Kafka producers обновляют любой из трёх Datasets — kafka_orders, kafka_line_items, kafka_customers. Никаких cron — pure data-aware orchestration.">kafka_orders, kafka_line_items, kafka_customers</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG triggered by Dataset event" />
+    <FlowRow>
+      <DataBox label="Phase 1 — Dynamic Task Mapping (модуль 07)" tooltip="consume_kafka.expand(topic=KAFKA_TOPICS) создаёт N parallel mapped tasks — по одному per Kafka topic. Каждый task получает свой topic как parameter. Executor: CeleryExecutor (light, short-lived).">consume_kafka.expand(topic=KAFKA_TOPICS) → 3 mapped TI</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="3 parallel light tasks → S3 staging" />
+    <FlowRow>
+      <DataBox label="Phase 2 — Verify staging" tooltip="verify_staging проверяет что все S3 staging файлы записаны. AirflowFailException если missing — fail-fast pattern из модуля 17.08. Executor: CeleryExecutor.">verify_staging (Celery)</DataBox>
+      <DataBox label="Phase 3 — Multiple Executors AIP-61 (модуль 05)" tooltip="spark_transform запускается на KubernetesExecutor — own pod с custom resources (2 CPU, 4Gi). Light tasks остаются на Celery, heavy task получает изолированный pod. Mixed executors в одном DAG — feature 2.10+.">spark_transform (KubernetesExecutor + pool)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="XCom metrics → custom S3 backend (модуль 06)" />
+    <FlowRow>
+      <DataBox label="Phase 4 — Load ClickHouse" tooltip="clickhouse_load читает Iceberg gold table, idempotent DROP PARTITION + INSERT (модуль 17.02). inlets/outlets emit OpenLineage events автоматически — модуль 14.">clickhouse_load (idempotent + OL inlets/outlets)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Datasets updated → downstream DAGs триггерятся" />
+    <FlowRow>
+      <DataBox label="Phase 5 — Notify team" tooltip="Slack notification with full metrics + Marquez lineage URL. Production: replace на Listener API (модуль 12) для централизованного alerting через on_failure / on_retry events.">notify_team (Slack + lineage URL)</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 Структура файлов:
 
 ```

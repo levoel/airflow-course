@@ -13,6 +13,31 @@ topics: ["DAG", "Decorator", "default_args", "Lifecycle"]
 
 Этот урок препарирует DAG object изнутри: какие поля, как они инициализируются, какие callbacks доступны, какие edge cases возникают при parsing.
 
+<DiagramContainer title="Lifecycle DAG object — от .py файла до scheduling" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="dag.py" tooltip="Python файл в dags/ folder. Содержит @dag(...) decorator + invocation my_dag(). Файл лежит в filesystem, обычно gitSync sidecar в production K8s.">@dag(...) + invocation</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="importlib.import_module()" />
+    <FlowRow>
+      <DataBox label="DagFileProcessor (child process)" tooltip="Multiprocessing child процесс scheduler-а. Importит .py файл, ловит exceptions в import_error table, находит DAG objects в module globals. Запускается каждые min_file_process_interval секунд (default 30s).">parse module, find DAG objects</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG.__init__() invoked" />
+    <FlowRow>
+      <DataBox label="DAG object (in memory)" tooltip="airflow.models.dag.DAG instance. Содержит task_dict, schedule resolved в Timetable, default_args applied к tasks, validated structure (no cycles, unique task_ids).">task_dict, timetable, callbacks</DataBox>
+      <DataBox label="DagBag" tooltip="Container который держит все DAG objects найденные в processed файлах. Используется для validation и временного in-memory caching перед serialization.">collection of DAGs</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG.to_json() + hash" />
+    <FlowRow>
+      <DataBox label="serialized_dag table" tooltip="PostgreSQL таблица где хранится JSON-представление DAG. После этой записи scheduler, webserver, triggerer работают только с serialized данными, не парсят .py повторно.">INSERT/UPDATE если hash changed</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="scheduler picks up" />
+    <FlowRow>
+      <DataBox label="Scheduler — schedules DagRuns" tooltip="SchedulerJob main loop читает serialized_dag, использует timetable.next_dagrun_info() для определения когда создать следующий DagRun, переводит TaskInstances scheduled → queued.">create DagRun, schedule TIs</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Anatomy DAG object
@@ -137,6 +162,24 @@ my_dag()
 ```
 
 Inheritance применяется во время инстанцирования BaseOperator. Конкретные task args **переопределяют** default.
+
+<DiagramContainer title="default_args inheritance — DAG → Task" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="DAG.default_args" tooltip="Dict переданный в @dag(default_args={...}). Хранится как attribute DAG object. При инстанцировании каждого task используется как baseline.">{retries: 2, retry_delay: 5min, owner: 'data-team'}</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="BaseOperator.__init__ merges" />
+    <FlowRow>
+      <DataBox label="Task A — no override" tooltip="Task инстанцируется без custom kwargs для retries/retry_delay. BaseOperator берёт значения из dag.default_args. Финальное состояние: retries=2, retry_delay=5min.">inherits all → retries=2</DataBox>
+      <DataBox label="Task B — @task(retries=0)" tooltip="Task явно override retries=0 при декорировании. BaseOperator видит kwarg, использует его вместо default_args значения. Финальное retries=0 — task не будет retry при failure.">override retries → retries=0</DataBox>
+      <DataBox label="Task C — pool='gpu'" tooltip="Task добавляет новый attribute (pool), который не был в default_args. Merge: получает retries=2 от default_args + pool='gpu' от per-task kwarg.">merge → retries=2, pool='gpu'</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Final TaskInstance attrs" tooltip="При scheduling эти attributes используются для retry logic, timeout, pool reservation. Сериализуется в serialized_dag JSON для consistency между scheduler и workers.">applied per task at parse time</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
 
 ### Common default_args keys
 

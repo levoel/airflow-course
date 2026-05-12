@@ -13,6 +13,31 @@ Migration на Airflow 3.x — это **continuous process**, не one-time even
 
 Strategy: enable tools в CI **сейчас** (на 2.10/2.11), accumulate fixes month-by-month. К moment actual migration — codebase уже 3.x-compatible.
 
+<DiagramContainer title="Migration toolchain — pipeline от discovery к CI enforcement" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="airflow upgrade-check --to-version 3.0" tooltip="Built-in Airflow CLI command (2.7+). Сканирует airflow.cfg, DAGs и plugins на deprecation issues для target version. Output: WARNING (works в 3.x но deprecated), CRITICAL (will NOT work в 3.x), INFO (informational). Covers: imports, deprecated APIs, removed operators, FAB usage, airflow.contrib.">Discovery — baseline scan</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="counts violations: WARNING / CRITICAL" />
+    <FlowRow>
+      <DataBox label="ruff AIR301 — deprecated imports" tooltip="Ruff rule (0.4+) для import renames. Detects: airflow.decorators → airflow.sdk, airflow.models import Variable → airflow.sdk import Variable, from airflow import Dataset → airflow.sdk import asset. Auto-fix через --fix flag — handles hundreds files в одной команде.">ruff check --fix --select AIR301</DataBox>
+      <DataBox label="ruff AIR302 — deprecated APIs" tooltip="Ruff rule для function/parameter usage. Finds: execution_date → logical_date, schedule_interval → schedule, sla= parameter (removed в 3.x), DagRun.run_id formatting changes. Most auto-fixable, но sla removal требует manual rework через Listener API.">ruff check --fix --select AIR302</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="bulk auto-fix → existing violations" />
+    <FlowRow>
+      <DataBox label="Pre-commit hook" tooltip="Blocks NEW deprecated code на commit time. ruff-pre-commit с AIR301/AIR302 selected. Existing violations whitelisted через per-file-ignores. Net effect: count violations decreases monotonically — new code clean, legacy fixed gradually.">prevent NEW violations</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="CI: warning mode (initial)" tooltip="GitHub Actions/GitLab CI runs ruff и upgrade-check weekly. continue-on-error: true — production builds pass даже если violations exist. Posts stats к Slack: 'Airflow 3.x migration: 47 warnings, 3 criticals'. Trend graph week-by-week — visible progress.">weekly trend → Slack dashboard</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="violations → 0 over 6-12 months" />
+    <FlowRow>
+      <DataBox label="CI: strict mode (final stage)" tooltip="После migration ready — strict mode на main branch. ruff AIR301 enforcement exits 1 если violations. PRs blocked. К migration day codebase уже 3.x-compatible style — actual upgrade = Helm chart switch + airflow db migrate.">block PRs → migration ready</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## `airflow upgrade-check` — built-in migration helper

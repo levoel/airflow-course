@@ -31,6 +31,32 @@ OpenLineage (модуль 14) — индустриальный стандарт 
 
 Strategy: **use standard operators where possible, add extractors where not**.
 
+<DiagramContainer title="OpenLineage emission flow: operator → extractor → OL event → Marquez" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Airflow task executes" tooltip="Любой task (standard SQL operator, custom operator, @task с inlets/outlets) запускается worker-ом. OL provider (apache-airflow-providers-openlineage) подписан на task lifecycle events через listener interface. На execute start/complete — trigger lineage extraction.">execute() called</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="OL provider hooks on task lifecycle" />
+    <FlowRow>
+      <DataBox label="Built-in extractors (SQL ops)" tooltip="OL provider includes extractors для SQLExecuteQueryOperator, PostgresOperator, BigQueryOperator. Парсит SQL через sqlparse — identifies source tables (FROM/JOIN), target tables (INSERT/UPDATE/MERGE), schema inference. Auto, без code changes — поэтому prefer standard operators.">parse SQL → inputs/outputs</DataBox>
+      <DataBox label="Custom extractor (CustomOperator)" tooltip="BaseExtractor subclass с get_operator_classnames() returning class name. extract() возвращает TaskMetadata(inputs, outputs, run_facets, job_facets). Register через entry_points в setup.py или env var OPENLINEAGE_EXTRACTORS. Errors silently swallowed — always log в extractor.">extract() → TaskMetadata</DataBox>
+      <DataBox label="inlets/outlets (declarative)" tooltip="@task(inlets=[Table('warehouse', 'staging', 'orders')], outlets=[Table(...)]) — declarative lineage без extractor class. OL provider reads inlets/outlets directly. Simplest path — best для PythonOperator/@task где SQL не parseable.">Table objects in decorator</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="OpenLineageAdapter builds event" />
+    <FlowRow>
+      <DataBox label="OL event (JSON)" tooltip="Standardized OpenLineage event schema: eventType (START/COMPLETE), eventTime, run (UUID), job (name, namespace), inputs (datasets с schema facets), outputs (datasets), facets (sql, ownership, schema). JSON serialized. Versioned schema (1.0+) — backward compatible.">eventType, run, job, datasets</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="HTTP POST к transport URL" />
+    <FlowRow>
+      <DataBox label="Marquez backend (or DataHub/OL collector)" tooltip="Marquez — reference implementation OL backend. Postgres storage. REST API + UI. Получает events через HTTP, dedups runs (start/complete same run UUID), builds lineage graph. Retention: MARQUEZ_RETENTION_DAYS=180 — older events archived. DataHub — alternative backend с broader features.">HTTP collector → DB</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="UI visualization" />
+    <FlowRow>
+      <DataBox label="Marquez graph: source → task → target" tooltip="UI рендерит lineage graph. Click на dataset (snowflake:warehouse.dim.orders) — видишь все upstream sources и downstream consumers. Click на task — видишь SQL/code executed. Powers: impact analysis (deprecate column → affected dashboards), GDPR compliance (trace PII flow), root cause analysis.">interactive graph + impact</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Pattern 1: Prefer standard operators over @task

@@ -1,0 +1,27 @@
+# DaemonSet который тянет airflow image на каждый node и держит его в cache.
+# После apply все pods на этом node не будут ждать image pull (IfNotPresent → cache hit).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: image-prepull-airflow
+  namespace: airflow
+spec:
+  selector:
+    matchLabels:
+      app: image-prepull
+  template:
+    metadata:
+      labels:
+        app: image-prepull
+    spec:
+      initContainers:
+        - name: prepull
+          image: apache/airflow:2.10.5-python3.11
+          command: ["true"]
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi

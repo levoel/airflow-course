@@ -54,6 +54,36 @@ Stage 6 (post-merge): Deploy
 
 Stages 1-4 — **blocking** на каждом PR push. Stage 5 — на main branch и nightly (slow). Stage 6 — на main merge.
 
+<DiagramContainer title="CI pipeline: pre-commit → ruff → pytest → upgrade-check → deploy" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Stage 1: pre-commit" tooltip="Local + CI через pre-commit/action@v3. Runs: ruff check + ruff format check, yamllint, trailing-whitespace, end-of-file-fixer, check-yaml/toml, detect-private-key, check-added-large-files. ~5 секунд. Самая быстрая обратная связь — ловит cosmetic + security issues до серьёзного CI.">~5s, local feedback</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="commit ok" />
+    <FlowRow>
+      <DataBox label="Stage 2: ruff lint" tooltip="astral-sh/ruff-action@v1 — Rust-implemented linter, 100x быстрее legacy. Replaces black + flake8 + isort + pyupgrade. Включает AIR301/AIR302 rules — Airflow-specific deprecated imports/APIs. Critical для preparation к 3.x migration. Auto-fix через --fix.">~10s, static lint</DataBox>
+      <DataBox label="Stage 3: static analysis" tooltip="mypy (continue-on-error: True — warnings only), bandit security scan (-ll -ii blocks high+critical), airflow upgrade-check (initially warning, eventually strict). Catches type issues, security vulnerabilities, deprecation warnings до runtime.">~30s, mypy + bandit</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="static checks pass" />
+    <FlowRow>
+      <DataBox label="Stage 4: DAG validity" tooltip="pytest tests/test_dag_validity.py — DagBag().import_errors check, structural tests (tags, owner, no cycles, serializable). SQLite + SequentialExecutor. ~30s на 100 DAGs. Blocking PR — ловит import errors до review.">~30s, no imports broken</DataBox>
+      <DataBox label="Stage 5: unit tests" tooltip="pytest tests/unit/ --cov=dags --cov=plugins. Mocked Hooks, Connections, Variables. UNIT_TEST_MODE=True. 2-5 min для 200 tests. Coverage report к Codecov. Blocking PR — ловит business logic regressions.">~2-5 min, mocked deps</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="PR может merge → main" />
+    <FlowRow>
+      <DataBox label="Stage 6: integration tests" tooltip="if: github.event_name == 'push' — только на push в main, не на каждый PR commit. Postgres service в GitHub Actions, LocalExecutor. airflow dags test для top critical DAGs. moto/wiremock для AWS/HTTP. 10-30 min. Post-merge — не блокирует PR review.">~10-30 min, real Airflow</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="integration ok" />
+    <FlowRow>
+      <DataBox label="Stage 7: airflow upgrade-check" tooltip="airflow upgrade-check --to-version 3.0 — built-in command, готовность к migration. Output: deprecated imports, removed APIs, breaking changes. Initially logged как warning, eventually strict (exit 1). Quarterly drill: full upgrade dry-run на staging.">~1 min, 3.x readiness</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="all checks green" />
+    <FlowRow>
+      <DataBox label="Stage 8: deploy staging" tooltip="if: github.ref == 'refs/heads/main'. Astronomer Astro deploy via astro CLI или kubectl apply для Kubernetes. ASTRONOMER_KEY_ID/SECRET через GitHub Encrypted Secrets. Auto-deploy на main merge — instant feedback в staging environment.">astro deploy / kubectl</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## GitHub Actions — complete workflow

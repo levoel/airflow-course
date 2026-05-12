@@ -13,6 +13,47 @@ topics: ["Migration Playbook", "Step-by-Step", "Rollback", "Production"]
 
 Total timeline: **6-12 месяцев preparation** + **1 weekend** actual migration. Не rush — major version upgrade — once-in-3-years event, делайте properly.
 
+<DiagramContainer title="Migration playbook timeline — Saturday morning execution" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Pre-flight: upgrade к 2.11 LTS" tooltip="Не migrate с 2.10 напрямую. Сначала upgrade к 2.11 — same architecture, но includes migration helpers, AIR301/AIR302 ruff rules active, supports newer providers. Low risk, 1-2 weeks. К migration day должно быть 0 ruff violations.">Phase 1: month -6 to -1</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="ruff violations → 0, staging soak test" />
+    <FlowRow>
+      <DataBox label="Day -1: Backup" tooltip="RDS snapshot (instant PITR), pg_dump (offline backup), Helm values backup. Multiple recovery points — backup before EACH migration step, не just pre-migration. Document current Airflow version.">aws rds create-db-snapshot + pg_dump</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Saturday 09:00 UTC start" />
+    <FlowRow>
+      <DataBox label="09:05 — Pause all DAGs" tooltip="xargs parallel airflow dags pause across all DAGs. Verify PAUSED == TOTAL. Slack communication 'migration started'. Critical: prevent new TaskInstance writes к DB during migration.">airflow dags pause (all)</DataBox>
+      <DataBox label="09:15 — Wait in-flight tasks" tooltip="Wait running/queued tasks complete (max 30 min). Query: SELECT count(*) FROM task_instance WHERE state IN ('running','queued'). Если timeout — proceed anyway с warning. Минимизация partial-state.">drain TIs (max 30 min)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DB writes stopped" />
+    <FlowRow>
+      <DataBox label="09:45 — Helm upgrade" tooltip="helm upgrade airflow --version 2.0.0 --values values-3x.yaml. migrateDatabaseJob.enabled=false — мы run migrate manually. New 3.x pods crash because DB schema 2.x — это OK, ждём db migrate.">helm upgrade к chart 2.0+</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="10:15 — airflow db migrate" tooltip="Manually run migration (controlled). Alembic применяет 2.x → 3.x schema changes. Large DB: 15-30 min, иногда 1-2 hours (ab_user_role на millions rows). Monitor pg_stat_activity, не cancel — может leave inconsistent state.">Alembic schema migration</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="schema 3.x ready" />
+    <FlowRow>
+      <DataBox label="10:45 — Wait healthy components" tooltip="kubectl wait для scheduler, apiServer, dagProcessor, triggerer ready. Verify API responds /api/v2/version returns 3.0.x. External Secrets sync — может занять 1-2 min для new K8s Secrets.">pods Ready + API responds</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="11:00 — Smoke testing" tooltip="API /api/v2/health, UI loads, DAGs count matches, no import errors (airflow dags list-import-errors), sample DAG dry run (airflow dags test capstone_orders_etl_realtime).">verify functionality</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="incremental unpause" />
+    <FlowRow>
+      <DataBox label="11:30 — Unpause critical DAGs" tooltip="Critical DAGs first (capstone_orders_etl, fraud_detection_pipeline), 10s между each. Monitor 30 min. Если clean — unpause normal priority DAGs. Снизить max_active_runs временно для blast radius.">критические DAGs первыми</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="2-hour soak observation" />
+    <FlowRow>
+      <DataBox label="13:00-15:00 — Soak + Communicate success" tooltip="Watch scheduler health (kubectl get pods), task failures (airflow tasks list-failed), Grafana metrics (scheduler_loop_duration, executor.queued_tasks). 16:00 UTC — migration window closes (rollback if not done).">monitor → Slack success</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Pre-requisites — что должно быть готово

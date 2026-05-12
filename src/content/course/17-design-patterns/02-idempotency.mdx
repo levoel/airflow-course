@@ -56,6 +56,29 @@ def load_orders(date: str):
     """)
 ```
 
+<DiagramContainer title="MERGE INTO vs INSERT: rerun scenarios" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Initial run: 100 orders в staging" tooltip="Первый запуск task для ds=2026-05-12. В staging.orders есть 100 rows за этот день. Target table orders пустая для этого ds. Оба варианта (INSERT и MERGE) загружают эти 100 rows в target.">staging has 100 rows for ds</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Path A: INSERT (NOT idempotent)" />
+    <FlowRow>
+      <DataBox label="INSERT INTO orders SELECT ... — 100 rows" tooltip="INSERT добавляет 100 rows в target. Если транзакция committed — данные persistent. Если crashed на 50% (network blip) — могут commit chunks или rollback зависит от транзакции. Поведение non-deterministic при failure.">target has 100 rows</DataBox>
+      <DataBox label="MERGE INTO orders USING staging ON id — 100 upsert" tooltip="MERGE с unique key (order_id) — для каждого row check ON конструкция: если row с order_id уже есть → UPDATE, иначе INSERT. На первом run все 100 = NOT MATCHED → INSERT. Result identical: target has 100 rows.">target has 100 rows</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="task FAILS на 50% completion — Airflow retry" />
+    <FlowRow>
+      <DataBox label="Retry INSERT: ещё 100 rows" tooltip="Retry заново выполняет INSERT. Если предыдущая транзакция committed chunks (50 rows) — теперь target has 50 + 100 = 150. Если предыдущая полностью rolled back — target has 100. Если streamed chunks — могут быть duplicates 50 + 100 = 150 с overlap. Non-deterministic, dirty data.">duplicates: 150-200 rows</DataBox>
+      <DataBox label="Retry MERGE: те же 100, без дубликатов" tooltip="MERGE на retry: для каждого row check ON. На retry все 100 orders уже have matching order_id в target → MATCHED → UPDATE (no-op если values identical). Result: target still has exactly 100 rows. Final state identical regardless of failure point.">stable: 100 rows</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="manual rerun (backfill, fix bug)" />
+    <FlowRow>
+      <DataBox label="INSERT: catastrophic accumulation" tooltip="Каждый rerun добавляет ещё 100 rows. После 3 reruns — 300+ rows вместо 100. QA замечает через дни. Fix требует DELETE + cleanup duplicates. Production-grade ETL не должен использовать pure INSERT для повторно-запускаемых операций.">N reruns = N×100 rows</DataBox>
+      <DataBox label="MERGE: deterministic, final state correct" tooltip="N reruns — все идемпотентны. Каждый раз final state target = staging для этого ds. Это foundation reliable ETL: retry, manual rerun, backfill — все безопасны. Plus PostgreSQL ON CONFLICT (col) DO UPDATE — алias для MERGE на старых версиях.">N reruns = 100 rows</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Технология 1: MERGE INTO

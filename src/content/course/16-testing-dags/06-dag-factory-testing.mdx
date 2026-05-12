@@ -106,6 +106,35 @@ for dag_id, dag_obj in generate_dags().items():
 3. `generate_dags` — обрабатывает edge cases (empty list, malformed YAML, partial fails)
 4. Integration — generated DAGs проходят DAG validity tests
 
+<DiagramContainer title="Factory function flow: config → factory → generated DAGs" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="YAML config" tooltip="config/etl_dags.yaml — list of dicts с required fields (id, source_table, target_table, schedule). Committed в Git для deterministic generation. Test point: pytest fixture создаёт temp YAML с разным содержимым (empty, single, multiple, duplicate, malformed).">list of dicts</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="yaml.safe_load" />
+    <FlowRow>
+      <DataBox label="generate_dags(config_path)" tooltip="Top-level orchestrator. Reads YAML, validates list structure, detects duplicates dag_ids (raise ConfigError если есть), iterates через configs, вызывает make_etl_dag для каждого. Returns dict[dag_id, DAG]. Test edge cases: empty list ([]), not-a-list (dict), malformed YAML.">orchestrator</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="for each cfg" />
+    <FlowRow>
+      <DataBox label="validate_config(cfg)" tooltip="Eager validation — fail fast с informative error. Required fields check, type check, schedule whitelist. Test через pytest.mark.parametrize: каждое required field missing → ConfigError, invalid id types ([], None, 123) → ConfigError, valid schedules pass.">required + types + schedule</DataBox>
+      <DataBox label="make_etl_dag(cfg)" tooltip="Factory function — returns DAG instance. Captures cfg values в local vars (избегать closure issues), builds @dag(...) с params, defines tasks внутри, calls generated() для instantiate. Test: dag.dag_id == cfg['id'], len(dag.tasks) == 3, tags содержат team, dependencies правильные.">DAG instance</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="result dict" />
+    <FlowRow>
+      <DataBox label="{dag_id: DAG, ...}" tooltip="Return value generate_dags. Test point: assert set(result.keys()) == expected_ids, len(result) == len(configs) если no duplicates. Property-based test через hypothesis: random configs → call dice → identical output (deterministic).">dict per call</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="critical: globals() assignment" />
+    <FlowRow>
+      <DataBox label="for dag_id, dag in generate_dags().items(): globals()[dag_id] = dag" tooltip="Critical step. Airflow scans module's globals() для DAG instances. Если результат остался в local var (dags = generate_dags()) — DAGs invisible в UI. Test: import factory module, assert hasattr(factory_module, dag_id) для каждого expected dag_id.">module-level globals</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG parse → serialized_dag table" />
+    <FlowRow>
+      <DataBox label="Generated DAGs visible в UI" tooltip="Final state: scheduler видит DAGs в globals(), serialize в metadata DB, UI рендерит. Integration test: dagbag = DagBag('dags/'); assert все expected dag_ids в dagbag.dags; для каждого: SerializedDAG.to_dict + from_dict round-trip без errors.">DagBag has all DAGs</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Test 1 — validate_config

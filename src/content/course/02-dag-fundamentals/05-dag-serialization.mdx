@@ -36,6 +36,34 @@ DagFileProcessor parses .py
 Scheduler, Webserver — read from serialized_dag
 ```
 
+<DiagramContainer title="DAG serialization pipeline + hash invalidation" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="dag.py" tooltip="Python source file в /opt/airflow/dags/. Содержит @dag + tasks definitions. Изменения файла обнаруживаются DagFileProcessor через mtime check.">source file in dags/</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DagFileProcessor parses (every min_file_process_interval)" />
+    <FlowRow>
+      <DataBox label="DAG object in memory" tooltip="Результат importlib.import_module() + DAG(...) instantiation. Содержит всю structure: tasks, dependencies, schedule, default_args. Существует временно в parsing child process.">in-memory Python object</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="DAG.to_json() — structure only, no code" />
+    <FlowRow>
+      <DataBox label="JSON data" tooltip="Сериализованная structure: task_ids, python_callable_name (НЕ код!), arguments, dependencies, schedule. Compress опционально с zstandard (2.7+). НЕ включает: function bodies, Variables, Connections.">{dag_id, tasks: [...], schedule}</DataBox>
+      <DataBox label="dag_hash = MD5(data)" tooltip="MD5 от sorted JSON. Используется для invalidation check: если hash совпадает с existing, никаких DB writes — огромная экономия при больших installations.">hash for change detection</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="compare hash with existing row" />
+    <FlowRow>
+      <DataBox label="hash unchanged → skip" tooltip="Если dag_hash в DB совпадает с newly computed — UPDATE statement не выполняется. Это критично для performance: при 10k DAGs без изменений нагрузка на DB минимальна.">no-op (most common case)</DataBox>
+      <DataBox label="hash changed → UPSERT" tooltip="INSERT ON CONFLICT UPDATE в serialized_dag table. Обновляются data, dag_hash, last_updated. Через min_serialized_dag_fetch_interval scheduler перечитает новую версию.">write JSON to serialized_dag</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Scheduler reads serialized_dag" tooltip="SchedulerJob использует SerializedDagModel.read_all_dags() с TTL cache (min_serialized_dag_fetch_interval, default 10s). Не парсит .py — работает с JSON.">scheduler consumer</DataBox>
+      <DataBox label="Webserver reads serialized_dag" tooltip="При request graph view — lazy load конкретного DAG через SerializedDagModel. Deserialize JSON → DAG object для render. НЕ нужен access к dags/ folder.">webserver lazy load</DataBox>
+      <DataBox label="Workers import .py at runtime" tooltip="При execute() task workers делают actual importlib import .py файла — потому что нужно реальное body Python function (его НЕТ в serialized JSON, только имя). Это причина почему workers всё ещё нуждаются в dags/ access.">need .py for code execution</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Таблица serialized_dag

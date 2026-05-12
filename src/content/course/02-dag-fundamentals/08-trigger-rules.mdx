@@ -13,6 +13,33 @@ topics: ["Trigger Rules", "Dependencies", "Branching", "Error Handling"]
 
 Этот урок — все 9 опций trigger_rule с use cases и semantics.
 
+<DiagramContainer title="Trigger rule evaluation — upstream states → downstream decision" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="upstream_A: success" tooltip="Task завершился успешно (state=success). Для всех trigger_rules кроме all_failed/one_failed — это позитивный сигнал. XCom available для downstream pull.">terminal: success</DataBox>
+      <DataBox label="upstream_B: failed" tooltip="Task failed после exhausted retries (state=failed). Влияет на all_success → upstream_failed, но позволяет all_done и one_failed.">terminal: failed</DataBox>
+      <DataBox label="upstream_C: skipped" tooltip="Task пропущен (state=skipped) — обычно после branching или short-circuit. Особенный case: для all_success строго это failure, для none_failed — допустимо.">terminal: skipped</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="downstream TI scheduling check" />
+    <FlowRow>
+      <DataBox label="trigger_rule evaluator" tooltip="При попытке перевода TI scheduled → queued scheduler проверяет trigger_rule downstream task против states upstream tasks. Если condition не met — TI остаётся None или становится upstream_failed/skipped.">evaluate(upstream_states)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="all_success → upstream_failed" tooltip="Default rule. Требует ВСЕ upstream success. Если хотя бы один failed/skipped — downstream marked upstream_failed (не запускается). Самый strict вариант.">strict, default</DataBox>
+      <DataBox label="all_done → scheduled" tooltip="Запускается когда все upstream достигли любого terminal state (success/failed/skipped). Используется для cleanup tasks которые должны run regardless of outcomes. Альтернатива as_teardown() в 2.7+.">cleanup pattern</DataBox>
+      <DataBox label="one_success → scheduled" tooltip="Запускается если хотя бы один upstream success. Критично для branching patterns: после @task.branch один путь success, другой skipped → one_success позволяет merge task запуститься.">branching merge</DataBox>
+      <DataBox label="one_failed → scheduled" tooltip="Запускается если хотя бы один upstream failed. Используется для alerting/notification только на failures — если все success, alert task просто skipped.">alert on any failure</DataBox>
+      <DataBox label="none_failed_min_one_success" tooltip="Гибрид: никаких failures + минимум один success. После branching где нужно гарантировать что хотя бы одна ветка succeeded (не все skipped). Самый robust pattern для branching merge.">robust branching merge</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="downstream TI gets final state" />
+    <FlowRow>
+      <DataBox label="scheduled → queued → running" tooltip="Если trigger_rule satisfied — TI попадает в normal scheduling flow. Critical section перевод scheduled → queued, executor подхватывает, worker исполняет.">normal execution path</DataBox>
+      <DataBox label="upstream_failed / skipped" tooltip="Если condition не satisfied — terminal state без execution. upstream_failed для failures upstream, skipped для skipped propagation. Downstream tasks этих TI пропагируют дальше по rules.">no execution, propagated</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## Когда срабатывает task

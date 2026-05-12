@@ -13,6 +13,29 @@ topics: ["TaskGroup", "SubDAG", "Anti-pattern", "DAG Organization"]
 
 Этот урок объясняет почему SubDAG плох и как использовать TaskGroup правильно.
 
+<DiagramContainer title="TaskGroup vs SubDAG — fundamental difference" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="SubDAG (legacy, deprecated)" tooltip="SubDagOperator создаёт ОТДЕЛЬНЫЙ DAG с dag_id='parent.child'. У него собственная dag_run row, собственные scheduling decisions, собственный entry в serialized_dag. Scheduler обрабатывает его independently от parent.">отдельный DAG в metadata DB</DataBox>
+      <DataBox label="TaskGroup (modern)" tooltip="Просто visual grouping — tasks физически остаются в parent DAG. Нет отдельного dag_run, нет отдельного entry в serialized_dag. group_id используется как prefix для task_id (group_id.task_id).">UI-only grouping в parent DAG</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="parent DagRun triggered" />
+    <FlowRow>
+      <DataBox label="SubDAG: 2x dag_run rows" tooltip="При каждом parent run scheduler создаёт ДВА dag_run: один для parent, один для subdag. SubDagOperator как task держит slot в parent's pool, ждёт пока subdag's DagRun завершится. Recursive consumption — основа deadlock проблемы.">parent + child DagRuns</DataBox>
+      <DataBox label="TaskGroup: 1x dag_run row" tooltip="Один DagRun, все tasks принадлежат parent DAG. Inner tasks scheduled через обычный flow, используют parent's executor с full parallelism. Нет recursive slot consumption.">single DagRun</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="SubDAG: deadlock risk" tooltip="При parallelism=32, 5 subdag operators по 10 inner tasks = нужно 55 slots, есть только 32. SubDag operators ждут свои inner tasks, inner tasks не могут получить slot. До 2.0 default SequentialExecutor усугублял (no parallelism внутри subdag).">slot consumption recursive</DataBox>
+      <DataBox label="TaskGroup: native parallelism" tooltip="Inner tasks используют common pool через standard scheduler logic. Никаких double slot usage. Можно nest groups (max 2-3 уровня recommended). Clear/retry semantics consistent с обычными tasks.">no overhead</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Removed in Airflow 3.0" tooltip="SubDagOperator deprecated с 2.2, полностью removed в 3.0. Migration path: convert в TaskGroup + cleanup metadata DB (DELETE FROM dag WHERE dag_id LIKE 'parent.%'). Никогда не используйте в новом коде.">SubDag is anti-pattern</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
 ---
 
 ## SubDagOperator — что было
