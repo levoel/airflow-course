@@ -1,0 +1,70 @@
+---
+title: "Обзор модуля: REST API v2 и airflowctl"
+description: "FastAPI v2 vs Flask v1, JWT/OAuth auth, airflowctl remote CLI"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["REST API", "FastAPI", "airflowctl", "OAuth"]
+---
+
+# REST API v2 и airflowctl — обзор модуля
+
+В Airflow 3.0 произошло фундаментальное обновление API: REST API v2 на FastAPI с автогенерируемым OpenAPI spec, плюс новый `airflowctl` provider для remote CLI без захода в scheduler container.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | REST API v2 (FastAPI, 3.0) | OpenAPI spec, /api/v2/ endpoints |
+| 03 | API v1 (Flask) vs v2 (FastAPI) | Migration paths, deprecation |
+| 04 | Authentication: JWT, OAuth2, basic | Token endpoints, refresh, RBAC |
+| 05 | airflowctl provider | Remote CLI через REST, install + auth |
+| 06 | Common automation patterns | Trigger DAGs externally, monitor, clear |
+
+## REST API v2 — ключевые endpoints
+
+```bash
+# Trigger DAG run
+POST /api/v2/dags/{dag_id}/dagRuns
+{
+  "logical_date": "2026-05-12T00:00:00Z",
+  "conf": {"key": "value"}
+}
+
+# Get DAG run state
+GET /api/v2/dags/{dag_id}/dagRuns/{dag_run_id}
+
+# List TaskInstances
+GET /api/v2/dags/{dag_id}/dagRuns/{run_id}/taskInstances
+
+# Clear tasks
+POST /api/v2/dags/{dag_id}/clearTaskInstances
+```
+
+OpenAPI spec → `/api/v2/openapi.json` → автогенерация клиентов на любом языке.
+
+## airflowctl — remote CLI
+
+```bash
+# Install
+pip install apache-airflow-providers-airflowctl
+
+# Auth
+airflowctl config set-url https://airflow.example.com
+airflowctl auth login
+
+# Use
+airflowctl dags list
+airflowctl dags trigger my_dag
+airflowctl dags pause my_dag
+```
+
+Преимущества vs `airflow` CLI:
+- Не требует захода в scheduler container
+- Работает с remote Airflow (production, staging)
+- Использует REST API под капотом
+
+## Killer takeaway
+
+Для CI/CD integration используйте `airflowctl` или прямые REST API calls — не SSH в scheduler container. REST API v2 designed для automation: idempotent requests, structured errors, JWT auth.

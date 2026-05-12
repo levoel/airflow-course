@@ -1,0 +1,225 @@
+---
+title: "Что такое Apache Airflow"
+description: "Workflow orchestration platform, место Airflow в архитектуре дата-платформ, отличия от scheduler и workflow engines"
+order: 1
+difficulty: "beginner"
+estimatedTime: 18
+topics: ["Airflow", "Orchestration", "Workflow", "DAG", "Архитектура"]
+---
+
+# Что такое Apache Airflow
+
+Apache Airflow — это не cron, не scheduler и не очередь задач. Это утверждение звучит парадоксально, потому что Airflow выполняет работу всех трёх — но сводить его к ним означает упустить главное. Airflow — это **платформа оркестрации рабочих процессов**, которая позволяет описывать сложные конвейеры обработки данных как код, исполнять их распределённо, повторять при сбоях и наблюдать через единый интерфейс.
+
+Airflow родился в Airbnb в 2014 году как ответ на типичную боль зрелой дата-команды: десятки пайплайнов, написанных на разных языках, запускаемых по cron, без видимости статуса, без понимания зависимостей, без единого места для отладки. К 2026 году Airflow стал стандартом отрасли — 30+ миллионов скачиваний в месяц, 80 000+ организаций, top-level проект Apache Software Foundation с 2019 года.
+
+---
+
+## Что значит «оркестрация»
+
+В русскоязычной литературе термин **orchestration** часто переводят как «оркестровка», что подразумевает дирижирование. И это удачная метафора: Airflow не выполняет работу сам — он управляет тем, **когда**, **в каком порядке**, **с какими параметрами** и **на каком исполнителе** запустить каждый шаг конвейера.
+
+Различие между тремя смежными понятиями:
+
+| Класс | Что делает | Примеры |
+|---|---|---|
+| **Scheduler** | Запускает программу по расписанию (cron, при наступлении события) | cron, systemd timers, AWS EventBridge |
+| **Job runner** | Запускает программу один раз, отслеживает её завершение | Jenkins job, GitHub Actions step |
+| **Workflow engine** | Управляет графом зависимых шагов, повторяет при сбоях, хранит состояние | Airflow, Prefect, Dagster, Temporal, Argo Workflows |
+
+Айрфлоу — workflow engine. Это значит, что вы можете описать не отдельную задачу, а **DAG** (Directed Acyclic Graph) — направленный ациклический граф, где узлы — это задачи, а рёбра — зависимости между ними.
+
+<Callout type="note">
+DAG — directed acyclic graph, направленный ациклический граф. «Направленный» — у рёбер есть направление (A → B значит «B зависит от A»). «Ациклический» — нельзя пройти из вершины в саму себя по рёбрам. Это гарантирует, что граф завершится за конечное число шагов. Любой пайплайн ETL по своей природе DAG: нельзя загрузить данные раньше, чем их извлечь.
+</Callout>
+
+---
+
+## Простой пример DAG
+
+Рассмотрим типичный ETL-конвейер:
+
+<DiagramContainer title="ETL DAG в Airflow" color="blue">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="extract_orders"
+        tooltip="Task 1: запрос к Postgres replica, сохранение в S3 staging. Может быть PostgresToS3Operator или TaskFlow @task. Зависит только от расписания."
+      >
+        SELECT FROM orders
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="upstream → downstream" />
+    <FlowRow>
+      <DataBox
+        label="transform_orders"
+        tooltip="Task 2: запускается ТОЛЬКО после успешного завершения extract_orders. Обычно через SparkSubmitOperator или PythonOperator с pandas. Состояние QUEUED → RUNNING → SUCCESS / FAILED."
+      >
+        Spark job
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="load_to_warehouse"
+        tooltip="Task 3: загрузка результата в Snowflake / ClickHouse. Может выполниться параллельно с notify_team, потому что они не зависят друг от друга — только от transform_orders."
+      >
+        COPY INTO warehouse
+      </DataBox>
+      <DataBox
+        label="notify_team"
+        tooltip="Task 4: отправка Slack-сообщения. Выполняется параллельно с load_to_warehouse. Если одна из них упадёт, downstream поведение зависит от trigger_rule."
+      >
+        Slack webhook
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+На языке Airflow это описывается так:
+
+```python
+from airflow.sdk import dag, task
+from datetime import datetime
+
+@dag(
+    schedule="@daily",
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["etl", "orders"],
+)
+def orders_etl():
+    @task
+    def extract_orders() -> str:
+        return "s3://staging/orders/2026-05-12.parquet"
+
+    @task
+    def transform_orders(staging_path: str) -> str:
+        return "s3://processed/orders/2026-05-12.parquet"
+
+    @task
+    def load_to_warehouse(processed_path: str):
+        pass
+
+    @task
+    def notify_team(processed_path: str):
+        pass
+
+    staging = extract_orders()
+    processed = transform_orders(staging)
+    load_to_warehouse(processed)
+    notify_team(processed)
+
+orders_etl()
+```
+
+Несколько неочевидных моментов:
+
+- **Зависимости неявные**: `transform_orders(staging)` означает «получи результат extract_orders как вход» — Airflow сам выводит граф зависимостей.
+- **Расписание `@daily`** не запускает задачу прямо сейчас. Оно создаёт `DagRun` за каждый интервал (data interval), начиная с `start_date`. Это фундаментально отличается от cron.
+- **`catchup=False`** говорит Airflow не запускать пропущенные runs за прошлое — только текущий и будущие.
+
+---
+
+## Что Airflow делает за вас
+
+Когда вы описываете DAG, Airflow автоматически берёт на себя:
+
+1. **Планирование** — создаёт `DagRun` для каждого интервала расписания и решает, когда какой task запускать.
+2. **Исполнение** — отправляет task в executor (Local, Celery, Kubernetes), который запускает её на worker.
+3. **Состояние** — каждый task имеет своё состояние (`scheduled`, `queued`, `running`, `success`, `failed`, `up_for_retry`, и ещё 9 других), хранящееся в metadata database.
+4. **Повторы** — при ошибке task переходит в `up_for_retry` и автоматически перезапускается через `retry_delay`, до `retries` раз.
+5. **Триггеры зависимостей** — `transform_orders` не запустится, пока `extract_orders` не достигнет `success`.
+6. **Backfill** — можно прогнать DAG за прошлые даты, и Airflow создаст соответствующие `DagRun` с правильными `data_interval`.
+7. **Конкурентность** — пять параметров одновременности (parallelism, max_active_runs_per_dag, max_active_tasks_per_dag, pool slots, executor parallelism) дают контроль над загрузкой.
+8. **Наблюдаемость** — Web UI с graph view, gantt chart, logs, история выполнения, метрики через OTel/StatsD.
+
+Всё это работает не «магически» — это десятки тысяч строк Python, дискриминирующая модель данных в PostgreSQL и тонко настроенный scheduler. В модулях 04 и 05 мы препарируем эту машинерию до строк кода.
+
+---
+
+## Где Airflow в архитектуре дата-платформы
+
+Airflow находится в центре дата-платформы. Он сам не обрабатывает данные — он координирует **внешние системы**, которые это делают:
+
+<DiagramContainer title="Место Airflow в дата-платформе" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="Источники"
+        tooltip="Источники данных: Postgres replica, Kafka topics, S3 buckets с raw logs, REST API внешних сервисов, SFTP с партнёрами. Airflow не читает их напрямую — он запускает operator, который читает."
+      >
+        Postgres / Kafka / S3 / API
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="Airflow orchestrates" />
+    <FlowRow>
+      <DataBox
+        label="Compute engines"
+        tooltip="Spark cluster на K8s, dbt projects, ClickHouse SQL, Python pandas / Polars в task pod. Airflow запускает их через SparkSubmitOperator, DbtRunOperator, ClickHouseOperator, KubernetesPodOperator."
+      >
+        Spark / dbt / ClickHouse / Python
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Destinations"
+        tooltip="Snowflake / BigQuery / Iceberg lakehouse, OLAP cubes (ClickHouse), feature store для ML, BI dashboards (Looker / Metabase). Airflow следит, что данные доехали до места назначения."
+      >
+        Snowflake / Iceberg / BI / ML
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Главная ценность Airflow здесь — **единая точка управления и наблюдаемости**. Без оркестратора вы получаете «зоопарк» из cron jobs, Jenkins pipelines, Lambda functions, каждый со своим логированием и retry-логикой. С Airflow — один интерфейс, один journal, одна модель зависимостей.
+
+---
+
+## Когда Airflow — правильный выбор, а когда — нет
+
+Airflow создан для определённого класса задач. Он отлично подходит для:
+
+- **Batch ETL/ELT пайплайнов**, запускаемых по расписанию (час, день, неделя)
+- **Координации между внешними системами** (Spark, dbt, Snowflake, S3)
+- **Долгоживущих многошаговых workflow** (часы, дни — backfill за месяц истории)
+- **Сценариев с явными зависимостями** (граф из десятков-сотен задач)
+- **Требований к идемпотентности и retry** (failed task должен иметь возможность повторить)
+- **Data-aware scheduling** через Datasets/Assets (с Airflow 2.4+)
+
+Airflow — **неправильный выбор** для:
+
+| Ситуация | Почему не Airflow | Лучшая альтернатива |
+|---|---|---|
+| Низкая latency (миллисекунды) | Scheduler tick = секунды, task startup = десятки секунд | Apache Flink, Kafka Streams |
+| Real-time event processing | Airflow batch-ориентирован | Flink, Kafka Streams, Materialize |
+| CI/CD pipelines | Не предназначен для VCS-trigger | GitHub Actions, GitLab CI, Argo Workflows |
+| Long-running stateful services | Airflow задачи короткоживущие | Temporal, Kubernetes Operators |
+| Дешёвый cron на одной машине | Overhead инфраструктуры | systemd timers, cron + supervisord |
+| Workflow с миллионами короткоживущих задач/сек | Scheduler bottleneck | Argo Workflows (k8s-native), Prefect |
+
+<Callout type="warning">
+Самая частая ошибка новичков — использовать Airflow для real-time потоков событий или для замены event bus. Минимальный scheduler tick — 5 секунд, типичный task startup через KubernetesExecutor — 10-30 секунд. Если задача должна реагировать на событие за 100мс — это не Airflow.
+</Callout>
+
+---
+
+## Конкуренты в 2026 году
+
+Айрфлоу — лидер рынка, но не монополист. Ключевые альтернативы:
+
+- **Prefect 3** — динамические workflow, hybrid agents, Prefect Cloud как SaaS. Pythonic API без top-level parse quirks.
+- **Dagster** — asset-first подход, strong typing, software-defined assets. Сильнее в analytics engineering и ML.
+- **Argo Workflows** — Kubernetes-native через CRDs, YAML или Hera SDK. Очень быстрый для parallel fan-outs.
+- **Temporal** — durable execution для долгоживущих бизнес-процессов. Не дата-оркестратор, но решает смежную задачу.
+- **Kestra** — YAML/Kotlin core, declarative.
+
+Айрфлоу выигрывает там, где нужна зрелость экосистемы (3000+ providers), смешанная нагрузка batch+data-aware, on-premise deployment и большой Python-сообщество.
+
+---
+
+<KnowledgeCheck
+  question="Что фундаментально отличает Airflow от системы планирования задач типа cron?"
+  answer="Cron запускает программы по времени, не зная ничего о результатах их работы и не связывая программы между собой. Airflow управляет графом зависимых задач (DAG): каждая задача имеет состояние, может повторяться при сбоях, зависит от результатов upstream-задач и не запустится до их успешного завершения. Airflow хранит историю всех запусков в metadata database, обеспечивает наблюдаемость через Web UI и поддерживает backfill за прошлые периоды. Cron — это просто планировщик; Airflow — это workflow engine с моделью состояния и зависимостей."
+/>

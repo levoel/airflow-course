@@ -1,0 +1,82 @@
+---
+title: "Обзор модуля: Production deployment"
+description: "HA reference architecture, Helm chart, Multi-Team (AIP-67), managed comparison"
+order: 1
+difficulty: "advanced"
+estimatedTime: 14
+topics: ["Production", "HA", "Helm", "Kubernetes", "MWAA", "Astronomer"]
+---
+
+# Production deployment — обзор модуля
+
+Production-grade Airflow требует тщательно спроектированной инфраструктуры: multi-scheduler HA, PgBouncer для connection pooling, RDS tuning, Helm chart на Kubernetes, monitoring. Этот модуль — reference architecture для production.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | HA reference architecture | 2-3 scheduler, 2-3 triggerer, RDS PostgreSQL, PgBouncer |
+| 03 | Helm chart deployment | Official chart, gitSync vs DAG Bundle, secrets |
+| 04 | PostgreSQL tuning | max_connections, shared_buffers, autovacuum, partitioning |
+| 05 | Managed offerings comparison | MWAA / Cloud Composer / Astronomer / Azure |
+| 06 | Multi-Team (AIP-67, 3.2) | Team-scoped resources, RBAC |
+| 07 | Upgrade procedure | Blue/green, DB migration, downtime windows |
+| 08 | Disaster recovery | Backup metadata DB, Fernet key rotation |
+
+## HA Reference Architecture
+
+```
+   ┌────────────────────────────────────┐
+   │       Load Balancer (HTTPS)        │
+   └──────────────┬─────────────────────┘
+                  │
+        ┌─────────┴─────────┐
+        ▼                   ▼
+  ┌──────────┐         ┌──────────┐
+  │ API srv  │         │ API srv  │  (gunicorn, N replicas)
+  └────┬─────┘         └────┬─────┘
+       │                    │
+       └────────┬───────────┘
+                ▼
+       ┌──────────────────┐
+       │  PgBouncer pool  │
+       └──────────────────┘
+                ▼
+       ┌──────────────────┐
+       │ RDS PostgreSQL   │
+       │ Multi-AZ         │
+       └──────────────────┘
+                ▲
+  ┌─────────────┼─────────────┐
+  ▼             ▼             ▼
+Scheduler1  Scheduler2  Triggerer×2
+                                    
+DAG Processor×1-2 (AIP-66)
+                                    
+  Workers (Celery / K8s / Edge)
+```
+
+## PostgreSQL tuning checklist
+
+- `max_connections` ≥ (N_schedulers × 16) + (N_workers × 2) + headroom
+- **PgBouncer** — mandatory, transaction mode
+- `shared_buffers = 25% RAM`, `work_mem`, `maintenance_work_mem`
+- `autovacuum_vacuum_scale_factor = 0.05` для `task_instance`, `log`, `xcom`
+- **`pg_partman`** для partitioning `log` и `xcom` по дате
+- `VACUUM FULL` weekly
+
+## Managed offerings (2026)
+
+| Сервис | Pricing | Executor | Tuning | Lock-in |
+|---|---|---|---|---|
+| **AWS MWAA** | ~$350/mo | Celery only | Limited | AWS |
+| **GCP Cloud Composer 2/3** | ~$300-500 | Celery+K8s | Hidden blocked | GCP |
+| **Azure Managed Airflow** | ~$300+ | Celery | Minimal | Azure |
+| **Astronomer Astro** | $0-5000+ | Local/Celery/K8s | Full | Multi-cloud |
+
+**Astronomer** = top open-source contributor. Astro IDE с AI-powered development. Featured в 70% Airflow Summit demos.
+
+## Killer takeaway
+
+В production первая инвестиция — **PgBouncer + хорошо tuned RDS**. Multi-scheduler scaling после 3-4 даёт diminishing returns — bottleneck DB. Изучите Postgres tuning раньше чем добавлять scheduler-ов.

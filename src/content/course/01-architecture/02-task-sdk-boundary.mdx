@@ -1,0 +1,216 @@
+---
+title: "Task SDK boundary (AIP-72)"
+description: "Как worker общается с API Server через REST, что внутри HTTP-запросов, зачем нужен этот разрыв"
+order: 2
+difficulty: "advanced"
+estimatedTime: 22
+topics: ["Task SDK", "AIP-72", "REST API", "Worker", "Security"]
+---
+
+# Task SDK boundary (AIP-72)
+
+В Airflow 2.x worker имел прямой доступ к metadata database через SQLAlchemy. Когда вы писали `Variable.get('my_var')` внутри task, это превращалось в `SELECT * FROM variable WHERE key='my_var'` напрямую к Postgres. Удобно, быстро — но архитектурно неправильно.
+
+AIP-72 (Task Execution Interface, AKA Task SDK) исправляет это. В 3.x worker общается с control plane только через REST API. Снаружи это выглядит так же — `Variable.get('my_var')` работает — но под капотом теперь HTTP вызов к API Server.
+
+Этот урок объясняет архитектуру нового контракта и почему она важна не только для security.
+
+---
+
+## До 3.x: direct DB access
+
+<DiagramContainer title="Архитектура 2.x — worker как first-class DB citizen" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Worker" tooltip="Celery worker / K8s pod в 2.x. Имеет полный read/write доступ к metadata DB. Запускает task code, который импортирует airflow.models.* напрямую.">Task code</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="SQLAlchemy" />
+    <FlowRow>
+      <DataBox label="metadata.db.session" tooltip="Сессия SQLAlchemy на стороне worker. Может делать select на любую таблицу: connection, variable, xcom, task_instance.">Сессия SQLAlchemy</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="postgres://airflow:..." />
+    <FlowRow>
+      <DataBox label="PostgreSQL" tooltip="Metadata DB. Worker подключается тем же DB user, что и scheduler — широкие права. Если worker скомпрометирован, атакующий получает доступ к connection passwords (даже зашифрованным — Fernet ключ обычно в env).">Metadata DB</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Проблемы такого подхода:
+
+1. **Security**: компрометация worker (например, через user code с supply-chain атакой) даёт DB access. Worker мог прочитать `SELECT * FROM connection` и расшифровать с Fernet ключом из env.
+2. **Schema coupling**: любое изменение схемы metadata DB требовало обновления всех workers синхронно. Невозможно делать rolling upgrades.
+3. **Language lock-in**: worker должен быть на Python с SQLAlchemy. Невозможно написать worker на Go/Rust.
+4. **Network requirement**: worker должен иметь прямой network access к DB. Это не работает за NAT, в edge сценариях, с distributed teams.
+
+---
+
+## В 3.x: REST API contract
+
+<DiagramContainer title="Архитектура 3.x — Task SDK boundary" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Worker (любой язык)" tooltip="Worker в 3.x. Не имеет direct DB access. Общается только через REST API с API Server. Может быть Python (Task SDK), Go (in development), любой другой язык с REST client.">Task code</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="airflow.sdk (Python lib)" />
+    <FlowRow>
+      <DataBox label="Task SDK client" tooltip="Python library airflow.sdk. Содержит DAG/Task декораторы (что нужно для DAG description), но Variable/Connection/XCom — это HTTP REST calls под капотом.">REST client (HTTP)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="https://airflow.example.com/internal-api/v1/..." />
+    <FlowRow>
+      <DataBox label="API Server" tooltip="FastAPI process. Получает HTTP requests от workers, валидирует token, делает DB queries на их месте. Single point для auth, rate limiting, schema versioning.">API Server (FastAPI)</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="SQLAlchemy" />
+    <FlowRow>
+      <DataBox label="PostgreSQL" tooltip="Metadata DB. Только API Server / Scheduler / DAG Processor / Triggerer имеют DB access. Workers — нет.">Metadata DB</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Что внутри HTTP вызова
+
+Когда в task code пишется:
+
+```python
+from airflow.sdk import task, Variable
+
+@task
+def use_var():
+    val = Variable.get("my_var")
+    return val
+```
+
+На runtime worker делает примерно следующее (упрощённо):
+
+```http
+GET /execution/v1/variables/my_var
+Host: airflow-api.svc.cluster.local
+Authorization: Bearer <task-scoped JWT>
+X-Airflow-Task-Token: <signed token с task_id, dag_id, run_id, try_number>
+
+→
+
+200 OK
+Content-Type: application/json
+
+{
+  "key": "my_var",
+  "value": "production",
+  "description": "Environment name"
+}
+```
+
+Ключевые моменты:
+
+1. **Task-scoped JWT** — Worker аутентифицируется token-ом, который scope-ован к конкретному TaskInstance. Token подписан, содержит дата истечения. Скомпрометированный token нельзя использовать после `end_date + grace_period`.
+2. **X-Airflow-Task-Token** — дополнительный signed token с метаданными TI. Позволяет API Server валидировать, что запрос идёт от **конкретного** TaskInstance, а не от случайного worker. Это критично для XCom write — нельзя написать XCom для чужого task.
+3. **Internal API path** (`/execution/v1/`) — изолирован от public API (`/api/v2/`). Не доступен снаружи кластера.
+4. **Идемпотентность**: GET-запросы тривиально retryable. PUT/POST используют идемпотентные операции с client-generated request IDs.
+
+---
+
+## Какие операции теперь HTTP
+
+Все operations workers, которые в 2.x были direct DB:
+
+| 2.x API | 3.x HTTP |
+|---|---|
+| `Variable.get('x')` | `GET /execution/v1/variables/x` |
+| `Variable.set('x', 'v')` | `PUT /execution/v1/variables/x` |
+| `Connection.get('x')` | `GET /execution/v1/connections/x` |
+| `xcom_push(key='r', value=v)` | `POST /execution/v1/xcoms` |
+| `xcom_pull(task_ids='x')` | `GET /execution/v1/xcoms/?task_id=x` |
+| `ti.heartbeat()` | `POST /execution/v1/task-instances/<ti_id>/heartbeat` |
+| `ti.set_state('success')` | `PATCH /execution/v1/task-instances/<ti_id>` |
+| `dr.set_state(...)` | `PATCH /execution/v1/dag-runs/<dr_id>` |
+
+API Server роутит эти запросы к metadata DB, применяя auth и validation. Из перспективы task code ничего не изменилось.
+
+---
+
+## Производительность: HTTP overhead
+
+Очевидный вопрос — не медленнее ли это? Да, но в managable пределах:
+
+- **Local network** (worker и API server в одном K8s namespace): latency 1-3ms на GET
+- **Cross-AZ**: 5-15ms
+- **Через VPN / Edge**: 50-200ms
+
+Mitigation:
+- **Caching внутри Task SDK**: Variables и Connections кэшируются на время выполнения task (default TTL 60s)
+- **Batch endpoints**: `GET /execution/v1/variables?keys=x,y,z` за один request
+- **Internal load balancer**: nginx + keepalive connections
+- **Unix socket** для in-process (когда worker на той же машине, что и API server)
+
+В реальных deployments overhead < 1% даже для I/O-heavy tasks.
+
+---
+
+## Edge Executor через этот же контракт
+
+Task SDK boundary unlocks новый класс workers — **Edge Executor** (AIP-69, 3.0+):
+
+```
+Edge Worker (за NAT, on-prem):
+  while True:
+    workload = HTTP POST /edge-api/v1/heartbeat
+    if workload:
+      result = execute(workload)
+      HTTP POST /edge-api/v1/task-result
+```
+
+Worker сам инициирует все connections (HTTP polling) — нет нужды в открытых портах, VPN, K8s federation. Use cases:
+- ML inference на on-prem GPU кластерах
+- IoT data processing на edge нодах
+- Multi-region pipelines с регулатор data residency
+
+---
+
+## Workers на не-Python языках
+
+Контракт REST позволяет написать worker на любом языке. Текущий статус (2026-05):
+
+- **Python (Task SDK)** — официальный, основной (`pip install apache-airflow-task-sdk`)
+- **Go SDK** — in development, expected 3.3
+- **Rust** — community proof-of-concept
+
+Use case для не-Python:
+- Workers с малым cold-start (Go binary стартует за < 100ms, против Python interpreter)
+- Native code performance для CPU-bound tasks
+- Embedded в существующий не-Python codebase
+
+---
+
+## Что это значит для вашего кода
+
+В 99% случаев — ничего не меняется. Импорты `from airflow.sdk import dag, task, Variable, Connection` работают как в 2.x импорты `from airflow.models import Variable`.
+
+Меняются только некоторые edge cases:
+
+```python
+# 2.x — direct DB session (НЕ работает в 3.x worker)
+from airflow.utils.session import provide_session
+
+@task
+@provide_session
+def my_task(session=None):
+    # session — это SQLAlchemy session
+    obj = session.query(DAG).first()  # ← в 3.x worker НЕТ DB access
+
+# 3.x — через API
+from airflow.sdk import task
+
+@task
+def my_task():
+    dags = airflow.sdk.api.list_dags()  # REST call
+```
+
+Для большинства DAGs это не имеет значения. Если вы делали raw SQL в task code — нужно мигрировать на API calls. Airflow поставляется с `airflow upgrade-check` и ruff правилами (AIR301, AIR302) для автодиагностики.
+
+---
+
+<KnowledgeCheck
+  question="Worker в 3.x не имеет direct DB access. Как тогда работает Variable.get('my_var') внутри task code?"
+  answer="Под капотом Variable.get превращается в HTTP REST вызов к API Server: `GET /execution/v1/variables/my_var` с task-scoped JWT в Authorization header. API Server валидирует token, делает SQL query к metadata DB и возвращает значение в JSON. Worker не имеет ни DB credentials, ни прямого network access к DB. Task SDK прозрачно делает этот вызов — для пользователя API остался тот же. Это даёт security isolation, schema decoupling (можно делать rolling DB migrations), multi-language workers (Go SDK in flight) и работу через NAT (Edge Executor)."
+/>

@@ -1,0 +1,74 @@
+---
+title: "Обзор модуля: Observability и OpenLineage"
+description: "OTel (AIP-49), OpenLineage automatic emission, Marquez backend, structured logs"
+order: 1
+difficulty: "advanced"
+estimatedTime: 14
+topics: ["Observability", "OpenTelemetry", "OpenLineage", "Marquez"]
+---
+
+# Observability и OpenLineage — обзор модуля
+
+Observability — обязательное требование production Airflow. Модуль покрывает три pillars: **metrics** (OTel), **logs** (structured JSON), **traces** (OTel) — плюс отдельно **data lineage** через OpenLineage, который стал индустриальным стандартом.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Metrics stack — OTel vs StatsD | AIP-49 OTel rollout, key metrics |
+| 03 | **OpenLineage** — 40% модуля | Automatic emission, Marquez setup, custom extractors |
+| 04 | Distributed tracing | OTel spans DAG → task → DB query |
+| 05 | Logs: remote backends | S3/GCS/ES/CloudWatch, JSON structured (3.2) |
+| 06 | Custom dashboards | Grafana templates, top 12 charts |
+| 07 | Alerting playbook | Scheduler down, zombie spike, watermark stuck |
+
+## OpenTelemetry stack (AIP-49)
+
+Полный stack metrics + traces + logs:
+```ini
+[metrics]
+otel_on = True
+otel_host = otel-collector
+otel_port = 4317
+otel_prefix = airflow
+```
+
+Ключевые metrics:
+- `scheduler.scheduler_loop_duration`
+- `executor.open_slots`
+- `executor.queued_tasks`
+- `dag_processing.total_parse_time`
+- `triggerer.running_triggers`
+
+## OpenLineage — индустриальный стандарт
+
+Provider `apache-airflow-providers-openlineage` автоматически эмитит OL events:
+
+```ini
+[openlineage]
+transport = {"type":"http","url":"http://marquez:5000"}
+namespace = production
+```
+
+Что эмитируется автоматически:
+- **SQL operators** (PostgresOperator, SQLOperator) — SQL text, parsed sources/destinations
+- **S3 operators** — bucket/key as datasets
+- **Spark/dbt operators** — через runtime hooks
+- **Custom operators** — через extractors
+
+Backends-приёмники: **Marquez** (Apache), DataHub, Atlan, OpenMetadata, AWS SageMaker Lineage.
+
+## Killer demo
+
+Запустить marquez-local в docker-compose, прогнать ETL DAG → увидеть **полный lineage граф автоматически** без единой строки lineage code. Это game-changer для data governance compliance.
+
+## Killer takeaway
+
+OpenLineage = OpenTelemetry для data. С 2024 стал de-facto стандарт. Если ваша compliance/governance/data discovery требует lineage — Airflow + OL provider закрывает это бесплатно. Не нужно покупать commercial lineage tools.
+
+## Связи
+
+- **Модуль 12 (Plugins/Listeners)** — OL provider использует Listener API
+- **Модуль 17 (Patterns)** — design patterns с OL в виду
+- **Модуль 15 (Production)** — Marquez deployment в HA

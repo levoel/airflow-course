@@ -1,0 +1,89 @@
+{
+  "moduleId": "00-course-intro",
+  "title": "Module 00 Exam — Введение в курс",
+  "passThreshold": 70,
+  "_meta": {
+    "idPrefix": "airflow-m00-exam",
+    "description": "6-question integrated exam for Module 00"
+  },
+  "questions": [
+    {
+      "id": "airflow-m00-exam-q1",
+      "type": "multiple-choice",
+      "question": "В чём фундаментальное отличие workflow engine (Airflow) от scheduler (cron)?",
+      "options": [
+        { "id": "a", "text": "Workflow engine работает быстрее" },
+        { "id": "b", "text": "Workflow engine управляет графом зависимых задач с состоянием, retry-логикой и наблюдаемостью; cron только запускает программы по времени" },
+        { "id": "c", "text": "Workflow engine использует другой формат CRON expression" },
+        { "id": "d", "text": "Никакой существенной разницы — синтаксический сахар" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Workflow engine (Airflow) управляет графом зависимых задач: каждая задача имеет состояние, retry, зависимости от upstream, единую наблюдаемость. Cron просто запускает программу по времени без всякой связи с другими задачами.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m00-exam-q2",
+      "type": "multiple-choice",
+      "question": "Какое из следующих use-case-ов НЕ подходит для Airflow?",
+      "options": [
+        { "id": "a", "text": "Daily ETL из Postgres в Snowflake через Spark transformation" },
+        { "id": "b", "text": "Backfill 6 месяцев истории в Iceberg за пропущенный период" },
+        { "id": "c", "text": "Реакция на каждое событие Kafka topic с применением stateful join за 100мс" },
+        { "id": "d", "text": "Daily dbt run после загрузки сырых данных" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Stateful streaming с миллисекундной latency требует true streaming engine — Apache Flink, Kafka Streams. Airflow batch-ориентирован: scheduler tick ~5s, task startup 10-30s через K8sExecutor. Остальные сценарии — классические Airflow workloads.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m00-exam-q3",
+      "type": "multiple-choice",
+      "question": "Зачем в Airflow 3.x DAG Processor стал mandatory отдельным процессом?",
+      "options": [
+        { "id": "a", "text": "Для backward compatibility с Airflow 1.x" },
+        { "id": "b", "text": "Для изоляции parsing от scheduler loop, поддержки DAG Bundles (AIP-66), DAG Versioning и Task SDK boundary" },
+        { "id": "c", "text": "Это случайное архитектурное решение без значимого эффекта" },
+        { "id": "d", "text": "Только для increase Python interpreter версии" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DAG Processor mandatory в 3.0 решает несколько задач: (1) изоляция parsing — медленный DAG больше не блокирует scheduler loop; (2) DAG Bundles (AIP-66) — несколько источников DAGs (git, S3) с версионированием; (3) DAG Versioning (AIP-63) — каждый DagRun привязан к версии bundle; (4) поддержка Task SDK (AIP-72) — workers не имеют direct DB access.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m00-exam-q4",
+      "type": "multiple-choice",
+      "question": "Какая команда позволяет проверить, что DAG `my_etl` не содержит синтаксических ошибок (import errors)?",
+      "options": [
+        { "id": "a", "text": "airflow dags list" },
+        { "id": "b", "text": "airflow dags trigger my_etl" },
+        { "id": "c", "text": "airflow dags list-import-errors" },
+        { "id": "d", "text": "airflow scheduler --check my_etl" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "`airflow dags list-import-errors` показывает все DAGs с ошибками парсинга. Это первая команда в любом troubleshooting. `airflow dags list` показывает успешно parsed DAGs (с ошибкой просто не появится в списке). `airflow dags trigger` запустит run, но не сообщит об ошибках import.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m00-exam-q5",
+      "type": "multiple-choice",
+      "question": "В TaskFlow API запись `load_to_warehouse(transform_orders(extract_orders()))` означает что?",
+      "options": [
+        { "id": "a", "text": "Все три функции выполнятся синхронно прямо сейчас" },
+        { "id": "b", "text": "Airflow построит граф зависимостей: extract → transform → load, и каждая задача запустится в своём task instance со XCom-передачей результатов" },
+        { "id": "c", "text": "Это синтаксическая ошибка — нельзя вкладывать @task функции" },
+        { "id": "d", "text": "Будет создан один task с тремя вложенными action-ами" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В TaskFlow вызов `transform_orders(extract_orders())` создаёт зависимость между задачами на уровне DAG-объявления, а не вызывает функции немедленно. Airflow выводит граф: extract → transform → load. На runtime каждая задача запустится отдельным TaskInstance, результат передаётся через XCom автоматически.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m00-exam-q6",
+      "type": "true-false",
+      "question": "Курс ориентирован на Airflow 3.x и намеренно не покрывает SubDAG operator (заменён TaskGroup), Smart Sensors (удалены), Flower (заменяется OTel) и Airflow 1.x.",
+      "correctAnswer": true,
+      "explanation": "Курс 3.x-first. SubDAG operator и Smart Sensors — anti-patterns / removed. Flower deprecated в пользу OTel metrics. Airflow 1.x устарел. 2.10/2.11 упоминаются как historical context, потому что 80% production deployments всё ещё на них в 2026.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}

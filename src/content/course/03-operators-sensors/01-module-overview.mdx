@@ -1,0 +1,53 @@
+---
+title: "Обзор модуля: Operators и Sensors"
+description: "BaseOperator anatomy, sensor modes (poke/reschedule/deferred), provider ecosystem"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["Operators", "Sensors", "BaseOperator", "Providers"]
+---
+
+# Operators и Sensors — обзор модуля
+
+Operators — единица работы в Airflow. Каждый task в DAG основан на каком-либо operator: `PythonOperator`, `BashOperator`, `SparkSubmitOperator`, `EmptyOperator`. Sensors — специальный класс operators, которые ждут событие. Этот модуль препарирует BaseOperator до `execute()` метода и разбирает три режима sensor execution.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | BaseOperator anatomy | Inheritance hierarchy, execute() lifecycle, template_fields |
+| 03 | PythonOperator + TaskFlow | _PythonDecoratedOperator, ExternalPythonOperator, KubernetesPodOperator |
+| 04 | Sensors — three modes | poke (blocking) vs reschedule (free slot) vs deferred (async) |
+| 05 | BranchPythonOperator + ShortCircuit | Branching tasks, trigger rules |
+| 06 | TaskGroup vs SubDAG | TaskGroup mechanics, почему SubDAG anti-pattern |
+| 07 | Provider architecture | Entry points, hooks, custom provider package |
+
+## Ключевые концепты
+
+- **BaseOperator** — корневой класс. `execute(context)` — main method. `template_fields` — какие args jinja-render-ят при rendering. `on_failure_callback`, `on_success_callback` — hooks для notifications.
+- **Sensor modes**:
+  - `poke` — блокирует worker slot, exponential backoff между poke
+  - `reschedule` — освобождает slot, через `task_reschedule` table планирует следующий poke
+  - `deferred` — переходит в triggerer через asyncio loop, не блокирует ни slot, ни scheduler
+- **Provider packages** — community-maintained. `apache-airflow-providers-amazon`, `-google`, `-snowflake`, `-postgres`. Регистрируются через entry points в `setup.py`. 3000+ providers в registry.
+
+## Sensor mode сравнение
+
+| Mode | Blocked worker slot | Triggerer required | Latency | Стоимость |
+|---|---|---|---|---|
+| `poke` | ✅ Да | ❌ Нет | Мгновенная (per poke) | Worker занят 24/7 |
+| `reschedule` | ❌ Нет | ❌ Нет | До 1 minute (между reschedule) | Минимальная |
+| `deferred` | ❌ Нет | ✅ Да | Мгновенная (async event) | Triggerer process |
+
+**Best practice**: для long-wait sensors (часы/сутки) использовать `deferrable=True`. Для коротких (минуты) — `poke`. `reschedule` — middle ground.
+
+## Killer takeaway
+
+В production одна типичная ошибка: 100 копий S3KeySensor в poke mode с 24h timeout занимают 100 worker slots. Переход на `deferrable=True` освобождает все эти slots, и 100 triggers нормально работают на одном triggerer (asyncio scale handles thousands).
+
+## Связи
+
+- **Модуль 09 (Triggerer)** — детально про deferrable operators internals
+- **Модуль 11 (Pools/Concurrency)** — как priority_weight влияет на ordering
+- **Модуль 12 (Plugins)** — как написать custom operator/sensor через provider

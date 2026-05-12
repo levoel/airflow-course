@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/03-dag-bundles-versioning",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-03" },
+  "questions": [
+    {
+      "id": "airflow-m01-03-q1",
+      "type": "multiple-choice",
+      "question": "DAG Bundle — это:",
+      "options": [
+        { "id": "a", "text": "Просто папка $AIRFLOW_HOME/dags/" },
+        { "id": "b", "text": "Pluggable namespace для DAGs с собственным backend (git/S3/GCS/local), refresh strategy и versioning" },
+        { "id": "c", "text": "Custom Python distribution" },
+        { "id": "d", "text": "Helm chart для деплоя" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "DAG Bundle (AIP-66) — pluggable namespace для DAGs с собственным backend. Поддерживаются: Git, S3, GCS, Local, HTTP. Каждый bundle имеет: manifest, version (commit hash / object version), refresh interval. Несколько bundles можно использовать одновременно — для multi-team setup или разных источников DAGs.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-03-q2",
+      "type": "multiple-choice",
+      "question": "Сценарий: DagRun завершился 6 месяцев назад на коде v1. С тех пор код менялся 50 раз. Вы делаете clear этого run. Что произойдёт в 3.x?",
+      "options": [
+        { "id": "a", "text": "Run перезапустится на текущей версии кода (v51)" },
+        { "id": "b", "text": "Run перезапустится на той же версии кода (v1), к которой он был привязан через dag_version_id" },
+        { "id": "c", "text": "Ошибка — clear на старых runs запрещён" },
+        { "id": "d", "text": "Run перезапустится на v2 (next version)" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В 3.x (AIP-63 DAG Versioning) каждый DagRun привязан к dag_version_id. Cleared TI запустится на той же версии bundle, что и оригинальный run — гарантирует historical reproducibility. В 2.x этого не было — cleared run использовал текущий код, что приводило к неконсистентности backfill через долгое время.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-03-q3",
+      "type": "multiple-choice",
+      "question": "В 3.x на Kubernetes рекомендуется использовать DAG Bundles вместо gitSync sidecar pattern. Почему?",
+      "options": [
+        { "id": "a", "text": "GitSync быстрее" },
+        { "id": "b", "text": "Меньше движущихся частей: DAG Processor сам читает git через GitDagBundle, не нужны init/sidecar containers в каждом pod. Также — единый refresh strategy и version tracking" },
+        { "id": "c", "text": "GitSync deprecated в Kubernetes" },
+        { "id": "d", "text": "Это требование Airflow 3.x — gitSync больше не работает" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "GitSync sidecar pattern (2.x) добавлял container в каждый pod (scheduler, worker), который git pull-ил периодически. С DAG Bundles этого не нужно: DAG Processor сам читает источник, парсит и сериализует в БД, scheduler/worker берут из БД. Меньше containers, меньше точек отказа, единый refresh strategy.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m01-03-q4",
+      "type": "true-false",
+      "question": "Multi-Team Deployments (AIP-67, 3.2 experimental) позволяет разным командам иметь свои bundles, pools, connections, variables, executors в одном Airflow instance.",
+      "correctAnswer": true,
+      "explanation": "AIP-67 (experimental в 3.2) — Multi-Team. Один Airflow instance шарится между командами с изоляцией: per-team bundle, executor, pools, connections, variables, dags. RBAC + team scoping в auth. Use case enterprise: централизованное администрирование, но dev-teams не пересекаются. Каждая team видит только свои ресурсы.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

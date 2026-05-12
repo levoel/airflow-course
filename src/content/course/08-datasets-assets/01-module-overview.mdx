@@ -1,0 +1,86 @@
+---
+title: "Обзор модуля: Datasets → Assets"
+description: "AIP-48 → AIP-74/75 evolution, Asset Partitions (3.2), Event-driven AIP-82"
+order: 1
+difficulty: "advanced"
+estimatedTime: 12
+topics: ["Datasets", "Assets", "AIP-48", "AIP-74", "Event-driven"]
+---
+
+# Datasets → Assets — обзор модуля
+
+Data-aware scheduling — революция в DAG dependency model. Вместо «запусти каждый день в 02:00» можно сказать «запусти когда asset orders_table обновлён». Этот модуль покрывает evolution Datasets (2.4) → Assets (3.0) и расширения: Asset Partitions (3.2), Event-driven AIP-82.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Datasets fundamentals (2.4-2.11) | Dataset URI, outlets, schedule=[dataset] |
+| 03 | Assets API (3.0+, AIP-74/75) | `@asset` decorator, asset model evolution, namespace rename |
+| 04 | Asset Partitions (3.2) | Downstream подписывается на конкретные partitions |
+| 05 | Event-driven (AIP-82) | CommonMessageQueue, SQS/Kafka triggers |
+| 06 | Cross-DAG dataset cascade | Producer → multiple consumers, dataset_dag_run_queue |
+
+## Ключевые концепты
+
+```python
+# 2.4-2.11 (Datasets):
+from airflow import Dataset
+my_dataset = Dataset("s3://bucket/data.parquet")
+
+@dag(schedule=[my_dataset])
+def consumer(): ...
+
+@dag(schedule="@daily")
+def producer():
+    @task(outlets=[my_dataset])
+    def write(): ...
+
+# 3.0+ (Assets):
+from airflow.sdk import asset
+
+@asset(schedule="@daily")
+def orders_asset(context):
+    return df  # автоматически outlet
+
+@dag(schedule=[orders_asset])
+def downstream(): ...
+```
+
+## Asset Partitions (3.2)
+
+Downstream может подписаться на конкретную partition asset-а, не на весь asset:
+
+```python
+@dag(schedule=[orders_asset.partitions("dt=2026-05-12")])
+def daily_processor(): ...
+```
+
+## Event-driven (AIP-82)
+
+Внешние события через message bus триггерят DAG:
+
+```python
+from airflow.providers.common.messaging import CommonMessageQueue
+
+queue = CommonMessageQueue(
+    queue_url='sqs://my-queue',
+    schema='orders_v1'
+)
+
+@dag(schedule=queue)
+def process_orders(): ...
+```
+
+Поддерживаются: AWS SQS, Apache Kafka, Google Pub/Sub.
+
+## Killer takeaway
+
+Data-aware scheduling решает фундаментальную проблему cron: DAG-A запускается в 02:00, DAG-B зависит от A, запускается в 02:30. Если A задерживается до 02:35 — B бежит на старых данных. С Assets B запускается только когда A эмитит asset event, независимо от времени.
+
+## Связи
+
+- **Модуль 04 (Scheduler)** — как scheduler читает `dataset_dag_run_queue`
+- **Модуль 14 (OpenLineage)** — Assets интегрируются с lineage automatically
+- **Модуль 17 (Patterns)** — асset-based architecture, vs ELT через time-based schedules

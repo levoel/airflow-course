@@ -1,0 +1,66 @@
+---
+title: "Обзор модуля: Connections, Variables, Secrets"
+description: "Fernet encryption, Secrets Backends, lookup order, caching"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["Fernet", "Secrets Backend", "Vault", "Connections"]
+---
+
+# Connections, Variables, Secrets — обзор модуля
+
+Connections и Variables — основные механизмы хранения configuration в Airflow. Connections содержат credentials (DB passwords, API keys) — поэтому шифруются Fernet. Secrets Backends позволяют интегрироваться с Vault / AWS Secrets Manager / GCP Secret Manager для централизованного управления.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Connections fundamentals | Connection URI format, типы, fields |
+| 03 | Fernet encryption deep | AES-128-CBC + HMAC, key rotation |
+| 04 | Variables и lookup order | Backend → ENV → DB priority |
+| 05 | Secrets Backends — Vault | VaultBackend setup, dynamic secrets |
+| 06 | Secrets Backends — AWS / GCP / Azure | SecretsManagerBackend, GoogleSecretManagerBackend |
+| 07 | Caching strategy | use_cache, TTL, top-level Variable.get pitfall |
+
+## Lookup order (важно!)
+
+```
+1. Secrets Backend (если настроен)
+2. Environment variable (AIRFLOW_CONN_<NAME>, AIRFLOW_VAR_<NAME>)
+3. Metadata DB (encrypted с Fernet)
+```
+
+## Fernet encryption
+
+- AES-128-CBC + HMAC-SHA256, симметричный
+- Ключ в `airflow.cfg` `fernet_key` или env `AIRFLOW__CORE__FERNET_KEY`
+- **Key rotation**: несколько ключей через запятую — `new_key,old_key`. Новые шифруются первым, старые расшифровываются любым.
+- Если ключ потерян → connection passwords unrecoverable.
+
+## Secrets Backends
+
+```ini
+[secrets]
+backend = airflow.providers.hashicorp.secrets.vault.VaultBackend
+backend_kwargs = {
+  "url": "https://vault.example.com",
+  "connections_path": "airflow/connections",
+  "variables_path": "airflow/variables",
+  "auth_type": "kubernetes",
+  "role_id": "airflow-role"
+}
+```
+
+## Killer pitfall
+
+**Top-level `Variable.get('my_var')`** в DAG-файле выполняется на каждом DAG parse → постоянный hit на Vault → перегрузка backend.
+
+**Fix**:
+1. Перенести `Variable.get` внутрь task callable
+2. Или включить `[secrets] use_cache = True` (default в 3.x)
+3. Или использовать ENV variables для DAG-config
+
+## Killer takeaway
+
+В production никогда не храните real secrets в Variables/Connections через UI — используйте Secrets Backend. UI-driven configuration хорош для dev, но требования audit, key rotation, RBAC, dynamic secrets закрывает только Vault/SM.

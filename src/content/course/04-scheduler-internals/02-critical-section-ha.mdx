@@ -1,0 +1,221 @@
+---
+title: "Critical Section и HA через PostgreSQL row-level locks"
+description: "Самое уникальное место Airflow — как multi-scheduler HA реализован через RDBMS lock без Raft/ZK"
+order: 2
+difficulty: "advanced"
+estimatedTime: 32
+topics: ["Critical Section", "HA Scheduler", "Row-level Lock", "PostgreSQL", "Concurrency"]
+---
+
+# Critical Section и HA через PostgreSQL row-level locks
+
+Это самая уникальная и недооценённая часть Airflow. Большинство distributed систем для координации используют Raft (etcd, CockroachDB), Paxos (Cassandra), ZooKeeper (старая Kafka, HBase). Airflow выбрал radикально иной путь — координировать scheduler-ы через **row-level locks в metadata database**.
+
+Это решение было сознательным: «operational simplicity» (см. wiki Airflow 2.0 scheduler design). Оператору Airflow не нужно поднимать отдельный consensus cluster — у него уже есть PostgreSQL, и он переиспользуется для distributed coordination.
+
+---
+
+## Из официальной документации Airflow
+
+> *"To maintain performance and throughput, there is one part of the scheduling loop that does a number of calculations in memory ... only a single scheduler can be in this critical section at once, which is achieved using database row-level locks (specifically, `SELECT ... FOR UPDATE`). This critical section is responsible for transitioning TaskInstances from a scheduled state to being enqueued to the executor, while simultaneously ensuring that various concurrency and pool limits are honored. The critical section is secured by acquiring a row-level write lock on every row of the Pool table, which is roughly equivalent to `SELECT * FROM slot_pool FOR UPDATE NOWAIT`."*
+
+Этот абзац — ключ к пониманию Airflow HA. Препарируем его.
+
+---
+
+## Зачем нужна critical section
+
+Представим, что нет critical section. Два scheduler-а одновременно:
+
+```
+Scheduler 1: видит scheduled TI (priority=10), pool 'gpu' имеет 1 free slot
+Scheduler 2: видит scheduled TI (priority=5),  pool 'gpu' имеет 1 free slot
+
+Scheduler 1: UPDATE ti SET state='queued' WHERE id=X
+Scheduler 2: UPDATE ti SET state='queued' WHERE id=Y
+
+→ Pool 'gpu' has 2 queued tasks, but only 1 slot → over-allocation
+```
+
+Без synchronization scheduler-ы могут одновременно занять один и тот же slot. Critical section — это **mutex over pool decisions**.
+
+---
+
+## Implementation: SELECT ... FOR UPDATE NOWAIT
+
+В коде SchedulerJobRunner:
+
+```python
+# Псевдокод
+def _critical_section_enqueue_task_instances(self, session):
+    try:
+        # Acquire row-level lock на slot_pool table
+        pools = (
+            session.query(Pool)
+            .with_for_update(nowait=True, of=Pool)  # ← NOWAIT
+            .all()
+        )
+    except OperationalError as e:
+        # PostgreSQL: lock_not_available
+        # Это нормально — другой scheduler уже в critical section
+        log.debug("Other scheduler in critical section, skipping tick")
+        return
+
+    # Внутри critical section — у нас exclusive lock
+    # ... делаем enqueue decisions ...
+
+    session.commit()  # ← lock освобождается
+```
+
+**Что делает `NOWAIT`:**
+- Без `NOWAIT`: запрос блокируется (ждёт освобождения lock)
+- С `NOWAIT`: получает ошибку `lock_not_available` сразу
+
+Это критично: **scheduler не должен блокироваться**. Если второй scheduler не может в critical section, он просто пропускает tick и пробует на следующем (через 5 секунд). Никаких deadlocks, никаких длинных ожиданий.
+
+---
+
+## Подробно: SELECT … FOR UPDATE
+
+Что именно делает PostgreSQL при таком запросе:
+
+```sql
+BEGIN;
+SELECT * FROM slot_pool FOR UPDATE NOWAIT;
+-- Acquires ROW EXCLUSIVE lock на каждую строку slot_pool
+
+-- Внутри транзакции — exclusive access
+-- Другие транзакции с FOR UPDATE на эти rows ждут (или получают NOWAIT error)
+
+UPDATE slot_pool SET used_slots = used_slots + 1 WHERE pool = 'gpu';
+UPDATE task_instance SET state = 'queued' WHERE id = X;
+
+COMMIT;  -- locks released
+```
+
+Lock держится **до COMMIT/ROLLBACK**. PostgreSQL автоматически освобождает locks по завершении транзакции.
+
+---
+
+## HA Scheduler — два сценария
+
+### Сценарий 1: Оба scheduler-а пытаются войти одновременно
+
+<DiagramContainer title="Сценарий 1: HA Scheduler race" color="amber">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Scheduler-1 t=0ms" tooltip="Scheduler 1 запросил SELECT FOR UPDATE NOWAIT на slot_pool. Postgres даёт ему ROW EXCLUSIVE lock на все строки. Он внутри critical section.">SELECT FOR UPDATE NOWAIT → OK</DataBox>
+      <DataBox label="Scheduler-2 t=1ms" tooltip="Scheduler 2 запрашивает то же. PostgreSQL видит, что rows уже locked. Возвращает ошибку lock_not_available из-за NOWAIT.">SELECT FOR UPDATE NOWAIT → ERROR</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Scheduler-1 — enqueue 16 TI" tooltip="Scheduler 1 внутри section: проверяет limits, переводит TI scheduled → queued, кладёт в executor queue.">processes batch</DataBox>
+      <DataBox label="Scheduler-2 — skip tick" tooltip="Scheduler 2 ловит OperationalError, тихо логирует на debug level и переходит к housekeeping. Через scheduler_heartbeat_sec (5s) попробует снова.">sleep 5s, retry</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Scheduler-1 COMMIT — lock released" tooltip="Транзакция Scheduler 1 завершается. ROW EXCLUSIVE locks автоматически освобождаются. Теперь Scheduler 2 на следующем tick войдёт первым.">lock released</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+### Сценарий 2: Scheduler-1 умер, scheduler-2 adopt-ит его TI
+
+<DiagramContainer title="Сценарий 2: Scheduler failover" color="rose">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox label="Scheduler-1 живой, scheduling" tooltip="Latest heartbeat обновляется каждый tick. TI accumulated assigned to его job_id.">latest_heartbeat=now()</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="kill -9 / node crash" />
+    <FlowRow>
+      <DataBox label="Scheduler-1 мёртв" tooltip="Pod crashed, нет SIGTERM handler. latest_heartbeat остаётся последним значением. Через scheduler_health_check_threshold (30s) он считается мёртвым.">latest_heartbeat прокис</DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="30s prошло" />
+    <FlowRow>
+      <DataBox label="Scheduler-2 — adopt_or_reset_orphaned_tasks" tooltip="Scheduler 2 в фазе housekeeping: UPDATE job SET state='failed' WHERE latest_heartbeat < now() - 30s; затем findит orphan TI и пытается adopt их (try_adopt_task_instances) или reset.">housekeeping</DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox label="Orphan TI reset → scheduled" tooltip="TI orphan (state=queued/running с мёртвым scheduler) сбрасываются в state=None или scheduled. Они попадут в следующий цикл critical section.">orphan TI rescheduled</DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+---
+
+## Тонкости: MariaDB не работает
+
+Этот механизм опирается на `SKIP LOCKED` и `NOWAIT` для row-level locks. PostgreSQL поддерживает оба с давних версий. **MariaDB < 10.6 не имеет `SKIP LOCKED` / `NOWAIT`** → multi-scheduler HA не работает.
+
+Из официальных доков:
+
+> *"It is highly recommended to use Postgres for production deployments. MySQL is supported but for Multi-Scheduler setups, MySQL 8.0+ is required because of `SKIP LOCKED`/`NOWAIT` support."*
+
+Для production — **PostgreSQL golden path**.
+
+---
+
+## Сколько scheduler-ов имеет смысл
+
+Запустить 10 scheduler-ов вы можете, но толку не будет:
+
+- **Critical section serialized** — только один scheduler одновременно делает enqueue.
+- **DAG parsing distributed** — но это делает DAG Processor (отдельный процесс с собственным parallelism).
+- **Scheduling decisions (phase 2)** — могут параллелиться, но обычно не bottleneck.
+
+**Sweet spot:**
+- 1 scheduler — dev / small (< 50 DAGs)
+- 2 scheduler-а — small-medium (50-500 DAGs)
+- 3-4 scheduler-а — medium-large (500-5k DAGs)
+- 5+ scheduler-ов — diminishing returns, DB bottleneck
+
+Если очевидно мало throughput — сначала смотреть на DB tuning (PgBouncer, indexes, VACUUM), а не добавлять ещё scheduler-ы.
+
+---
+
+## Где deadlock невозможен (и где возможен)
+
+`SELECT ... FOR UPDATE NOWAIT` гарантирует **отсутствие deadlock** между scheduler-ами:
+- Один lock acquired → второй сразу получает error → no waiting cycle.
+
+Но deadlock возможен между:
+- Scheduler и user task, который сам делает UPDATE на task_instance (например, через airflow CLI `tasks set-state`)
+- Scheduler и пользовательский query из stale connection
+
+Если в Postgres логах видите `deadlock detected` — это указывает на user-initiated SQL queries, конфликтующие со scheduler.
+
+---
+
+## Hands-on: смотрим locks live
+
+В живой системе:
+
+```sql
+-- Активные locks на slot_pool
+SELECT
+    pa.pid,
+    pa.application_name,
+    pa.state,
+    pl.mode,
+    pl.granted,
+    pa.query_start,
+    now() - pa.query_start AS duration,
+    pa.query
+FROM pg_locks pl
+JOIN pg_stat_activity pa ON pl.pid = pa.pid
+WHERE pl.relation = 'slot_pool'::regclass
+ORDER BY pa.query_start;
+```
+
+Если у вас два scheduler-а, во время race условия увидите:
+- Один с `granted=true, mode='RowExclusiveLock'` (внутри critical section)
+- Другой получит error и не появится в списке (NOWAIT не блокируется)
+
+В следующем уроке — **Lab: HA Scheduler Race** — запустим 2 scheduler-а в docker-compose, и через streaming `pg_locks` запрос будем смотреть как они конкурируют в realtime.
+
+---
+
+<KnowledgeCheck
+  question="Почему добавление 10-го scheduler-а к существующему кластеру не даёт значительного выигрыша по throughput?"
+  answer="Critical section serialized — только один scheduler одновременно делает enqueue decisions в phase 3 main loop. Это происходит через row-level lock на slot_pool с NOWAIT — второй scheduler получает lock_not_available и пропускает tick. Остальные фазы (создание DagRun, scheduling TI, housekeeping) могут идти параллельно, но обычно не bottleneck. Sweet spot: 2-4 scheduler-а для medium-large deployments. После этого diminishing returns, DB становится bottleneck, лучше тюнить Postgres (PgBouncer, indexes, VACUUM, partitioning логов) чем добавлять scheduler-ы. Из Shopify scale experience: 3 scheduler-а + хорошо tuned RDS PostgreSQL обслуживают 150k TI/day на 10k DAGs."
+/>

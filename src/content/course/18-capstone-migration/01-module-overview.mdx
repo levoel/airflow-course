@@ -1,0 +1,108 @@
+---
+title: "Обзор модуля: Capstone и Migration 2→3"
+description: "End-to-end проект + Migration playbook с upgrade-check, ruff AIR301/302"
+order: 1
+difficulty: "advanced"
+estimatedTime: 18
+topics: ["Capstone", "Migration", "Airflow 3", "Production"]
+---
+
+# Capstone и Migration 2→3 — финальный модуль
+
+Финальный модуль — интегральная проверка знаний и practical playbook для migration с 2.x на 3.x. Capstone-проект объединяет все killer-темы курса в реальный production pipeline.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Capstone — design phase | E2E pipeline architecture, requirements |
+| 03 | Capstone — implementation | Datasets, dynamic mapping, deferrable, custom XCom, OpenLineage |
+| 04 | Capstone — K8s deployment | Helm chart, HA setup |
+| 05 | Migration 2.x → 3.x — overview | Что меняется, breaking changes, timeline |
+| 06 | Migration tools | airflow upgrade-check, ruff AIR301/302 |
+| 07 | Migration — DAG code changes | Imports, decorators, SubDAG → TaskGroup |
+| 08 | Migration — infrastructure changes | DAG Processor mandatory, Task SDK, FAB removal |
+
+## Capstone проект
+
+**Задача**: Real-time orders ETL pipeline.
+
+**Архитектура**:
+```
+PostgreSQL (orders DB)
+    ↓ CDC через Debezium
+Kafka topics (orders, items, customers)
+    ↓ Airflow DAG triggered by dataset
+Spark transformation (через KubernetesPodOperator)
+    ↓ Asset emission
+Iceberg lakehouse (через SparkSubmitOperator)
+    ↓ Asset cascade
+ClickHouse OLAP (через ClickHouseOperator)
+    ↓ Notify
+Slack alerts (через deferrable sensor)
+```
+
+**Что демонстрируется**:
+- ✅ Assets (Modules 8) для data-aware scheduling
+- ✅ Dynamic Task Mapping (M7) для parallel processing файлов
+- ✅ Deferrable Sensors (M9) для Kafka topic monitoring
+- ✅ Custom XCom Backend на S3 (M6) для блобов
+- ✅ OpenLineage automatic emission (M14) → Marquez
+- ✅ Pluggable Executors (M5) — light tasks на Celery, Spark на K8s
+- ✅ Vault Secrets Backend (M10) для DB credentials
+- ✅ HA Setup (M15) — 2 scheduler, 2 triggerer
+
+## Migration 2.x → 3.x — критические изменения
+
+### Breaking changes
+
+| Что | 2.x | 3.x |
+|---|---|---|
+| **Imports** | `from airflow.models import Variable` | `from airflow.sdk import Variable` |
+| **DAG processor** | Опциональный | **Mandatory** (AIP-66) |
+| **Worker DB access** | Direct SQLAlchemy | **Только через REST API** (AIP-72) |
+| **Webserver** | Flask | **FastAPI API Server** (AIP-79) |
+| **execution_date** | Часто используется | **Deprecated** — use logical_date (AIP-83) |
+| **SubDAG operator** | Доступен | **Удалён** (anti-pattern) |
+| **SmartSensor** | Доступен | **Удалён** (use deferrable) |
+| **Datasets** | `from airflow import Dataset` | **Assets**: `from airflow.sdk import asset` (AIP-74) |
+| **FAB auth** | Built-in | **Pluggable** (AIP-79) |
+
+### Migration tools
+
+```bash
+# 1. Static check
+airflow upgrade-check --to-version 3.2
+
+# 2. Ruff rules
+pip install ruff
+ruff check --select AIR301,AIR302 dags/
+
+# 3. Test new imports
+ruff check --fix --select AIR301 dags/  # автозамена импортов
+```
+
+### Step-by-step playbook
+
+1. **Upgrade to 2.11.x** (LTS) — последняя 2.x с migration helpers
+2. **Fix `airflow upgrade-check` warnings** все
+3. **Backup metadata DB**
+4. **Pause all DAGs** через UI
+5. **Wait for in-flight TaskInstances** — все должны завершиться
+6. **Upgrade Airflow 2.11 → 3.2** через `pip install` или Helm chart upgrade
+7. **Run `airflow db migrate`**
+8. **Verify** — check DAG Processor process, API Server health
+9. **Unpause DAGs gradually**
+
+## Killer takeaway
+
+Migration 2.x → 3.x — не косметический upgrade. Это **архитектурный сдвиг** — Task SDK boundary, DAG Bundles, Datasets→Assets, Pluggable Executors. Делайте миграцию planned, с testing на staging environment минимум 2 недели.
+
+## Что дальше
+
+Курс закончен. Если хотите углубиться:
+- **Astronomer Academy** — community courses с certification
+- **Airflow Summit** — annual conference, talks доступны online
+- **Apache Airflow Slack** — community Q&A
+- **Дальнейшие шаги** — изучите Dagster (asset-first подход), Prefect 3 (dynamic), Temporal (durable execution) для расширения архитектурного видения

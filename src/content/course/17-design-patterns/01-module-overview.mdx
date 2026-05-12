@@ -1,0 +1,95 @@
+---
+title: "Обзор модуля: Design Patterns"
+description: "Idempotency, DAG factory, backfill-safety, HITL (3.1), OpenLineage-aware patterns"
+order: 1
+difficulty: "advanced"
+estimatedTime: 12
+topics: ["Design Patterns", "Idempotency", "Factory", "HITL"]
+---
+
+# Design Patterns — обзор модуля
+
+Production Airflow — это не про синтаксис @dag/@task, а про правильную архитектуру pipeline-ов. Этот модуль — collection patterns, которые отличают мaintainable production DAGs от спагетти-кода.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Idempotency | MERGE INTO, atomic writes, deterministic paths |
+| 03 | DAG factory pattern | Генерация DAGs из конфига, pitfalls top-level imports |
+| 04 | Reusable TaskGroups + Setup/Teardown | Wrapping ephemeral compute |
+| 05 | Backfill-safe DAGs | Data interval respecting, no `datetime.now()` |
+| 06 | HITL (Human-in-the-Loop, 3.1) | Approval workflows via UI |
+| 07 | OpenLineage-aware patterns | Designing for lineage emission |
+| 08 | Error handling и retry strategies | Exponential backoff, dead letter queues |
+
+## Top 5 patterns
+
+### 1. Idempotency
+
+Любой task должен можно перезапускать без побочных эффектов:
+
+```python
+@task
+def load_to_warehouse(date: str, path: str):
+    # MERGE INTO вместо INSERT
+    sql = f"""
+    MERGE INTO orders dest
+    USING (SELECT * FROM external WHERE dt = '{date}') src
+      ON dest.id = src.id
+    WHEN MATCHED THEN UPDATE SET ...
+    WHEN NOT MATCHED THEN INSERT ...;
+    """
+    execute(sql)
+```
+
+### 2. DAG factory
+
+```python
+def make_dag(config: dict) -> DAG:
+    @dag(dag_id=config['id'], schedule=config['schedule'])
+    def generated():
+        for step in config['steps']:
+            task_from_step(step)
+    return generated()
+
+for cfg in load_configs():
+    globals()[cfg['id']] = make_dag(cfg)
+```
+
+⚠️ **Pitfall**: `load_configs()` выполняется на каждом DAG parse → если делает network call, замедляет parsing.
+
+### 3. Backfill-safe DAGs
+
+```python
+# ❌ ПЛОХО — datetime.now() сдвигается на каждом parse
+@dag(start_date=datetime.now() - timedelta(days=7), schedule='@daily')
+
+# ✅ ХОРОШО — hardcoded
+@dag(start_date=datetime(2024, 1, 1), schedule='@daily', catchup=False)
+```
+
+### 4. HITL (3.1+)
+
+```python
+from airflow.sdk import HITLApproval
+
+@task
+def deploy_to_prod():
+    approval = HITLApproval(
+        approvers=['security-team'],
+        message="Deploy v2.5 to production?",
+        timeout=timedelta(hours=24)
+    )
+    if approval.wait():
+        do_deploy()
+```
+
+### 5. OpenLineage-aware
+
+Использовать standard operators (PostgresOperator, S3CopyObjectOperator) везде где возможно — они эмитят OL events автоматически. Custom Python operators требуют write extractors.
+
+## Killer takeaway
+
+Один principle превосходит все остальные: **каждый task должен быть атомарным и идемпотентным**. Если вы можете убить task посередине, удалить его state и перезапустить — данные останутся консистентными — это правильно сделанный task.

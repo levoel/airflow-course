@@ -1,0 +1,42 @@
+---
+title: "Обзор модуля: XCom и data passing"
+description: "DB storage + 48KB лимит, custom XCom backends, Object Storage XCom через fsspec"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["XCom", "Custom Backends", "Object Storage", "fsspec"]
+---
+
+# XCom и data passing — обзор модуля
+
+XCom (cross-communication) — механизм передачи данных между tasks. По умолчанию хранится в metadata DB, имеет практический лимит 48KB. Для production data engineering этого мало — модуль учит, как масштабировать XCom через custom backends на S3/GCS/Object Storage abstraction.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Default XCom — DB storage | Таблица xcom, serialization (JSON vs pickle), 48KB лимит |
+| 03 | Custom XCom Backend | Subclass BaseXCom, serialize_value / deserialize_value |
+| 04 | Object Storage XCom (2.8+) | fsspec-based, S3/GCS/Azure unified API |
+| 05 | XCom в Dynamic Mapping | map_index, как xcom_pull агрегирует |
+| 06 | XCom security и size pitfalls | Pickle deserialization attack, large objects performance |
+
+## Ключевые концепты
+
+- **Default storage**: таблица `xcom` в metadata DB, колонка `value` (bytea/mediumblob). Практический лимит ~48KB, выше — scheduler тормозит из-за раздутых select-ов
+- **Сериализация**: JSON (default через XComEncoder) или pickle (legacy, security risk)
+- **Custom Backend**: subclass `airflow.sdk.bases.xcom.BaseXCom`, override `serialize_value` / `deserialize_value`. В DB сохраняется ссылка, blob — на S3/GCS
+- **Object Storage XCom** (2.8+): готовый `XComObjectStorageBackend` через провайдер `common.io`. URL: `xcom_objectstorage_path = s3://conn_id@mybucket/key`
+- **В Mapped tasks**: каждая mapped TI хранит XCom отдельно (`map_index` column). `xcom_pull(task_ids='x')` без map_index агрегирует всё
+
+## Killer takeaway
+
+100MB pandas DataFrame через default XCom = error/timeout. Через S3 backend = работает прозрачно. Migration на S3 backend — одна из первых вещей при выходе в production.
+
+## Production gotchas
+
+1. **`do_xcom_push=True`** для всех PythonOperators по умолчанию → раздутые xcom-ы. Установить False, если return не используется.
+2. **`xcom_pull` без `task_ids`** подтянет всё из upstream — expensive.
+3. **Pickle security** — never `enable_xcom_pickling=True` если есть user-submitted code. Deserialization attack.
+4. **Custom backend** обязателен для production с pandas/numpy объектами.

@@ -1,0 +1,72 @@
+---
+title: "Обзор модуля: Executors deep dive"
+description: "Local, Celery (prefetch pitfall), Kubernetes (watcher thread), Pluggable Executors AIP-61, Edge Executor AIP-69"
+order: 1
+difficulty: "advanced"
+estimatedTime: 12
+topics: ["Executors", "Celery", "Kubernetes", "Edge", "Pluggable"]
+---
+
+# Executors deep dive — обзор модуля
+
+Executor — компонент, отвечающий за фактическое выполнение tasks. Он получает workload от scheduler, кладёт в свою queue/orchestrator, отслеживает результат. Этот модуль препарирует каждый executor до конкретных processes, threads и network calls.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | LocalExecutor | multiprocessing.Queue, N worker processes, single-node limits |
+| 03 | CeleryExecutor | Broker (Redis/RabbitMQ), prefetch pitfall, worker autoscaling |
+| 04 | KubernetesExecutor | Pod-per-task, watcher thread, pod template, cold start mitigation |
+| 05 | Pluggable Executors (AIP-61) | Multiple executors одновременно, task-specific routing |
+| 06 | EdgeExecutor (AIP-69) | HTTP polling, on-prem/edge workers за NAT |
+| 07 | Executor comparison lab | Бенчмарки startup latency, throughput, cost trade-offs |
+
+## Ключевые концепты
+
+### LocalExecutor
+- `multiprocessing.Queue` + N worker процессов внутри scheduler-процесса
+- Best for: dev, single-node (<100 tasks/min)
+- В 3.0 SequentialExecutor удалён — Local минимум
+
+### CeleryExecutor
+- Архитектура: Scheduler → Celery broker (Redis) → Workers → Result backend (Postgres)
+- **`worker_prefetch_multiplier`** (default 4) — pitfall: long-task занимает 4 slots, остальные voiding
+- **Best practice**: `worker_prefetch_multiplier = 1` для long-task workloads
+- `celery_acks_late = True` — ACK после успешного выполнения
+
+### KubernetesExecutor
+- Pod-per-task → security isolation + dependency isolation
+- **Watcher thread** в scheduler-процессе подписан на K8s API events
+- Pod template overrides per-task через `executor_config={"pod_override": V1Pod(...)}`
+- **Cold start cost**: 5-15s на pull image + scheduling + init container
+
+### Pluggable Executors (AIP-61, 2.10+)
+```ini
+[core]
+executor = LocalExecutor,CeleryExecutor,KubernetesExecutor
+```
+- Первый = default
+- Task может явно указать executor через `@task(executor='K8sExecutor')`
+- В 3.2 — team-scoping (AIP-67)
+
+### EdgeExecutor (AIP-69, 3.0+)
+- Worker за NAT звонит домой через HTTP polling
+- Provider: `apache-airflow-providers-edge3`
+- Use cases: on-prem GPU clusters, IoT edge nodes, multi-region pipelines
+
+## Killer demos
+
+1. **CeleryExecutor prefetch pitfall** — long task (1h) + short tasks (1min) на одном worker. С `prefetch_multiplier=4` show starvation, установить =1 → fix.
+2. **K8sExecutor cold-start measurement** — измерить delay от submit до running, optimize через pre-pull image + minimal init container.
+3. **Pluggable Executors routing** — DAG с light tasks (Celery) + heavy GPU tasks (K8s), увидеть как scheduler routes.
+
+## Comparison cheatsheet
+
+| Executor | Task startup | Isolation | Best for |
+|---|---|---|---|
+| Local | Instant | Process | Dev, single-node |
+| Celery | 1-3s | Worker concurrency | High throughput, low latency |
+| Kubernetes | 10-30s | Full pod | Heavy resources, dependencies |
+| Edge | 1-10s + RTT | Worker process | On-prem, NAT, edge |

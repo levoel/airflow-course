@@ -1,0 +1,63 @@
+{
+  "lessonSlug": "00-course-intro/03-environment-setup",
+  "moduleId": "00-course-intro",
+  "_meta": {
+    "idPrefix": "airflow-m00-03",
+    "description": "Use IDs: airflow-m00-03-q1, airflow-m00-03-q2, ... for MC/TF"
+  },
+  "questions": [
+    {
+      "id": "airflow-m00-03-q1",
+      "type": "multiple-choice",
+      "question": "Какие компоненты обязательно поднимаются при `docker compose up` для Airflow 3.x?",
+      "options": [
+        { "id": "a", "text": "Только Postgres и webserver — остальное по требованию" },
+        { "id": "b", "text": "Postgres + Redis + apiserver + scheduler + dag-processor + worker + triggerer" },
+        { "id": "c", "text": "MySQL + RabbitMQ + Flower + Sequencer" },
+        { "id": "d", "text": "Kafka + Spark + Hive Metastore" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Минимальный setup Airflow 3.x требует все эти компоненты: Postgres (metadata DB), Redis (Celery broker), apiserver (FastAPI вместо Flask webserver — 3.x ключевое изменение), scheduler (главный мозг), dag-processor (mandatory в 3.0+, AIP-66), worker (Celery), triggerer (asyncio loop для deferrable operators). В 2.x dag-processor был опциональным — теперь обязателен. Flower deprecated в пользу OTel metrics.",
+      "studyHint": "Повторите урок 03 — диаграмма 'Минимальный setup Airflow 3.x'",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m00-03-q2",
+      "type": "multiple-choice",
+      "question": "Какая команда позволит вам запустить task `say_hello` из DAG `hello_world` локально для тестов, БЕЗ участия scheduler-а?",
+      "options": [
+        { "id": "a", "text": "airflow dags trigger hello_world" },
+        { "id": "b", "text": "airflow dags backfill hello_world" },
+        { "id": "c", "text": "airflow tasks test hello_world say_hello 2026-05-12" },
+        { "id": "d", "text": "airflow scheduler --dag hello_world.say_hello" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "`airflow tasks test <dag_id> <task_id> <logical_date>` запускает конкретный task локально, не создавая DagRun в metadata DB и не задействуя scheduler. Это основной инструмент для интерактивной отладки. `airflow dags trigger` создаёт обычный DagRun через scheduler. `airflow dags backfill` прогоняет DAG за исторические даты (в 3.0+ это управляется scheduler-ом — AIP-78). Опция d не существует.",
+      "studyHint": "Повторите урок 03 — раздел 'Базовый CLI'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m00-03-q3",
+      "type": "multiple-choice",
+      "question": "Почему важно уметь делать прямые SQL-запросы к metadata DB Airflow?",
+      "options": [
+        { "id": "a", "text": "Чтобы делать запросы из приложений вместо REST API — это быстрее" },
+        { "id": "b", "text": "Для production debugging: посмотреть точное состояние DagRun/TaskInstance, понять что делает scheduler сейчас, проследить XCom values" },
+        { "id": "c", "text": "Чтобы редактировать состояния TI напрямую вместо использования clear" },
+        { "id": "d", "text": "Это нужно только разработчикам Airflow — production пользователи не должны лезть в БД" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Прямой SQL к metadata DB — критический навык для debugging. Web UI не показывает всю информацию — например, queued_dttm, raw executor_config, exact state transitions, server-side cursor activity. Мы будем активно использовать SELECT-запросы в модуле 04 (Scheduler internals). Важно: НЕ модифицировать данные напрямую (UPDATE/DELETE) — это break consistency. И не подключаться из приложений через airflow user — у него широкие права; создайте read-only пользователя.",
+      "studyHint": "Повторите урок 03 — раздел 'Прямой доступ к Postgres'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m00-03-q4",
+      "type": "true-false",
+      "question": "В Airflow 3.x `airflow-apiserver` (FastAPI) заменил `airflow-webserver` (Flask), что также добавило REST API v2 и убрало direct DB access у workers.",
+      "correctAnswer": true,
+      "explanation": "Это правда. В 3.0 произошла фундаментальная архитектурная перестройка: (1) Web UI переписан на React, бэкенд — FastAPI; (2) REST API v2 — на FastAPI с автогенерируемым OpenAPI; (3) Task SDK boundary (AIP-72) — workers больше не имеют direct DB access, только через REST API; (4) появился `airflowctl` как provider package — remote CLI. Это позволяет в перспективе писать workers на других языках (Go SDK in flight).",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

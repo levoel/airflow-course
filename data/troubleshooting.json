@@ -1,0 +1,212 @@
+{
+  "categories": [
+    {
+      "id": "scheduler-issues",
+      "name": "Scheduler issues",
+      "issues": [
+        {
+          "title": "Scheduler loop slow (>5s)",
+          "symptoms": ["scheduler.scheduler_loop_duration метрика > 5000ms", "Задачи долго переходят из scheduled в queued", "UI медленно обновляется"],
+          "causes": [
+            "DAG parse блокирует scheduler loop (в 2.x)",
+            "Слишком много DAG файлов на медленной FS",
+            "Метаданные в БД росли — индексы фрагментированы"
+          ],
+          "fixes": [
+            "В 3.0 вынести парсинг в standalone DAG Processor (mandatory)",
+            "Использовать gitSync sidecar на local SSD",
+            "Increase parsing_processes до 2x vCPU",
+            "Запустить VACUUM ANALYZE на task_instance, dag_run, log, xcom",
+            "Очистить старую историю: airflow db clean --keep-last 28"
+          ]
+        },
+        {
+          "title": "Tasks stuck in queued",
+          "symptoms": ["TaskInstance в queued > 5 минут", "Worker idle, но задачи не подбираются"],
+          "causes": [
+            "Executor heartbeat миссит (Celery worker крашится)",
+            "Pool slots exhausted",
+            "Priority weight tasks конкурируют",
+            "worker_prefetch_multiplier > 1 + long task блокирует slot",
+            "Broker (Redis/RabbitMQ) недоступен"
+          ],
+          "fixes": [
+            "Проверить celery worker logs: docker compose logs worker | grep ERROR",
+            "Проверить broker connectivity: docker exec airflow-scheduler airflow celery inspect ping",
+            "SELECT * FROM slot_pool WHERE used_slots = occupied_slots → exhausted",
+            "Установить worker_prefetch_multiplier = 1 для long-task workloads",
+            "Adopt orphans: ждать adopt_or_reset_orphaned_tasks или restart scheduler"
+          ]
+        },
+        {
+          "title": "could not obtain lock в Postgres логах",
+          "symptoms": ["В Postgres log: 'process X waiting for ShareLock on transaction'"],
+          "causes": [
+            "HA scheduler конкурирует за critical section на slot_pool",
+            "Это нормально до PR #19842 (Airflow 2.4+)"
+          ],
+          "fixes": [
+            "Это ожидаемое поведение — игнорировать",
+            "Если 2 scheduler-а часто спят (looks idle) — уменьшить scheduler_heartbeat_sec или max_dagruns_per_loop_to_schedule"
+          ]
+        },
+        {
+          "title": "Multiple scheduler-ы на MariaDB не работают",
+          "symptoms": ["Deadlocks", "Task пропадают в queued"],
+          "causes": ["MariaDB < 10.6 не имеет SKIP LOCKED / NOWAIT"],
+          "fixes": [
+            "Upgrade MariaDB до 10.6+",
+            "Или мигрировать на PostgreSQL (golden path для Airflow)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "executor-issues",
+      "name": "Executor issues",
+      "issues": [
+        {
+          "title": "KubernetesExecutor cold start 10-30s",
+          "symptoms": ["Task с короткой логикой (1s работы) занимает 20+ секунд от submission до completion"],
+          "causes": [
+            "Pull image занимает время",
+            "K8s scheduler placement",
+            "Init container",
+            "Python interpreter cold start"
+          ],
+          "fixes": [
+            "Pre-pull image на nodes через DaemonSet",
+            "Minimize image size — use slim base, multi-stage build",
+            "ImagePullPolicy: IfNotPresent",
+            "Skip init container если возможно",
+            "Для short-task — switch на CeleryExecutor через Pluggable Executors AIP-61"
+          ]
+        },
+        {
+          "title": "Celery worker OOM-Killed",
+          "symptoms": ["Pod killed reason: OOMKilled", "Task fails with retcode 137"],
+          "causes": [
+            "Worker concurrency × memory per task > pod memory limit",
+            "Memory leak в user code",
+            "XCom через pickle с large objects"
+          ],
+          "fixes": [
+            "Reduce worker_concurrency",
+            "Set worker_max_tasks_per_child = 100 (recycle worker)",
+            "Use custom XCom backend (S3) для больших данных",
+            "Set lifecycle.preStop hook для graceful flush heartbeat"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "task-issues",
+      "name": "Task issues",
+      "issues": [
+        {
+          "title": "Zombie task — running но heartbeat прокис",
+          "symptoms": ["TI в state=running, latest_heartbeat > scheduler_zombie_task_threshold назад"],
+          "causes": [
+            "Worker OOMKilled / SIGKILL",
+            "Node spot termination",
+            "Network partition"
+          ],
+          "fixes": [
+            "Ждать scheduler-зачистку (default 300s)",
+            "Set retries >= 1 в задачах",
+            "K8s: terminationGracePeriodSeconds: 120, pre-stop hook flush heartbeat",
+            "Spot nodes: nodeAffinity на on-demand для критичных задач"
+          ]
+        },
+        {
+          "title": "Top-level Variable.get на каждом DAG parse",
+          "symptoms": ["DAG parse медленный", "Vault/Secrets Backend под нагрузкой"],
+          "causes": ["Variable.get вызывается на уровне модуля (top-level), не внутри task"],
+          "fixes": [
+            "Перенести Variable.get внутрь task callable",
+            "[secrets] use_cache = True (в 3.x default)",
+            "Использовать ENV variables для DAG-конфигов"
+          ]
+        },
+        {
+          "title": "Catchup создал 730 backfill runs",
+          "symptoms": ["DAG появился — сразу 730 DagRun-ов started"],
+          "causes": ["catchup=True по умолчанию", "start_date = 2 года назад"],
+          "fixes": [
+            "Всегда catchup=False для новых DAGs",
+            "При migration: airflow dags pause <dag_id> → clear → unpause",
+            "Set max_active_runs_per_dag для smooth catchup"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "db-issues",
+      "name": "Metadata DB issues",
+      "issues": [
+        {
+          "title": "Postgres growing fast — десятки ГБ",
+          "symptoms": ["metadata DB > 100GB", "Slow queries"],
+          "causes": [
+            "log table занимает 70% (если DB log handler enabled)",
+            "task_instance row count 10M+",
+            "xcom — pickled large objects",
+            "task_reschedule retention отсутствует"
+          ],
+          "fixes": [
+            "Disable DB log handler — use S3/GCS/ES remote logging",
+            "airflow db clean --keep-last 28 (cron daily)",
+            "pg_partman для partition log/xcom/task_instance по дате",
+            "VACUUM FULL periodic",
+            "Custom XCom backend (S3) для блобов"
+          ]
+        },
+        {
+          "title": "PgBouncer + server-side cursors не работает",
+          "symptoms": ["sqlalchemy errors", "Cursor lost between transactions"],
+          "causes": ["PgBouncer transaction mode + Airflow server-side cursors"],
+          "fixes": [
+            "Session mode (pool_mode = session) в PgBouncer",
+            "Или tune sql_alchemy_pool* carefully",
+            "Или transaction mode + sql_alchemy_pool_pre_ping = True"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "production-pitfalls",
+      "name": "Production pitfalls",
+      "issues": [
+        {
+          "title": "All DAGs starts at 00:00 → scheduler storm",
+          "symptoms": ["В полночь scheduler loop сотни ms", "Все DAGs queue одновременно"],
+          "causes": ["Все DAGs с @daily расписанием на одном моменте"],
+          "fixes": [
+            "Random schedule offsets: schedule='30 1 * * *' — разнести по часам",
+            "Custom Timetable с jitter",
+            "max_active_runs_per_dag = N для горизонтального ограничения"
+          ]
+        },
+        {
+          "title": "Sensor в poke mode на 24h занимает worker slot",
+          "symptoms": ["Worker slots все заняты sensor-ами", "Real tasks ждут"],
+          "causes": ["@task(mode='poke') sensor с 24h timeout"],
+          "fixes": [
+            "Switch на mode='reschedule' — освобождает slot между poke",
+            "Или deferrable=True — переходит в triggerer (asyncio)",
+            "1000 deferred sensors = 1 triggerer; 1000 poke sensors = 1000 worker slots"
+          ]
+        },
+        {
+          "title": "datetime.now() в DAG body",
+          "symptoms": ["start_date сдвигается на каждом parse", "Backfill результаты различаются"],
+          "causes": ["start_date = datetime.now() — недетерминированно"],
+          "fixes": [
+            "Hardcode: start_date = datetime(2024, 1, 1)",
+            "Никогда не вызывать datetime.now() в DAG body или decorators"
+          ]
+        }
+      ]
+    }
+  ]
+}

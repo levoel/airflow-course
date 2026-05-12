@@ -1,0 +1,60 @@
+---
+title: "Обзор модуля: Plugins и Listeners"
+description: "Plugin manager, Listener API (2.8+), React UI plugins (3.1+)"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["Plugins", "Listeners", "Hooks", "Custom UI"]
+---
+
+# Plugins и Listeners — обзор модуля
+
+Plugins позволяют расширять Airflow без форкания: добавлять hooks, operators, sensors, macros, custom UI views. В Airflow 2.8+ появился отдельный **Listener API** — новый «правильный» способ слушать события lifecycle (task started, dataset emitted).
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | Plugin manager | AirflowPlugin class, entry_points регистрация |
+| 03 | Listener API (2.8+) | Task lifecycle hooks, dataset events |
+| 04 | Custom hooks | BaseHook subclass, connection lookup |
+| 05 | Macros и Jinja | Custom macros, template_fields |
+| 06 | UI plugins (React, 3.1+) | Frontend extensibility, FastAPI endpoints |
+
+## Plugin registration
+
+Два способа:
+1. **Через `airflow/plugins/`** — file-based, legacy
+2. **Через entry_points** (рекомендуется) — provider package в `setup.py`:
+```python
+entry_points={
+    'apache_airflow_provider': ['provider_info=my_provider:get_provider_info']
+}
+```
+
+## Listener API — новый «правильный» способ
+
+```python
+from airflow.listeners import hookimpl
+
+class MyListener:
+    @hookimpl
+    def on_task_instance_running(self, previous_state, task_instance, session):
+        # Real-time hook
+        send_to_slack(f"Task {task_instance.task_id} started")
+```
+
+Доступные hooks:
+- `on_dag_run_running` / `_success` / `_failed`
+- `on_task_instance_running` / `_success` / `_failed`
+- `on_starting` / `before_stopping` — scheduler lifecycle
+- `on_dataset_created` / `on_dataset_changed` — datasets/assets events
+
+## Killer takeaway
+
+В 2.x для custom logic на task events использовали `on_failure_callback` per task, что не масштабировалось. С Listener API один listener видит **все** events системы — это идеальное место для:
+- Generic alerting (Slack, PagerDuty)
+- Audit logging
+- Custom metrics
+- Lineage emission (OpenLineage provider использует именно Listener API)

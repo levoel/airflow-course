@@ -1,0 +1,271 @@
+---
+title: "Процесс-level архитектура Airflow 3.x"
+description: "Six компонентов Airflow 3.x, что они шарят, как общаются, фундаментальная перестройка после 2.x"
+order: 1
+difficulty: "advanced"
+estimatedTime: 25
+topics: ["Архитектура", "Components", "Task SDK", "API Server", "DAG Processor"]
+---
+
+# Процесс-level архитектура Airflow 3.x
+
+В Airflow 3.0 произошла фундаментальная перестройка архитектуры, которая может на первый взгляд показаться косметической, но затрагивает каждый компонент. Если в 2.x у нас был «webserver + scheduler + worker», то в 3.x — шесть отдельных процессов с чёткими границами ответственности и единственным каналом общения через REST API (Task SDK, AIP-72).
+
+Этот урок — карта местности. Дальнейшие модули препарируют каждый компонент в детали; здесь мы видим общую картину.
+
+---
+
+## Шесть компонентов 3.x
+
+<DiagramContainer title="Архитектура Airflow 3.x — процессы и связи" color="indigo">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="API Server"
+        tooltip="FastAPI process. Слушает HTTP на 8080. Обслуживает: (1) Web UI — React frontend через статику; (2) REST API v2 — public API для пользователей; (3) Internal API — endpoint для Task SDK от workers. Заменил Flask webserver."
+      >
+        :8080 (FastAPI)
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="HTTP REST API" />
+    <FlowRow>
+      <DataBox
+        label="Scheduler"
+        tooltip="SchedulerJobRunner main loop. Создаёт DagRuns по timetable, переводит TI scheduled → queued через critical section, кидает в executor. Multi-scheduler HA через PostgreSQL row-level locks."
+      >
+        Scheduler
+      </DataBox>
+      <DataBox
+        label="DAG Processor"
+        tooltip="DagFileProcessorManager + pool DagFileProcessor процессов. Парсит .py DAG-файлы из DAG Bundles, сериализует в БД (serialized_dag table). MANDATORY в 3.0+ (AIP-66)."
+      >
+        DAG Processor
+      </DataBox>
+      <DataBox
+        label="Triggerer"
+        tooltip="asyncio event loop. Держит активные triggers для deferrable operators. SELECT ... FOR UPDATE SKIP LOCKED для multi-triggerer HA."
+      >
+        Triggerer
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="через API Server" />
+    <FlowRow>
+      <DataBox
+        label="Workers (Celery / K8s / Edge)"
+        tooltip="Executor-specific workers. Получают workload, выполняют tasks, отправляют heartbeat и результат через API Server (Task SDK). НЕТ direct DB access — это ключевое изменение 3.x."
+      >
+        Task Workers
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="storage" />
+    <FlowRow>
+      <DataBox
+        label="Metadata Database (PostgreSQL)"
+        tooltip="Сердце системы. ~25 таблиц: dag, dag_run, task_instance, xcom, connection, slot_pool, serialized_dag, trigger, job (с heartbeat). Доступ только у Scheduler / DAG Processor / Triggerer / API Server. Workers — НЕТ."
+      >
+        Metadata DB
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+Каждый компонент имеет конкретную ответственность:
+
+| Компонент | Что делает | Когда запускается |
+|---|---|---|
+| **API Server** | FastAPI: Web UI + REST API v2 + internal API для workers | Всегда (1 или N replicas) |
+| **Scheduler** | Main loop: create DagRuns, schedule TI, enqueue to executor | Всегда (HA = 2-4 instances) |
+| **DAG Processor** | Парсит .py файлы → serialized_dag | Всегда (1-2 instances) |
+| **Triggerer** | Async loop для deferrable operators | Если используются deferrable (рекомендуется) |
+| **Workers** | Executor-specific: Celery prefork, K8s pods, Edge poll | По executor type |
+| **Database** | PostgreSQL 14+ с pgbouncer | Всегда |
+
+---
+
+## Что изменилось vs 2.x
+
+Изменений много, и они системные. Главные пять:
+
+### 1. Webserver → API Server (FastAPI)
+
+В 2.x был **`airflow-webserver`** — Flask + Flask-AppBuilder (FAB) + Gunicorn. UI был server-rendered Jinja templates, REST API v1 был на flask-restful.
+
+В 3.x **`airflow-apiserver`** — FastAPI + Gunicorn. UI полностью переписан на React и обслуживается как статика. REST API v2 нативный FastAPI с автогенерируемым OpenAPI spec.
+
+Почему важно для production:
+- React UI значительно быстрее на больших DAG-ах (1000+ tasks)
+- OpenAPI spec позволяет легко генерировать клиенты (Python SDK, TypeScript для admin tools, etc.)
+- FAB удалён из core (AIP-79) — auth теперь pluggable
+- WebSocket для live updates UI
+
+### 2. DAG Processor mandatory (AIP-66)
+
+В 2.x DagFileProcessor запускался scheduler-ом как дочерние процессы. Это удобно для dev, но в production создавало проблему: медленный DAG (network call в top-level код, тяжёлый import) замедлял scheduler loop.
+
+В 3.x DAG Processor — **отдельный обязательный процесс**. Также появилась концепция **DAG Bundles** — pluggable backends для DAGs:
+
+```yaml
+# config.yaml
+dag_processor:
+  dag_bundles:
+    - name: production
+      classpath: airflow.dag_processing.bundles.git.GitDagBundle
+      kwargs:
+        repo_url: git@github.com:company/airflow-dags.git
+        ref: main
+        refresh_interval: 60
+    - name: analytics-team
+      classpath: airflow.dag_processing.bundles.s3.S3DagBundle
+      kwargs:
+        s3_url: s3://airflow-dags/analytics/
+```
+
+DagRun привязывается к **версии bundle** → cleared task запускается на коде того run-а (DAG Versioning, AIP-63).
+
+### 3. Task SDK boundary (AIP-72)
+
+Самое концептуально важное изменение. В 2.x workers имели прямой доступ к metadata DB через SQLAlchemy. Они могли:
+- Читать XCom напрямую
+- Писать heartbeat
+- Создавать Variables
+- Делать `Variable.get('x')` через `from airflow.models import Variable`
+
+Это создавало проблему **security** (worker compromise = full DB access) и **architectural** (нельзя написать worker не на Python).
+
+В 3.x появился **Task Execution Interface** (AIP-72): worker общается только через API Server по REST. На клиентской стороне — **Task SDK** (`from airflow.sdk import dag, task, Variable, ...`), которая под капотом делает HTTP вызовы.
+
+```python
+# Под капотом Variable.get('my_var') теперь:
+# 1. Worker → API Server: GET /api/v1/variables/my_var
+# 2. API Server → Metadata DB: SELECT * FROM variable WHERE key='my_var'
+# 3. API Server → Worker: {value: '...'}
+```
+
+Преимущества:
+- Workers могут быть на Go / Rust / любом языке (Go SDK in flight)
+- Edge Executor (AIP-69) работает за NAT через HTTP polling
+- Security: worker compromise не даёт DB access
+
+Недостаток: накладные расходы на HTTP. Compensation — внутренние API calls идут через unix socket или внутренний load balancer.
+
+### 4. Datasets → Assets (AIP-74/75)
+
+Концепция **Dataset** (2.4+) переименована в **Asset** в 3.0 и расширена:
+
+```python
+# 3.x:
+from airflow.sdk import asset, dag
+
+# Один task становится asset (без декоратора @dag)
+@asset(schedule="@daily")
+def orders_table(context):
+    return df_to_save  # автоматически outlet
+
+# Consumer DAG
+@dag(schedule=[orders_table])
+def downstream(): ...
+```
+
+Также появились:
+- **Asset Partitions** (3.2) — downstream подписывается на конкретные partitions
+- **Event-driven scheduling** (AIP-82) — через message bus (SQS, Kafka)
+
+### 5. Pluggable Executors одновременно (AIP-61)
+
+В 2.10+ можно конфигурировать **несколько executors одновременно**:
+
+```ini
+[core]
+executor = LocalExecutor,CeleryExecutor,KubernetesExecutor
+```
+
+Первый — default. Task может явно указать:
+
+```python
+@task(executor="KubernetesExecutor")
+def gpu_inference():
+    pass
+```
+
+Это решает старую боль — раньше один Airflow = один executor. Теперь можно: легковесные tasks на Celery (latency), GPU tasks на K8s (изоляция), Local для admin operations.
+
+В 3.2 (AIP-67) — Multi-Team Deployments: разные executors для разных команд в одном Airflow.
+
+---
+
+## Что шарят компоненты
+
+Все компоненты Airflow — **stateless** в смысле, что они не хранят локальное состояние. Всё persistent state живёт в **metadata database**.
+
+### Канал общения 1: Metadata DB (только для control plane)
+
+Scheduler, DAG Processor, Triggerer, API Server общаются через БД. Они:
+- Конкурируют за tasks через row-level locks
+- Видят heartbeat друг друга через таблицу `job`
+- Координируют critical section через `slot_pool` locks
+
+Workers **не имеют прямого доступа к DB** в 3.x. Это исключение.
+
+### Канал общения 2: API Server (для workers)
+
+Workers → API Server через REST API (Task SDK). API Server делает запросы к DB на их месте. Это:
+- Изолирует workers от schema changes
+- Позволяет non-Python workers
+- Даёт single point для auth, rate limiting, audit
+
+### Канал общения 3: Executor-specific message bus
+
+- **Celery**: Redis/RabbitMQ broker. Scheduler → broker → workers. Через broker идут commands и heartbeats.
+- **Kubernetes**: K8s API. Scheduler создаёт pods, watch endpoint для events.
+- **Edge**: HTTP polling. Workers сами зовут API Server.
+
+### Канал общения 4: Filesystem (DAGs)
+
+DAG-файлы хранятся где-то (git, S3, GCS, local volume) и доступны DAG Processor-у. После parse — попадают в БД как serialized_dag. Дальше scheduler и UI рендерят из serialized_dag, не парся .py заново.
+
+---
+
+## Минимальный production setup vs full HA
+
+**Минимальный (dev/staging):**
+
+```
+1 API Server   (1 replica)
+1 Scheduler
+1 DAG Processor
+1 Triggerer
+1-2 Workers
+1 PostgreSQL
+1 Redis (если Celery)
+```
+
+**Full production HA:**
+
+```
+2-3 API Servers     (Load balancer + N replicas)
+2-4 Schedulers     (HA через row-level locks)
+1-2 DAG Processors  (для resilience)
+2-3 Triggerers     (asyncio scale → не больше нужно)
+N Workers          (autoscaled — Celery + K8s)
+PostgreSQL RDS Multi-AZ + PgBouncer
+Redis cluster (если Celery)
+```
+
+В модуле 15 (Production Deployment) мы детально разберём sizing, PgBouncer setup, network policy.
+
+---
+
+## Что дальше в модуле
+
+В следующих уроках модуля 01:
+- **02-task-sdk-boundary** — глубоко разберём AIP-72 Task SDK: как worker общается с API Server, что внутри HTTP запросов, как Go SDK будет работать.
+- **03-dag-processor-bundles** — DAG Processor isolation, DAG Bundles (git/S3/GCS), DAG Versioning (AIP-63).
+- **04-api-server-deep** — FastAPI architecture, OpenAPI spec, React UI, auth pluggability после удаления FAB.
+- **05-job-submission-lifecycle** — пошаговый walkthrough: REST trigger → Dispatcher → JobMaster → ResourceManager → scheduler picks → executor → worker → callback complete.
+
+---
+
+<KnowledgeCheck
+  question="Почему в Airflow 3.x появилась чёткая граница между control plane (Scheduler/DAG Processor/Triggerer/API Server) и task execution (Workers), реализованная через Task SDK?"
+  answer="Три причины. (1) Security: в 2.x workers имели прямой DB access — компрометация worker давала доступ к connection passwords, variables, всему metadata. Task SDK ограничивает workers до REST API с scope per-task. (2) Multi-language: Task SDK boundary позволяет писать workers на любом языке через REST contract (Go SDK in flight для AIP-72). (3) Architectural: schema metadata DB больше не coupled с worker code — DB можно мигрировать без обновления всех workers одновременно. Также Edge Executor (AIP-69) на on-prem/edge workers за NAT работает только через HTTP polling — это было невозможно с direct DB access."
+/>

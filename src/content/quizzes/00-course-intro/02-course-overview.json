@@ -1,0 +1,63 @@
+{
+  "lessonSlug": "00-course-intro/02-course-overview",
+  "moduleId": "00-course-intro",
+  "_meta": {
+    "idPrefix": "airflow-m00-02",
+    "description": "Use IDs: airflow-m00-02-q1, airflow-m00-02-q2, ... for MC/TF"
+  },
+  "questions": [
+    {
+      "id": "airflow-m00-02-q1",
+      "type": "multiple-choice",
+      "question": "Какие два модуля курса наиболее уникальны по сравнению с другими курсами по Airflow на рынке?",
+      "options": [
+        { "id": "a", "text": "Module 02 (DAG fundamentals) и Module 16 (Testing)" },
+        { "id": "b", "text": "Module 04 (Scheduler internals) и Module 05 (Executors deep)" },
+        { "id": "c", "text": "Module 00 (Intro) и Module 18 (Capstone)" },
+        { "id": "d", "text": "Module 12 (Plugins) и Module 13 (REST API)" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Модули 04 (Scheduler internals) и 05 (Executors deep) — killer-модули с уникальным контентом: scheduler critical section с live pg_locks мониторингом, HA через row-level locks, executor-specific internals (Celery prefetch pitfall, K8s watcher thread, Pluggable Executors AIP-61). Эти темы редко покрываются глубоко в публичных курсах. Также важны 08 (Datasets→Assets) и 14 (OpenLineage).",
+      "studyHint": "Повторите урок 02 — раздел 'Структура 19 модулей'",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m00-02-q2",
+      "type": "multiple-choice",
+      "question": "Курс ориентирован на Apache Airflow 3.x. Что из перечисленного НЕ покрывается курсом?",
+      "options": [
+        { "id": "a", "text": "TaskFlow API и dynamic task mapping" },
+        { "id": "b", "text": "SubDAG operator (заменён TaskGroup, anti-pattern) и Smart Sensors (удалены в 2.x)" },
+        { "id": "c", "text": "Kubernetes Operator для деплоя Airflow" },
+        { "id": "d", "text": "OpenLineage и DAG Versioning" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "SubDAG operator и Smart Sensors намеренно опущены, потому что они либо deprecated/removed, либо признаны anti-pattern. SubDAG заменён TaskGroup (с 2.0), Smart Sensors удалены в пользу Deferrable Operators. Также не покрываем Airflow 1.x, Flower (заменяется OTel), per-DAG concurrency old syntax. Всё остальное в списке — наоборот, ключевые темы курса.",
+      "studyHint": "Повторите урок 02 — раздел 'Что НЕ покрываем'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m00-02-q3",
+      "type": "multiple-choice",
+      "question": "Какие пререкуизиты предполагаются у студента курса?",
+      "options": [
+        { "id": "a", "text": "Глубокое понимание Java и Spark" },
+        { "id": "b", "text": "Опыт работы с Airflow на уровне 'писал DAG в LocalExecutor', знание Python (декораторы, asyncio), SQL и PostgreSQL" },
+        { "id": "c", "text": "Сертификация AWS Solutions Architect" },
+        { "id": "d", "text": "Никаких пререкуизитов — курс для абсолютных новичков" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Курс продвинутый: предполагается базовое знакомство с Airflow (написание DAGs, запуск LocalExecutor), хороший Python (декораторы, asyncio на уровне идеи), SQL и работа с PostgreSQL. Для абсолютных новичков рекомендуется сначала базовый курс на Astronomer Academy или книга 'Data Pipelines with Apache Airflow' (Manning).",
+      "studyHint": "Повторите урок 02 — раздел 'Целевая аудитория'",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m00-02-q4",
+      "type": "true-false",
+      "question": "Каждый модуль курса включает MDX-уроки, knowledge check, quiz из 4 вопросов на урок, module exam из 6 вопросов и Docker lab на ключевые модули.",
+      "correctAnswer": true,
+      "explanation": "Это стандартная структура каждого модуля. MDX даёт теорию с диаграммами и кодом, quiz после каждого урока проверяет конкретное понимание (4 вопроса разного bloomLevel), module exam в конце модуля интегральный (6 вопросов, passing threshold 70%). Docker labs на killer-модули (04 Scheduler, 05 Executors, 09 Triggerer, 14 OpenLineage, 15 Production) дают возможность экспериментально проверить теорию руками.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

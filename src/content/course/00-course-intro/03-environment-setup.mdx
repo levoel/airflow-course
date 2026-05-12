@@ -1,0 +1,252 @@
+---
+title: "Окружение и first run"
+description: "Установка Airflow 3.x в Docker, первый DAG, обзор UI и CLI"
+order: 3
+difficulty: "beginner"
+estimatedTime: 20
+topics: ["Setup", "Docker Compose", "Airflow CLI", "Web UI"]
+---
+
+# Окружение и first run
+
+Этот урок — практический. К концу у вас будет работающий Airflow 3.2 в Docker, запущенный DAG, понимание базовых компонентов UI и CLI. Дальнейшие модули предполагают, что окружение поднято.
+
+---
+
+## Требования
+
+- **Docker Desktop / OrbStack** — для macOS лучше OrbStack (быстрее, меньше памяти)
+- **Минимум 4 ГБ свободной оперативной памяти** для Airflow + Postgres + Redis
+- **Python 3.12** — для запуска уроков и labs локально вне Docker
+- **psql клиент** — для прямого доступа к metadata DB (`brew install libpq` или `apt install postgresql-client`)
+
+<Callout type="tip">
+На macOS OrbStack заметно быстрее Docker Desktop и потребляет меньше памяти. Для labs курса разница ощутимая — особенно когда поднимаете multi-scheduler HA setup.
+</Callout>
+
+---
+
+## Установка через official docker-compose
+
+Apache Airflow публикует официальный `docker-compose.yaml` для quick start. Скачайте его:
+
+```bash
+mkdir airflow-course-env && cd airflow-course-env
+
+curl -LfO 'https://airflow.apache.org/docs/apache-airflow/3.2.1/docker-compose.yaml'
+
+mkdir -p ./dags ./logs ./plugins ./config
+
+echo -e "AIRFLOW_UID=$(id -u)" > .env
+```
+
+Структура папок после команд:
+
+```
+airflow-course-env/
+├── docker-compose.yaml    # Описание сервисов
+├── .env                   # AIRFLOW_UID для прав на logs
+├── dags/                  # Сюда складываете .py с DAG (mount в scheduler/worker)
+├── logs/                  # Логи task instances
+├── plugins/               # Custom plugins
+└── config/                # airflow.cfg overrides
+```
+
+Запустите:
+
+```bash
+docker compose up airflow-init     # Однократно — инициализирует metadata DB
+docker compose up -d               # Запускает все сервисы в фоне
+```
+
+После старта вы получите:
+
+| Сервис | Порт | Что делает |
+|---|---|---|
+| `postgres` | 5432 | Metadata database (Airflow state) |
+| `redis` | 6379 | Celery broker |
+| `airflow-apiserver` | **8080** | Web UI + REST API v2 |
+| `airflow-scheduler` | — | Главный процесс scheduler |
+| `airflow-dag-processor` | — | Парсит DAG-файлы (mandatory в 3.0+) |
+| `airflow-worker` | — | Celery workers |
+| `airflow-triggerer` | — | Async triggers (deferrable operators) |
+
+Откройте `http://localhost:8080` — увидите Airflow UI. Дефолтный логин/пароль: `airflow` / `airflow`.
+
+---
+
+## Архитектура: что вы только что запустили
+
+<DiagramContainer title="Минимальный setup Airflow 3.x" color="emerald">
+  <FlowColumn>
+    <FlowRow>
+      <DataBox
+        label="API Server (FastAPI)"
+        tooltip="airflow-apiserver. В 3.x заменил Flask webserver. Слушает порт 8080. Обслуживает Web UI (React frontend) и REST API v2. Также — единственный путь worker → metadata DB через Task SDK."
+      >
+        :8080 Web UI + API
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" label="REST API v2" />
+    <FlowRow>
+      <DataBox
+        label="Scheduler"
+        tooltip="Главный мозг Airflow. Парсит DagBag (через DAG Processor), создаёт DagRun-ы по schedule, переводит TaskInstance scheduled → queued, кидает в executor. Может быть несколько scheduler-ов одновременно для HA."
+      >
+        Scheduler
+      </DataBox>
+      <DataBox
+        label="DAG Processor"
+        tooltip="Отдельный процесс (mandatory в 3.0). Парсит .py файлы DAGs, сериализует в БД (таблица serialized_dag). Раньше парсил scheduler — теперь изолировано."
+      >
+        DAG Processor
+      </DataBox>
+      <DataBox
+        label="Triggerer"
+        tooltip="Отдельный процесс с asyncio event loop. Держит тысячи активных triggers (для deferrable operators). Может быть несколько штук для HA."
+      >
+        Triggerer
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="Celery Worker"
+        tooltip="Один или несколько worker pod-ов. Получают tasks из Redis broker, выполняют их, пишут результат в result backend (тот же Postgres). Concurrency на worker = worker_concurrency."
+      >
+        Celery Worker
+      </DataBox>
+    </FlowRow>
+    <Arrow direction="down" />
+    <FlowRow>
+      <DataBox
+        label="PostgreSQL"
+        tooltip="Metadata database. Сердце Airflow. Таблицы: dag, dag_run, task_instance, xcom, connection, slot_pool, serialized_dag, trigger, log. Все scheduler-ы, workers, triggerer-ы конкурируют здесь через row-level locks."
+      >
+        Metadata DB
+      </DataBox>
+      <DataBox
+        label="Redis"
+        tooltip="Celery broker. Queue для tasks. Один queue на executor instance + дополнительные queues для priority routing. Result backend Celery — Postgres (не Redis)."
+      >
+        Celery Broker
+      </DataBox>
+    </FlowRow>
+  </FlowColumn>
+</DiagramContainer>
+
+В модуле 01 мы детально разберём роль каждого компонента и почему в 3.x именно такая разделённая архитектура.
+
+---
+
+## Первый DAG
+
+Создайте `dags/hello_world.py`:
+
+```python
+from airflow.sdk import dag, task
+from datetime import datetime
+
+@dag(
+    schedule=None,
+    start_date=datetime(2026, 1, 1),
+    catchup=False,
+    tags=["intro"],
+)
+def hello_world():
+    @task
+    def say_hello() -> str:
+        return "Hello from Airflow 3!"
+
+    @task
+    def shout(message: str):
+        print(message.upper())
+
+    shout(say_hello())
+
+hello_world()
+```
+
+Несколько секунд — и DAG появится в UI (DAG Processor каждые 30 секунд сканирует папку). Триггер вручную через кнопку **Play → Trigger DAG**, потом откройте **Grid View** — увидите execution.
+
+---
+
+## Базовый CLI
+
+Все важные операции доступны через `airflow` CLI внутри контейнера:
+
+```bash
+# Зайти в scheduler container
+docker compose exec airflow-scheduler bash
+
+# Список DAGs
+airflow dags list
+
+# Список tasks в конкретном DAG
+airflow tasks list hello_world
+
+# Triggered run конкретного DAG
+airflow dags trigger hello_world
+
+# Запустить task локально для тестов (без scheduler!)
+airflow tasks test hello_world say_hello 2026-05-12
+
+# Проверить parse errors в DAGs
+airflow dags list-import-errors
+
+# Backfill за прошлые даты (управляется scheduler-ом с 3.0)
+airflow dags backfill hello_world --start-date 2026-05-01 --end-date 2026-05-05
+
+# Очистить metadata DB от старых runs
+airflow db clean --keep-last 30
+```
+
+С 3.0 появилась команда `airflowctl` как provider package — remote CLI, работающий через REST API (полезно для CI/CD). Старый `airflow` остался для control-plane операций внутри контейнера.
+
+---
+
+## Прямой доступ к Postgres
+
+Один из главных навыков для отладки — смотреть metadata DB напрямую:
+
+```bash
+docker compose exec postgres psql -U airflow -d airflow
+
+# Список таблиц
+\dt
+
+# Состояние DagRun-ов
+SELECT dag_id, run_id, state, start_date, end_date
+FROM dag_run
+ORDER BY start_date DESC LIMIT 10;
+
+# Состояние конкретных TI
+SELECT task_id, state, try_number, queued_dttm, start_date
+FROM task_instance
+WHERE dag_id = 'hello_world'
+ORDER BY start_date DESC;
+```
+
+В модулях 04 и 05 мы будем активно использовать прямые SQL-запросы, чтобы понять, что делает scheduler в реальном времени.
+
+<Callout type="warning">
+В production никогда не подключайтесь к metadata DB как Airflow user для запросов на чтение из приложений. У него широкие права. Создайте отдельного read-only пользователя.
+</Callout>
+
+---
+
+## Что дальше
+
+В модуле 01 мы разберём процесс-level архитектуру 3.x: что такое Task SDK boundary, как DAG Bundles изменили parsing, почему API server заменил webserver. Перед этим убедитесь, что:
+
+- [ ] `docker compose up -d` поднимает все сервисы без ошибок
+- [ ] UI открывается на `:8080`, виден ваш `hello_world` DAG
+- [ ] `docker compose exec airflow-scheduler airflow dags list` показывает DAG
+- [ ] `docker compose exec postgres psql -U airflow -d airflow -c '\dt'` показывает таблицы
+
+---
+
+<KnowledgeCheck
+  question="Зачем в Airflow 3.x появился отдельный процесс DAG Processor (раньше парсинг делал сам scheduler)?"
+  answer="В 2.x scheduler сам парсил DAG-файлы в дочерних процессах. Это создавало проблему: тяжёлый DAG с медленным импортом или top-level network call мог замедлить scheduler loop. В 3.0 DAG Processor стал mandatory отдельным процессом (AIP-66 DAG Bundles). Преимущества: (1) изоляция — scheduler-у больше не нужно ждать парсинг; (2) поддержка DAG Bundles — несколько источников DAGs (git, S3, GCS) с версионированием; (3) Task SDK boundary — workers больше не имеют direct DB access, только через REST API; (4) DAG Versioning — каждый DagRun привязан к версии bundle, cleared task запустится на коде того run-а."
+/>

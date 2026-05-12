@@ -1,0 +1,57 @@
+{
+  "lessonSlug": "01-architecture/02-task-sdk-boundary",
+  "moduleId": "01-architecture",
+  "_meta": { "idPrefix": "airflow-m01-02" },
+  "questions": [
+    {
+      "id": "airflow-m01-02-q1",
+      "type": "multiple-choice",
+      "question": "Внутри task code 3.x вызов `Variable.get('my_var')` под капотом теперь:",
+      "options": [
+        { "id": "a", "text": "SQL запрос напрямую к metadata DB через SQLAlchemy" },
+        { "id": "b", "text": "HTTP REST call к API Server: GET /execution/v1/variables/my_var с task-scoped JWT" },
+        { "id": "c", "text": "Чтение из локального файла" },
+        { "id": "d", "text": "Redis lookup" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "В 3.x Variable.get превращается в HTTP REST call: GET /execution/v1/variables/<key> с task-scoped JWT в Authorization header. API Server делает SQL query к metadata DB и возвращает JSON. Worker не имеет DB credentials.",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m01-02-q2",
+      "type": "multiple-choice",
+      "question": "Что такое 'task-scoped JWT' и зачем он нужен?",
+      "options": [
+        { "id": "a", "text": "Public encryption key для шифрования passwords" },
+        { "id": "b", "text": "JWT с дата истечения и scope, ограниченным конкретным TaskInstance (dag_id, run_id, task_id, try_number). Подписан, нельзя использовать после end_date + grace period" },
+        { "id": "c", "text": "Просто session cookie" },
+        { "id": "d", "text": "ID API Server-а" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Task-scoped JWT — это signed token, выданный API Server-ом для конкретного TaskInstance. Содержит: dag_id, run_id, task_id, try_number, expiration. Это даёт две гарантии безопасности: (1) скомпрометированный token нельзя использовать после end_date + grace_period; (2) worker не может писать XCom для чужого task.",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m01-02-q3",
+      "type": "multiple-choice",
+      "question": "Накладные расходы HTTP в Task SDK — насколько они существенны?",
+      "options": [
+        { "id": "a", "text": "Каждая операция замедляется в 10 раз" },
+        { "id": "b", "text": "Latency 1-15ms на operation, mitigation через caching, batch endpoints, internal LB. В реальных deployments overhead < 1% даже для I/O-heavy tasks" },
+        { "id": "c", "text": "Нет накладных расходов" },
+        { "id": "d", "text": "Несколько секунд на operation" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Накладные расходы зависят от network proximity: 1-3ms local (worker и API Server в одном K8s namespace), 5-15ms cross-AZ. Mitigation: Task SDK кэширует Variables и Connections, batch endpoints для нескольких ключей, internal load balancer с keepalive. В реальных deployments overhead < 1% даже для I/O-heavy tasks. Latency 1-15ms на operation, mitigation через caching.",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m01-02-q4",
+      "type": "true-false",
+      "question": "Task SDK boundary позволяет Edge Executor работать за NAT/firewall через HTTP polling — это было невозможно в 2.x.",
+      "correctAnswer": true,
+      "explanation": "Edge Executor (AIP-69, 3.0+) использует Task SDK contract: worker сам инициирует HTTP polling к API Server, забирает workload, выполняет, отправляет результат. Не нужны открытые порты, VPN, K8s federation. Use cases: ML inference на on-prem GPU кластерах, IoT data processing на edge nodes, multi-region pipelines с regulator data residency. В 2.x worker должен был иметь direct DB network access — невозможно за NAT.",
+      "bloomLevel": "conceptual"
+    }
+  ]
+}

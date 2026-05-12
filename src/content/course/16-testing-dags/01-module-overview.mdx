@@ -1,0 +1,85 @@
+---
+title: "Обзор модуля: Testing DAGs"
+description: "Unit/integration tests, airflow dags test, custom operator testing"
+order: 1
+difficulty: "advanced"
+estimatedTime: 10
+topics: ["Testing", "pytest", "Unit Tests", "CI/CD"]
+---
+
+# Testing DAGs — обзор модуля
+
+Тестируемость — ахиллесова пята многих Airflow проектов. DAGs часто не тестируются совсем («работает на проде — значит ОК»). Этот модуль учит, как организовать unit, integration и DAG validity tests в CI/CD.
+
+## Уроки модуля
+
+| # | Урок | Что внутри |
+|---|---|---|
+| 01 | **Обзор модуля** | Текущий урок |
+| 02 | DAG validity tests | airflow dags list-import-errors, cycle detection, structural |
+| 03 | Unit tests для operators | BaseOperator.execute() mocking, fixtures |
+| 04 | Integration tests | airflow tasks test, pytest-airflow |
+| 05 | Custom operator testing | Test isolation, mock hooks, xcom verification |
+| 06 | DAG factory testing | Тестирование dynamic DAG generation |
+| 07 | CI/CD integration | GitHub Actions, GitLab CI, Astronomer Workflows |
+
+## Test pyramid для Airflow
+
+```
+        ▲
+       /│\        E2E (DagRun на real Airflow)
+      ───
+     /   \        Integration (airflow tasks test)
+    ───────
+   /       \      Unit tests (operator.execute mocking)
+  ───────────
+ /           \    DAG validity (import-errors, structure)
+─────────────
+```
+
+## Quick wins
+
+### 1. DAG validity (in PR check)
+
+```python
+# test_dag_validity.py
+from airflow.models import DagBag
+
+def test_no_import_errors():
+    dagbag = DagBag(dag_folder='dags/', include_examples=False)
+    assert not dagbag.import_errors, dagbag.import_errors
+
+def test_dag_structure():
+    dagbag = DagBag(dag_folder='dags/', include_examples=False)
+    for dag_id, dag in dagbag.dags.items():
+        assert dag.tags, f"DAG {dag_id} missing tags"
+        assert dag.default_args.get('owner'), f"DAG {dag_id} missing owner"
+        assert dag.is_dag_serializable
+```
+
+### 2. Task isolation test
+
+```python
+# test_my_task.py
+from airflow.utils.context import Context
+
+def test_extract_orders():
+    task = extract_orders.task  # @task decorator gives access to underlying operator
+    ctx = Context(...)
+    result = task.execute(ctx)
+    assert result == expected_value
+```
+
+### 3. Integration test
+
+```bash
+# Run task locally
+airflow tasks test my_dag extract_orders 2026-05-12
+
+# Run full DagRun
+airflow dags test my_dag 2026-05-12
+```
+
+## Killer takeaway
+
+Если ваш DAG никогда не падал unit test, скорее всего у вас нет unit tests. Один single `test_no_import_errors()` в CI ловит 80% багов до production.

@@ -1,0 +1,63 @@
+{
+  "lessonSlug": "00-course-intro/01-what-is-airflow",
+  "moduleId": "00-course-intro",
+  "_meta": {
+    "idPrefix": "airflow-m00-01",
+    "description": "Use IDs: airflow-m00-01-q1, airflow-m00-01-q2, ... for MC/TF"
+  },
+  "questions": [
+    {
+      "id": "airflow-m00-01-q1",
+      "type": "multiple-choice",
+      "question": "Какое из утверждений лучше всего описывает Apache Airflow?",
+      "options": [
+        { "id": "a", "text": "Распределённая очередь сообщений для микросервисов" },
+        { "id": "b", "text": "Workflow engine для оркестрации DAG-ов с управлением состоянием, retry-логикой и наблюдаемостью" },
+        { "id": "c", "text": "Замена cron для запуска скриптов по расписанию" },
+        { "id": "d", "text": "Платформа для real-time обработки потоков событий" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Airflow — это workflow engine. Он не очередь (a — это Kafka/RabbitMQ), не просто планировщик (c — это cron), не stream processor (d — это Flink). Главная ценность Airflow — модель состояний DAG/TaskInstance, граф зависимостей, retry-логика и единая платформа наблюдаемости для пайплайнов.",
+      "studyHint": "Повторите урок 01 — раздел 'Что значит оркестрация'",
+      "bloomLevel": "conceptual"
+    },
+    {
+      "id": "airflow-m00-01-q2",
+      "type": "multiple-choice",
+      "question": "У вас задача: реагировать на события из Kafka topic за 50мс с применением stateful join. Подходит ли Airflow?",
+      "options": [
+        { "id": "a", "text": "Да, через KafkaConsumerOperator с малым poke interval" },
+        { "id": "b", "text": "Да, через deferrable sensors на Kafka offset" },
+        { "id": "c", "text": "Нет — Airflow batch-ориентирован, scheduler tick секунды, task startup десятки секунд. Используйте Flink или Kafka Streams" },
+        { "id": "d", "text": "Да, если использовать KubernetesExecutor для быстрого старта pod-ов" }
+      ],
+      "correctAnswer": "c",
+      "explanation": "Airflow batch-ориентирован: scheduler tick около 5 секунд, типичный task startup через KubernetesExecutor 10-30 секунд, через LocalExecutor пара секунд. 50мс latency недостижима. Для stateful streaming с миллисекундной latency используйте Apache Flink, Kafka Streams или Materialize. Airflow можно использовать для batch ETL над данными, которые уже агрегированы streaming-системой.",
+      "studyHint": "Повторите урок 01 — раздел 'Когда Airflow — правильный выбор, а когда — нет'",
+      "bloomLevel": "applied"
+    },
+    {
+      "id": "airflow-m00-01-q3",
+      "type": "multiple-choice",
+      "question": "В DAG объявлены задачи: extract → transform → [load, notify]. extract упал. Что произойдёт с downstream задачами по умолчанию?",
+      "options": [
+        { "id": "a", "text": "Все остальные задачи получат состояние skipped" },
+        { "id": "b", "text": "transform получит upstream_failed; load и notify тоже получат upstream_failed (не запустятся)" },
+        { "id": "c", "text": "transform получит running и продолжит работу без extract" },
+        { "id": "d", "text": "Весь DagRun сразу пометится failed, остальные задачи не будут даже scheduled" }
+      ],
+      "correctAnswer": "b",
+      "explanation": "Default trigger_rule = all_success. Когда extract failed (и нет retries), transform получит upstream_failed. Транзитивно load и notify также получат upstream_failed, потому что их upstream (transform) тоже не достигла success. DagRun в итоге станет failed, но не сразу — после того как все TI достигли терминального состояния. Можно изменить trigger_rule на all_done, none_failed, all_failed для других стратегий.",
+      "studyHint": "Повторите урок 01 — раздел 'Что Airflow делает за вас'",
+      "bloomLevel": "analytical"
+    },
+    {
+      "id": "airflow-m00-01-q4",
+      "type": "true-false",
+      "question": "Прежде чем выбирать Airflow, разумно рассмотреть Prefect 3 (dynamic workflows + Prefect Cloud), Dagster (asset-first), Argo Workflows (K8s-native) и Temporal (durable execution для long-running бизнес-процессов).",
+      "correctAnswer": true,
+      "explanation": "В 2026 году Airflow — лидер, но не монополист. Каждая альтернатива имеет свою нишу: Prefect 3 — для динамических ML iteration workflows, Dagster — для analytics engineering и dbt-heavy stack-а, Argo — для CI/CD и K8s-native fan-out, Temporal — для durable business workflows. Зрелый архитектор всегда сравнивает варианты в контексте конкретной команды и нагрузки. Airflow выигрывает там, где нужна зрелая экосистема (3000+ providers), смешанная batch + data-aware нагрузка, on-premise deployment и Python-сообщество.",
+      "bloomLevel": "evaluative"
+    }
+  ]
+}
