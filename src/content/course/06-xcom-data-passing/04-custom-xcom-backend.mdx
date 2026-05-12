@@ -37,7 +37,7 @@ Custom Backend позволяет **переместить storage в специ
 
 ## BaseXCom contract
 
-Custom Backend — это subclass `airflow.models.xcom.BaseXCom` (в 2.10+ переехало в `airflow.sdk.bases.xcom.BaseXCom`). Override два static method:
+Custom Backend — это subclass `airflow.models.xcom.BaseXCom`. Override два static method:
 
 ```python
 from airflow.models.xcom import BaseXCom

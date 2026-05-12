@@ -359,7 +359,7 @@ def aggregate(): ...
 
 ---
 
-<KnowledgeCheck>
-question="DAG: `start → [check_a, check_b, check_c] → notify`. notify должен запускаться независимо от outcomes a/b/c, отсылать summary всем (что прошло, что упало). Какой trigger_rule выбрать и что внутри notify?"
-answer="**Trigger rule: `all_done`** — запустится когда все check_a/b/c достигнут terminal state (любого). Альтернативно `always`, но `all_done` чище — гарантирует что upstream actually finished (для XCom availability). **Внутри notify**: использовать `ti.xcom_pull(task_ids='check_a')` + handle case когда task failed (XCom None). Цикл по task_ids, собрать results, format summary, отправить. Pattern: `try: result = ti.xcom_pull(...) except: result = 'FAILED'`. Альтернатива в 2.7+: Listener API hook on dag_run_success/failed — централизованное уведомление для всех DAGs, без необходимости notify task в каждом."
-</KnowledgeCheck>
+<KnowledgeCheck
+  question="DAG: `start → [check_a, check_b, check_c] → notify`. notify должен запускаться независимо от outcomes a/b/c, отсылать summary всем (что прошло, что упало). Какой trigger_rule выбрать и что внутри notify?"
+  answer="**Trigger rule: `all_done`** — запустится когда все check_a/b/c достигнут terminal state (любого). Альтернативно `always`, но `all_done` чище — гарантирует что upstream actually finished (для XCom availability). **Внутри notify**: использовать `ti.xcom_pull(task_ids='check_a')` + handle case когда task failed (XCom None). Цикл по task_ids, собрать results, format summary, отправить. Pattern: `try: result = ti.xcom_pull(...) except: result = 'FAILED'`. Альтернатива в 2.7+: Listener API hook on dag_run_success/failed — централизованное уведомление для всех DAGs, без необходимости notify task в каждом."
+/>

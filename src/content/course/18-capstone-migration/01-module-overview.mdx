@@ -23,6 +23,8 @@ topics: ["Capstone", "Migration", "Airflow 3", "Upgrade Path"]
 | 06 | Migration tools | airflow upgrade-check, ruff AIR301/AIR302 |
 | 07 | Migration — DAG code changes | Imports, decorators, Datasets→Assets rename |
 | 08 | Migration — infrastructure changes | DAG Processor mandatory, Task SDK, FAB removal, FastAPI |
+| 09 | Step-by-step playbook | Pre-requisites checklist, exact day-of commands, rollback procedure |
+| 10 | What's next | Resources, career paths, alternatives (Dagster, Prefect, Temporal) |
 
 ## Capstone проект на Airflow 2.x
 
@@ -69,7 +71,6 @@ Slack alerts (через deferrable sensor)
 | **Datasets** | `from airflow import Dataset` | **Assets**: `from airflow.sdk import asset` (AIP-74) |
 | **FAB auth** | Built-in | **Pluggable** (AIP-79) |
 | **REST API** | v1 (Flask-RESTful) | v2 (FastAPI с OpenAPI) |
-| **`flink-conf.yaml`** | n/a (это про Flink) | n/a |
 
 ### Migration tools
 

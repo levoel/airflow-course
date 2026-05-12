@@ -298,7 +298,7 @@ compress_serialized_dags = True  # Save ~70% disk и DB IO
 
 ---
 
-<KnowledgeCheck>
-question="Вы изменили implementation Python функции (тело `def extract():`), задеплоили DAG, но scheduler не видит изменений. Почему?"
-answer="DAG Serialization записывает только **structure** DAG, не реальный код функций. В сериализации хранятся: task_id, task_type, python_callable_name (имя функции, не код), arguments, dependencies. Когда вы меняете implementation внутри `def extract():`, structure не меняется → dag_hash остаётся тем же → serialized_dag не обновляется → scheduler не делает re-import. Workers, однако, при execute() делают actual import .py файла и используют новый код. Так что код **сработает на новых runs**, но не отражается в UI до перезапуска webserver workers (DagBag cache). Force re-parse: `airflow dags reserialize` (2.7+) или touch .py файла."
-</KnowledgeCheck>
+<KnowledgeCheck
+  question="Вы изменили implementation Python функции (тело `def extract():`), задеплоили DAG, но scheduler не видит изменений. Почему?"
+  answer="DAG Serialization записывает только **structure** DAG, не реальный код функций. В сериализации хранятся: task_id, task_type, python_callable_name (имя функции, не код), arguments, dependencies. Когда вы меняете implementation внутри `def extract():`, structure не меняется → dag_hash остаётся тем же → serialized_dag не обновляется → scheduler не делает re-import. Workers, однако, при execute() делают actual import .py файла и используют новый код. Так что код **сработает на новых runs**, но не отражается в UI до перезапуска webserver workers (DagBag cache). Force re-parse: `airflow dags reserialize` (2.7+) или touch .py файла."
+/>

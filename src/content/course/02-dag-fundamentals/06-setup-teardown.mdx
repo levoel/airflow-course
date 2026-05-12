@@ -340,7 +340,7 @@ def ml_training_pipeline():
 
 ---
 
-<KnowledgeCheck>
-question="Чем `as_teardown(setups=create_cluster)` отличается от обычного `trigger_rule='all_done'` в 2.7+?"
-answer="Несколько критичных отличий: (1) **Teardown failure reflected в DagRun state** — если cleanup упал, DAG помечен failed. С обычным `all_done` — DAG success даже если teardown failed (cost leak неконтролируемо). (2) **Scope явный** — `setups=` параметр указывает что teardown относится к этому setup. Cleared run корректно re-runs scope. (3) **Setup failure handling** — даже если setup упал, teardown запускается для cleanup partial state. С `all_done` — зависит от skip propagation. (4) **First-class в UI** — teardown tasks помечены отдельно, видно scope. (5) **Не учитывается в default DagRun success criteria** — teardown success не required для DagRun success (но teardown failure делает DagRun failed). Это unified semantics ephemeral resource management — критично для production cost control."
-</KnowledgeCheck>
+<KnowledgeCheck
+  question="Чем `as_teardown(setups=create_cluster)` отличается от обычного `trigger_rule='all_done'` в 2.7+?"
+  answer="Несколько критичных отличий: (1) **Teardown failure reflected в DagRun state** — если cleanup упал, DAG помечен failed. С обычным `all_done` — DAG success даже если teardown failed (cost leak неконтролируемо). (2) **Scope явный** — `setups=` параметр указывает что teardown относится к этому setup. Cleared run корректно re-runs scope. (3) **Setup failure handling** — даже если setup упал, teardown запускается для cleanup partial state. С `all_done` — зависит от skip propagation. (4) **First-class в UI** — teardown tasks помечены отдельно, видно scope. (5) **Не учитывается в default DagRun success criteria** — teardown success не required для DagRun success (но teardown failure делает DagRun failed). Это unified semantics ephemeral resource management — критично для production cost control."
+/>

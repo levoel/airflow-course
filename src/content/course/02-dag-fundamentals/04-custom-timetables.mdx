@@ -426,7 +426,7 @@ dt = pendulum.datetime(2026, 5, 13, tz="Europe/Moscow")
 
 ---
 
-<KnowledgeCheck>
-question="Когда стоит писать Custom Timetable, а когда достаточно cron в schedule string?"
-answer="**Cron достаточно когда**: (1) расписание выражается стандартным cron (5/15/30 минут, час дня, день недели/месяца) — например `0 6 * * *`, `*/15 * * * 1-5`; (2) data_interval совпадает с natural cron interval (hour/day/week); (3) timezone fixed. **Custom Timetable когда**: (1) расписание зависит от business calendar — fiscal year (April-March), business days с holidays, market hours; (2) непрерывные интервалы с irregular gaps (skip Sundays, run every 4h except 02:00-04:00 maintenance); (3) расписание привязано к events (quarterly reports на конкретные dates); (4) сложный data_interval — например 'обработать данные с предыдущего рабочего дня', а не просто 'предыдущий день'. Если можно описать cron-ом — используйте cron. Timetable добавляет complexity (требует unit tests, serialization, может ломать parsing)."
-</KnowledgeCheck>
+<KnowledgeCheck
+  question="Когда стоит писать Custom Timetable, а когда достаточно cron в schedule string?"
+  answer="**Cron достаточно когда**: (1) расписание выражается стандартным cron (5/15/30 минут, час дня, день недели/месяца) — например `0 6 * * *`, `*/15 * * * 1-5`; (2) data_interval совпадает с natural cron interval (hour/day/week); (3) timezone fixed. **Custom Timetable когда**: (1) расписание зависит от business calendar — fiscal year (April-March), business days с holidays, market hours; (2) непрерывные интервалы с irregular gaps (skip Sundays, run every 4h except 02:00-04:00 maintenance); (3) расписание привязано к events (quarterly reports на конкретные dates); (4) сложный data_interval — например 'обработать данные с предыдущего рабочего дня', а не просто 'предыдущий день'. Если можно описать cron-ом — используйте cron. Timetable добавляет complexity (требует unit tests, serialization, может ломать parsing)."
+/>

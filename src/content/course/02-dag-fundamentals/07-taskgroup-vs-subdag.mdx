@@ -383,7 +383,7 @@ airflow dags delete -y main.my_subdag
 
 ---
 
-<KnowledgeCheck>
-question="Почему SubDAG считается anti-pattern в 2.x, и как TaskGroup решает эти проблемы?"
-answer="**SubDAG проблемы**: (1) Deadlock с concurrency — SubDagOperator сам занимает slot в parent's pool + inner tasks тоже занимают slots → recursive consumption может вызвать deadlock; (2) Default SequentialExecutor для inner tasks (до фикса) — не использует параллелизм; (3) Performance scheduler — каждый subdag = отдельный DAG, scheduler processes их independently в main loop; (4) UI confusion — отдельный graph view для subdag, cross-page navigation; (5) Clear/retry semantics inconsistent. **TaskGroup решение**: (1) UI-only группировка — tasks остаются в parent DAG, нет отдельного DAG/DagRun; (2) Inner tasks используют parent's executor — full parallelism; (3) Нет recursive slot consumption; (4) Native UI — collapsible group в parent graph view; (5) Consistent clear/retry. SubDAG deprecated в 2.2, удалён в 3.0. Всегда используйте TaskGroup в новом коде."
-</KnowledgeCheck>
+<KnowledgeCheck
+  question="Почему SubDAG считается anti-pattern в 2.x, и как TaskGroup решает эти проблемы?"
+  answer="**SubDAG проблемы**: (1) Deadlock с concurrency — SubDagOperator сам занимает slot в parent's pool + inner tasks тоже занимают slots → recursive consumption может вызвать deadlock; (2) Default SequentialExecutor для inner tasks (до фикса) — не использует параллелизм; (3) Performance scheduler — каждый subdag = отдельный DAG, scheduler processes их independently в main loop; (4) UI confusion — отдельный graph view для subdag, cross-page navigation; (5) Clear/retry semantics inconsistent. **TaskGroup решение**: (1) UI-only группировка — tasks остаются в parent DAG, нет отдельного DAG/DagRun; (2) Inner tasks используют parent's executor — full parallelism; (3) Нет recursive slot consumption; (4) Native UI — collapsible group в parent graph view; (5) Consistent clear/retry. SubDAG deprecated в 2.2, удалён в 3.0. Всегда используйте TaskGroup в новом коде."
+/>

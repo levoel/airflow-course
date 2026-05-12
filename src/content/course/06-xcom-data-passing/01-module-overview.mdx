@@ -17,16 +17,16 @@ XCom (cross-communication) — механизм передачи данных м
 |---|---|---|
 | 01 | **Обзор модуля** | Текущий урок |
 | 02 | Default XCom — DB storage | Таблица xcom, serialization (JSON vs pickle), 48KB лимит |
-| 03 | Custom XCom Backend | Subclass BaseXCom, serialize_value / deserialize_value |
-| 04 | Object Storage XCom (2.8+) | fsspec-based, S3/GCS/Azure unified API |
-| 05 | XCom в Dynamic Mapping | map_index, как xcom_pull агрегирует |
-| 06 | XCom security и size pitfalls | Pickle deserialization attack, large objects performance |
+| 03 | xcom_pull deep | 7 параметров pull, XComArg.resolve, multiple_outputs, anti-patterns |
+| 04 | Custom XCom Backend | Subclass BaseXCom, serialize/deserialize, S3 backend full code |
+| 05 | Object Storage XCom (2.8+) | fsspec-based, S3/GCS/Azure unified API |
+| 06 | XCom в Mapped Tasks | map_index, как xcom_pull агрегирует от mapped TI |
 
 ## Ключевые концепты
 
 - **Default storage**: таблица `xcom` в metadata DB, колонка `value` (bytea/mediumblob). Практический лимит ~48KB, выше — scheduler тормозит из-за раздутых select-ов
 - **Сериализация**: JSON (default через XComEncoder) или pickle (legacy, security risk)
-- **Custom Backend**: subclass `airflow.sdk.bases.xcom.BaseXCom`, override `serialize_value` / `deserialize_value`. В DB сохраняется ссылка, blob — на S3/GCS
+- **Custom Backend**: subclass `airflow.models.xcom.BaseXCom`, override `serialize_value` / `deserialize_value`. В DB сохраняется ссылка, blob — на S3/GCS
 - **Object Storage XCom** (2.8+): готовый `XComObjectStorageBackend` через провайдер `common.io`. URL: `xcom_objectstorage_path = s3://conn_id@mybucket/key`
 - **В Mapped tasks**: каждая mapped TI хранит XCom отдельно (`map_index` column). `xcom_pull(task_ids='x')` без map_index агрегирует всё
 

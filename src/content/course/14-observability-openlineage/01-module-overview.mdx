@@ -16,12 +16,12 @@ Observability — обязательное требование production Airfl
 | # | Урок | Что внутри |
 |---|---|---|
 | 01 | **Обзор модуля** | Текущий урок |
-| 02 | Metrics stack — OTel vs StatsD | AIP-49 OTel rollout, key metrics |
-| 03 | **OpenLineage** — 40% модуля | Automatic emission, Marquez setup, custom extractors |
-| 04 | Distributed tracing | OTel spans DAG → task → DB query |
-| 05 | Logs: remote backends | S3/GCS/ES/CloudWatch, JSON structured (3.2) |
-| 06 | Custom dashboards | Grafana templates, top 12 charts |
-| 07 | Alerting playbook | Scheduler down, zombie spike, watermark stuck |
+| 02 | Metrics stack — OTel vs StatsD | AIP-49 OTel rollout (2.10+), key metrics, cardinality control |
+| 03 | **OpenLineage deep** | Provider 2.6+, automatic emission для SQL operators, Marquez backend, event format |
+| 04 | Custom extractors | BaseExtractor interface, S3→Snowflake example, entry_points registration |
+| 05 | Distributed tracing | OTel spans DAG → task → DB query, Tempo/Jaeger integration |
+| 06 | Remote logging | S3/GCS/Azure/ES/CloudWatch, DB log handler как antipattern |
+| 07 | Grafana dashboards + alerting | Top 12 production charts с PromQL, 8 alerts с runbooks, SLO definitions |
 
 ## OpenTelemetry stack (AIP-49)
 
