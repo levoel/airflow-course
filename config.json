@@ -1,6 +1,6 @@
 {
   "id": "airflow-course",
-  "title": "Apache Airflow 2 Ultimate",
+  "title": "Apache Airflow 2",
   "description": "Ультимативный курс по Apache Airflow 2.x — от scheduler internals и critical section до Celery/Kubernetes executors, Datasets, Deferrable Operators, OpenLineage и production HA setup. Target: 2.10/2.11 LTS с обзором upgrade path на 3.x.",
   "author": "Lev Neganov",
   "difficulty": "advanced",
