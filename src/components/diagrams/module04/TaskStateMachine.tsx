@@ -1,3 +1,4 @@
+/** @jsxImportSource solid-js */
 /**
  * TaskStateMachine
  *
@@ -8,7 +9,7 @@
  * Click a state to highlight reachable transitions (in/out).
  */
 
-import { useMemo, useState } from 'react';
+import { createMemo, createSignal } from 'solid-js';
 import { DiagramContainer } from '@primitives/DiagramContainer';
 import { DiagramTooltip } from '@primitives/Tooltip';
 
@@ -162,16 +163,17 @@ const GROUP_LABEL: Record<Group, string> = {
 };
 
 export function TaskStateMachine() {
-  const [active, setActive] = useState<string | null>(null);
+  const [active, setActive] = createSignal<string | null>(null);
 
-  const { incoming, outgoing } = useMemo(() => {
-    if (!active) return { incoming: new Set<string>(), outgoing: new Set<string>() };
-    const out = new Set(STATES.find((s) => s.id === active)?.to ?? []);
+  const transitions = createMemo(() => {
+    const a = active();
+    if (!a) return { incoming: new Set<string>(), outgoing: new Set<string>() };
+    const out = new Set(STATES.find((s) => s.id === a)?.to ?? []);
     const inc = new Set(
-      STATES.filter((s) => s.to.includes(active)).map((s) => s.id),
+      STATES.filter((s) => s.to.includes(a)).map((s) => s.id),
     );
     return { incoming: inc, outgoing: out };
-  }, [active]);
+  });
 
   return (
     <DiagramContainer
@@ -179,37 +181,37 @@ export function TaskStateMachine() {
       color="purple"
       description="Click состояние -- подсветятся источники и валидные переходы. Цвет = группа в lifecycle."
     >
-      <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+      <div class="flex flex-col gap-4">
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
           {STATES.map((s) => {
-            const isActive = active === s.id;
-            const isOutgoing = outgoing.has(s.id);
-            const isIncoming = incoming.has(s.id);
-            const dim = active && !isActive && !isOutgoing && !isIncoming;
+            const isActive = () => active() === s.id;
+            const isOutgoing = () => transitions().outgoing.has(s.id);
+            const isIncoming = () => transitions().incoming.has(s.id);
+            const dim = () => active() && !isActive() && !isOutgoing() && !isIncoming();
             return (
-              <DiagramTooltip key={s.id} content={s.tooltip}>
+              <DiagramTooltip content={s.tooltip}>
                 <button
                   type="button"
                   onClick={() =>
                     setActive((prev) => (prev === s.id ? null : s.id))
                   }
-                  className={`w-full text-left rounded-md px-3 py-2 border text-xs font-mono transition-opacity ${
+                  class={`w-full text-left rounded-md px-3 py-2 border text-xs font-mono transition-opacity ${
                     GROUP_STYLE[s.group]
-                  } ${dim ? 'opacity-30' : 'opacity-100'} ${
-                    isActive ? 'ring-2 ring-offset-1 ring-[var(--ink-muted)]' : ''
+                  } ${dim() ? 'opacity-30' : 'opacity-100'} ${
+                    isActive() ? 'ring-2 ring-offset-1 ring-[var(--ink-muted)]' : ''
                   }`}
                 >
-                  <div className="font-semibold">{s.label}</div>
-                  <div className="text-[10px] opacity-70 mt-0.5">
+                  <div class="font-semibold">{s.label}</div>
+                  <div class="text-[10px] opacity-70 mt-0.5">
                     {GROUP_LABEL[s.group]}
                   </div>
-                  {isActive && s.to.length > 0 && (
-                    <div className="text-[10px] mt-1 opacity-80">
+                  {isActive() && s.to.length > 0 && (
+                    <div class="text-[10px] mt-1 opacity-80">
                       → {s.to.join(', ')}
                     </div>
                   )}
-                  {isActive && s.to.length === 0 && (
-                    <div className="text-[10px] mt-1 opacity-80">terminal</div>
+                  {isActive() && s.to.length === 0 && (
+                    <div class="text-[10px] mt-1 opacity-80">terminal</div>
                   )}
                 </button>
               </DiagramTooltip>
@@ -218,11 +220,10 @@ export function TaskStateMachine() {
         </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap gap-2 text-[10px] font-mono">
+        <div class="flex flex-wrap gap-2 text-[10px] font-mono">
           {(Object.keys(GROUP_LABEL) as Group[]).map((g) => (
             <span
-              key={g}
-              className={`px-2 py-0.5 rounded border ${GROUP_STYLE[g]}`}
+              class={`px-2 py-0.5 rounded border ${GROUP_STYLE[g]}`}
             >
               {GROUP_LABEL[g]}
             </span>

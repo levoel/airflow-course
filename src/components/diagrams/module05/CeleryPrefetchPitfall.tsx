@@ -1,3 +1,4 @@
+/** @jsxImportSource solid-js */
 /**
  * CeleryPrefetchPitfall
  *
@@ -67,36 +68,36 @@ export function CeleryPrefetchPitfall() {
       color="amber"
       description="worker_prefetch_multiplier=4, worker_concurrency=1. Один long-running таск забирает 4 prefetch tokens из брокера."
     >
-      <div className="flex flex-col gap-4">
+      <div class="flex flex-col gap-4">
         {/* Worker box */}
-        <div className="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs font-mono text-[var(--ink-strong)]">
+        <div class="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-xs font-mono text-[var(--ink-strong)]">
               celery worker @ host-1
             </div>
-            <div className="text-[10px] font-mono text-[var(--ink-subtle)]">
+            <div class="text-[10px] font-mono text-[var(--ink-subtle)]">
               prefetch_multiplier = 4 · concurrency = 1
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
             {SLOTS.map((slot) => (
-              <DiagramTooltip key={slot.id} content={slot.tooltip}>
+              <DiagramTooltip content={slot.tooltip}>
                 <div
-                  className={`relative rounded-md border px-3 py-2 text-xs font-mono ${KIND_STYLE[slot.kind]}`}
-                  tabIndex={0}
+                  class={`relative rounded-md border px-3 py-2 text-xs font-mono ${KIND_STYLE[slot.kind]}`}
+                  tabindex={0}
                 >
-                  <div className="text-[10px] uppercase opacity-70 mb-1">
+                  <div class="text-[10px] uppercase opacity-70 mb-1">
                     slot #{slot.id} · {slot.state}
                   </div>
-                  <div className="font-semibold truncate">{slot.task}</div>
+                  <div class="font-semibold truncate">{slot.task}</div>
                   {slot.kind === 'long' && (
-                    <div className="absolute -right-1 -top-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500 text-white">
+                    <div class="absolute -right-1 -top-1 text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500 text-white">
                       RUN
                     </div>
                   )}
                   {slot.kind === 'short' && slot.state === 'reserved' && (
-                    <div className="absolute -right-1 -top-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
+                    <div class="absolute -right-1 -top-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
                       held
                     </div>
                   )}
@@ -107,36 +108,35 @@ export function CeleryPrefetchPitfall() {
         </div>
 
         {/* Idle worker box -- starved */}
-        <div className="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3 opacity-80">
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-mono text-[var(--ink-strong)]">
+        <div class="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3 opacity-80">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-xs font-mono text-[var(--ink-strong)]">
               celery worker @ host-2
             </div>
-            <div className="text-[10px] font-mono text-emerald-700">
+            <div class="text-[10px] font-mono text-emerald-700">
               idle · queue is empty (но задачи "висят" на host-1!)
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
             {[1, 2, 3, 4].map((i) => (
               <div
-                key={i}
-                className={`rounded-md border border-dashed px-3 py-2 text-xs font-mono ${KIND_STYLE.empty}`}
+                class={`rounded-md border border-dashed px-3 py-2 text-xs font-mono ${KIND_STYLE.empty}`}
               >
-                <div className="text-[10px] uppercase opacity-70 mb-1">
+                <div class="text-[10px] uppercase opacity-70 mb-1">
                   slot #{i} · idle
                 </div>
-                <div className="opacity-50">—</div>
+                <div class="opacity-50">—</div>
               </div>
             ))}
           </div>
         </div>
 
         {/* Fix box */}
-        <div className="rounded-md border border-emerald-400/40 bg-emerald-500/10 p-3 text-[11px] text-emerald-800 font-mono leading-relaxed">
-          <div className="font-semibold mb-1">Fix</div>
+        <div class="rounded-md border border-emerald-400/40 bg-emerald-500/10 p-3 text-[11px] text-emerald-800 font-mono leading-relaxed">
+          <div class="font-semibold mb-1">Fix</div>
           worker_prefetch_multiplier = 1<br />
           task_acks_late = True<br />
-          <span className="opacity-70">
+          <span class="opacity-70">
             → broker отдаёт по 1 задаче на свободный worker слот; ack только после
             success.
           </span>

@@ -1,3 +1,4 @@
+/** @jsxImportSource solid-js */
 /**
  * K8sExecutorWatcher
  *
@@ -62,17 +63,17 @@ export function K8sExecutorWatcher() {
       color="blue"
       description="Long-polling Watch endpoint на /api/v1/namespaces/{ns}/pods. Один TCP connection стримит pod events до resourceVersion gap."
     >
-      <div className="flex flex-col gap-4">
+      <div class="flex flex-col gap-4">
         {/* Top row: scheduler + k8s api */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-center">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-center">
           {/* Scheduler */}
           <DiagramTooltip content="Airflow Scheduler. При старте создаёт KubernetesJobWatcher (отдельный thread) и периодически читает event_buffer для применения state-апдейтов.">
             <div
-              className="rounded-md border border-blue-400/40 bg-blue-500/10 p-3 text-xs font-mono text-blue-800"
-              tabIndex={0}
+              class="rounded-md border border-blue-400/40 bg-blue-500/10 p-3 text-xs font-mono text-blue-800"
+              tabindex={0}
             >
-              <div className="font-semibold mb-1">Airflow Scheduler</div>
-              <div className="opacity-80">
+              <div class="font-semibold mb-1">Airflow Scheduler</div>
+              <div class="opacity-80">
                 · KubernetesExecutor<br />
                 · KubernetesJobWatcher (thread)<br />
                 · event_buffer dict
@@ -80,7 +81,7 @@ export function K8sExecutorWatcher() {
             </div>
           </DiagramTooltip>
 
-          <div className="hidden md:flex flex-col items-center gap-1">
+          <div class="hidden md:flex flex-col items-center gap-1">
             <Arrow direction="right" label="watch?resourceVersion=N" />
             <Arrow direction="left" label="ADDED / MODIFIED / DELETED" />
           </div>
@@ -88,11 +89,11 @@ export function K8sExecutorWatcher() {
           {/* K8s API */}
           <DiagramTooltip content="kube-apiserver. Хранит etcd-bound state. Watch endpoint поддерживает HTTP long-polling: соединение живёт, события стримятся chunked transfer-encoding.">
             <div
-              className="rounded-md border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3 text-xs font-mono text-[var(--ink-strong)]"
-              tabIndex={0}
+              class="rounded-md border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3 text-xs font-mono text-[var(--ink-strong)]"
+              tabindex={0}
             >
-              <div className="font-semibold mb-1">kube-apiserver</div>
-              <div className="opacity-80">
+              <div class="font-semibold mb-1">kube-apiserver</div>
+              <div class="opacity-80">
                 /api/v1/.../pods?watch=1<br />
                 · resourceVersion cursor<br />
                 · etcd backed
@@ -102,22 +103,22 @@ export function K8sExecutorWatcher() {
         </div>
 
         {/* Pod lifecycle events */}
-        <div className="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3">
-          <div className="text-xs font-mono text-[var(--ink-strong)] mb-2">
+        <div class="rounded-lg border border-[var(--line-thin)] bg-[var(--bg-surface)] p-3">
+          <div class="text-xs font-mono text-[var(--ink-strong)] mb-2">
             Pod lifecycle → TaskInstance.state
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             {EVENTS.map((e) => (
-              <DiagramTooltip key={e.phase} content={e.tooltip}>
+              <DiagramTooltip content={e.tooltip}>
                 <div
-                  className={`rounded-md border px-3 py-2 text-[11px] font-mono ${e.color}`}
-                  tabIndex={0}
+                  class={`rounded-md border px-3 py-2 text-[11px] font-mono ${e.color}`}
+                  tabindex={0}
                 >
-                  <div className="font-semibold">{e.phase}</div>
-                  <div className="text-[10px] opacity-70 mt-0.5">
+                  <div class="font-semibold">{e.phase}</div>
+                  <div class="text-[10px] opacity-70 mt-0.5">
                     K8s: {e.k8sEvent}
                   </div>
-                  <div className="text-[10px] mt-1">→ {e.airflowState}</div>
+                  <div class="text-[10px] mt-1">→ {e.airflowState}</div>
                 </div>
               </DiagramTooltip>
             ))}
@@ -125,23 +126,23 @@ export function K8sExecutorWatcher() {
         </div>
 
         {/* Gotchas */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] text-[var(--ink-muted)]">
-          <div className="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
-            <span className="block font-semibold text-[var(--ink-strong)]">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] text-[var(--ink-muted)]">
+          <div class="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
+            <span class="block font-semibold text-[var(--ink-strong)]">
               Watch connection drop
             </span>
             Watcher переподключается с последним resourceVersion. Если gap → 410
             Gone → полный list + новый watch.
           </div>
-          <div className="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
-            <span className="block font-semibold text-[var(--ink-strong)]">
+          <div class="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
+            <span class="block font-semibold text-[var(--ink-strong)]">
               Lost events
             </span>
             Если watcher не успевает обрабатывать -- ставится reconcile loop по
             kubernetes_executor.adopt_completed_pods.
           </div>
-          <div className="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
-            <span className="block font-semibold text-[var(--ink-strong)]">
+          <div class="p-2 rounded bg-[var(--bg-surface)] border border-[var(--line-thin)]">
+            <span class="block font-semibold text-[var(--ink-strong)]">
               Multi-scheduler
             </span>
             Каждый scheduler держит свой watcher + leases на &quot;своих&quot;
